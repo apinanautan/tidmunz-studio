@@ -2,7 +2,7 @@
 
 ระบบตรวจและแก้บัคต้องทำงานจากสภาพจริงของ **เครื่องที่กำลังใช้งาน** เสมอ ห้ามอิงชื่อผู้ใช้ `Apinan`, ไดรฟ์ `C:` หรือโปรแกรมที่ติดตั้งอยู่เฉพาะเครื่องผู้พัฒนา
 
-1. ดาวน์โหลด `Tidmunz Studio.exe` จากหน้า GitHub Release ล่าสุด (https://github.com/tidmunzsocial-lab/tidmunz-studio/releases/latest) แล้ววางไว้บน Desktop
+1. ดาวน์โหลด `Tidmunz-Studio.exe` จากหน้า GitHub Release ล่าสุด (https://github.com/tidmunzsocial-lab/tidmunz-studio/releases/latest) แล้ววางไว้บน Desktop
 2. ดับเบิลคลิกครั้งแรก โปรแกรมจะติดตั้งตัวเองไว้ที่ `%LOCALAPPDATA%\Tidmunz Studio` แล้วเปิด `setup_and_run.bat` เพื่อเตรียม Python 3.12 ให้อัตโนมัติ ครั้งต่อไปกด exe ตัวเดิมเพื่อเปิดได้ทันที
 3. อัปเดต: ในโปรแกรมเปิด Settings แล้วกดปุ่มตรวจอัปเดต ไม่ต้องดาวน์โหลด exe ใหม่
 4. ในโปรแกรมเปิด Settings แล้วกด `🩺 ตรวจและแก้บัค` ระบบจะตรวจ/ติดตั้ง Python packages, FFmpeg, curl และ Tailscale ให้อัตโนมัติ

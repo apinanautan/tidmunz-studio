@@ -34,7 +34,7 @@ PRIVATE_ROOT_FILES = (
 def _snapgen_running() -> bool:
     out = subprocess.run(
         ["powershell", "-NoProfile", "-Command",
-         "Get-CimInstance Win32_Process | ? { $_.CommandLine -match 'snapgen_gui_v2.py' } | % ProcessId"],
+         "Get-CimInstance Win32_Process | ? { $_.Name -like 'python*' -and $_.CommandLine -match 'snapgen_gui_v2.py' } | % ProcessId"],
         capture_output=True, text=True,
     ).stdout
     return bool(out.strip())

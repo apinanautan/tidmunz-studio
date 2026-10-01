@@ -39,7 +39,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           $tag = "${{ github.ref_name }}"
-          $assets = @("tools/release/tidmun-studio-patch.zip", "tools/release/Tidmunz Studio.exe")
+          Copy-Item "tools/release/Tidmunz Studio.exe" "tools/release/Tidmunz-Studio.exe"
+          $assets = @("tools/release/tidmun-studio-patch.zip", "tools/release/Tidmunz-Studio.exe")
           gh release view $tag 2>$null
           if ($LASTEXITCODE -eq 0) {
             gh release upload $tag @assets --clobber

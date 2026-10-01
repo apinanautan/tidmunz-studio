@@ -6943,6 +6943,84 @@ try:
 except Exception as _e:
     print(f"[SnapGen] context tools disabled: {_e}")
 
+# ── Team-shared Context next to the story file ───────────────────────────
+# Context built for "บท - X.docx" is also saved as "บท - X.tidmunz-context.json"
+# in the same (usually shared Google Drive) folder.  Selecting that story on
+# any machine loads it, so GPT does not re-analyse and names stay identical.
+try:
+    import snapgen_shared_context as _shared_context
+except Exception as _e:
+    _shared_context = None
+    print(f"[SnapGen] shared context disabled: {_e}")
+_write_context_master_local = globals().get("_write_context_master")
+
+
+def _selected_story_original_path():
+    try:
+        return str(_load_prompt_ref_source_file_meta().get("original_path") or "").strip()
+    except Exception:
+        return ""
+
+
+def _selected_story_text():
+    try:
+        return _ensure_prompt_ref_story_text()
+    except Exception:
+        return ""
+
+
+def _export_shared_context(master):
+    if _shared_context is None:
+        return
+    story = _selected_story_original_path()
+    if not story:
+        return
+    existing = _shared_context.load(story)
+    if existing and _shared_context.same_context(existing["context"], master):
+        return  # unchanged: avoid rewriting the shared drive file
+    error = _shared_context.save(story, master, _selected_story_text())
+    if error:
+        print(f"[SnapGen] shared context not saved: {error}")
+
+
+if callable(_write_context_master_local):
+    def _write_context_master(data=None, invent=False):
+        master = _write_context_master_local(data=data, invent=invent)
+        if data is not None and not invent:
+            _export_shared_context(master)
+        return master
+
+
+def _shared_context_payload(require_story_match=False):
+    if _shared_context is None:
+        return None
+    payload = _shared_context.load(_selected_story_original_path())
+    if payload and require_story_match and not _shared_context.matches_story(payload, _selected_story_text()):
+        return None
+    return payload
+
+
+def _import_shared_context():
+    """Load the team's Context for the selected story into the local Context.
+
+    Returns (master, message); master is None when there is no shared file.
+    """
+    payload = _shared_context_payload()
+    if not payload or not callable(_write_context_master_local):
+        return None, ""
+    try:
+        current = _load_context_any()
+    except Exception:
+        current = None
+    if current is not None and _shared_context.same_context(current, payload["context"]):
+        master = current
+    else:
+        master = _write_context_master_local(data=payload["context"], invent=False)
+    message = f"โหลด Context ที่ทีมแตกไว้แล้ว ({payload.get('saved_at') or '-'}) — ไม่ต้องให้ GPT อ่านบทใหม่"
+    if not _shared_context.matches_story(payload, _selected_story_text()):
+        message = "บทถูกแก้หลังจากแตก Context ไว้ — โหลด Context เดิมให้แล้ว กดอัปเดต Context ถ้าต้องการให้ตรงบทใหม่"
+    return master, message
+
 def _snapgen_notify_done():
     """Play one portable completion sound for every page.
 
@@ -8576,6 +8654,20 @@ def _attach_docx_and_build_prompt_ref_context(source_file, story_for_hash=""):
 
 def _build_prompt_ref_context_in_history():
     """Create shared Ref/Prop context as the next turn in Prompt-Ref's story chat."""
+    shared = _shared_context_payload(require_story_match=True)
+    if shared:
+        # A teammate already built Context for this exact story.  Hand it to
+        # GPT as the official Context instead of analysing the story again.
+        _prompt_ref_chat([{
+            "role": "user",
+            "content": (
+                "SnapGen Context ของเรื่องนี้ทีมสร้างไว้แล้ว ใช้ JSON ด้านล่างเป็น Context ทางการของเรื่องนี้ในประวัตินี้ "
+                "ห้ามเปลี่ยนชื่อตัวละคร สถานที่ หรือพร็อพ และใช้ข้อมูลนี้ในทุกคำขอถัดไป ตอบสั้นๆ ว่า OK เท่านั้น\n"
+                + json.dumps(shared["context"], ensure_ascii=False)
+            ),
+        }], require_history=True)
+        _mark_prompt_ref_context_ready()
+        return shared["context"]
     analysis_raw = _prompt_ref_chat([{
         "role": "user",
         "content": (
@@ -11352,12 +11444,37 @@ def _open_prompt_bank_ai():
                 st.set(f"โหลดบทหลักเดิม: {source_path.name}")
             except Exception:
                 pass
+        try:
+            _shared_master, _shared_message = _import_shared_context()
+        except Exception as _shared_exc:
+            _shared_master, _shared_message = None, ""
+            print(f"[SnapGen] shared context load failed: {_shared_exc}")
         if json_context_path.exists():
             try:
                 ctx_box.insert("1.0", json_context_path.read_text(encoding="utf-8"))
                 st.set(f"โหลด context: {json_context_path.name}")
             except Exception:
                 pass
+        if _shared_master is not None:
+            prompt_ref_context[0] = json.dumps(_shared_master, ensure_ascii=False, indent=2)
+            st.set(_shared_message)
+
+        def show_shared_context_for_selection():
+            """After a story is selected, pull the team's Context if it exists."""
+            try:
+                master, message = _import_shared_context()
+            except Exception as exc:
+                print(f"[SnapGen] shared context load failed: {exc}")
+                return False
+            if master is None:
+                return False
+            encoded = json.dumps(master, ensure_ascii=False, indent=2)
+            ctx_box.delete("1.0", tk.END)
+            ctx_box.insert("1.0", encoded)
+            prompt_ref_context[0] = encoded
+            set_context_state("success", "พร้อมใช้ Context ของทีม", message)
+            return True
+
         def upload_main_file():
             import tkinter.filedialog as fd
             dialog_options = {
@@ -11381,6 +11498,7 @@ def _open_prompt_bank_ai():
             cached_source = _save_prompt_ref_source_file(pth)
             source_file_var.set(os.path.abspath(pth))
             set_context_state("idle", "พร้อมอัปเดต Context", f"โหลดบทหลักแล้ว: {os.path.basename(pth)}")
+            show_shared_context_for_selection()
         def clear_source():
             source_file_var.set("ยังไม่ได้เลือกไฟล์")
             uploaded_story_context[0] = ""

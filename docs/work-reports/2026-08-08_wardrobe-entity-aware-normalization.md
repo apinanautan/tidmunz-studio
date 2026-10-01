@@ -1,0 +1,31 @@
+# Work Report: Wardrobe Entity-Aware Normalization
+
+- Task: แก้ Wardrobe / Character Reference ให้แยก garment fields จริง, ไม่สร้าง human wardrobe ให้ animal/supernatural อัตโนมัติ, ใช้ context เฉพาะตัวละคร และส่ง normalized outfit เข้า Ref แบบ lock เดียวทุกมุม
+- Status: completed
+- Summary: ปรับ wardrobe normalizer ให้ entity-aware, แยก top/bottom/footwear/outerwear/accessories จริงจากข้อความ explicit, ใช้ nested wardrobe เป็น source of truth, migrate legacy aliases อย่างปลอดภัย, ใช้ character-owned location/role/evidence แทน main_location แบบเหมารวม และเพิ่ม Ref prompt lock สำหรับ full-body + accessories พร้อมเพิ่ม clip limit
+- Files Changed:
+  - `snapgen_modules/snapgen_character_wardrobe.py`
+  - `snapgen_modules/snapgen_page_ref.py`
+  - `tests/test_character_wardrobe_context.py`
+  - `docs/work-reports/2026-08-08_wardrobe-entity-aware-normalization.md`
+  - `docs/work-reports/LATEST.md`
+- Important Changes:
+  - explicit outfit ถูก split เป็น garment fields คนละชิ้น ไม่ยัดประโยคทั้งชุดซ้ำใน top/bottom/footwear
+  - human เท่านั้นที่ infer human wardrobe ตามปกติ
+  - animal คืน wardrobe ว่าง/ไม่สร้าง field และไม่ถูกเติมเสื้อ/กางเกง/รองเท้ามนุษย์
+  - supernatural ต้องเป็น humanoid และมี explicit clothing evidence จึงมี wardrobe; อื่น ๆ ไม่มี human wardrobe
+  - nested `wardrobe.wardrobe_source` และ `wardrobe.wardrobe_reason` เป็น canonical source; top-level legacy aliases อัปเดตเฉพาะกรณีมีอยู่เดิม
+  - inference ใช้ entity-owned location/role/evidence เช่น วัด/พิธี/บ้าน/ไร่ ก่อน และไม่ใช้ `story.main_location` เป็น wardrobe context แบบเหมารวม
+  - Character Ref WORLD LOCK ไม่ fallback ไป `main_location`; wardrobe helper เป็นผู้ส่งบริบทเฉพาะตัวละคร
+  - Front / 3/4 / Full-body ล็อก default_outfit เดียวกัน; Full-body ระบุ top/bottom/footwear/accessories และเพิ่ม prompt clip limit 1800 -> 2400
+- Tests/Build:
+  - `py -3 -m py_compile snapgen_modules/snapgen_character_wardrobe.py snapgen_modules/snapgen_context_tools.py snapgen_modules/snapgen_page_ref.py` = PASS
+  - `py -3 -m unittest tests.test_character_wardrobe_context` = PASS 7/7
+  - `py -3 -m unittest tests.test_character_wardrobe_context tests.test_ref_ghost_detection` = PASS สำหรับ discovered tests 7/7
+  - Existing Prompt-Ref/Storyboard baseline = 18 tests, failures=4, errors=4 (same as before task)
+- Remaining Issues:
+  - Scene-specific wardrobe engine ยังไม่ได้ขยาย เพราะ task นี้จำกัดที่ Character Ref/default outfit
+- Risks:
+  - working tree ยังมี unrelated uncommitted changes จำนวนมาก; `snapgen_page_ref.py` ถูก stage แบบ task-only จาก HEAD เพื่อไม่ลากงานอื่นเข้ามา
+- Git Commit: SELF (final hash reported after commit)
+- Date/Time: 2026-08-08 19:03:22 +07:00

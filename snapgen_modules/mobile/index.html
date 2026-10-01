@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="th">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><title>ติดมันส์ สตูดิโอ · มือถือ</title><link rel="stylesheet" href="/style.css"><script src="/app.js" defer></script></head>
+<body>
+<header><div class="brand"><span class="brandmark">🎬</span><strong>ติดมันส์ สตูดิโอ</strong><span class="mobile-label">มือถือ</span><span id="credit" class="credit">🪙 เครดิต —</span><span id="connection" role="status">กำลังเชื่อมต่อ…</span></div><div id="flags" class="flags" aria-label="ตัวเลือกประมวลผล"></div></header>
+<nav aria-label="หน้าสร้างงาน"><button class="tab active" data-tab="video">🎬 วิดีโอ</button><button class="tab" data-tab="image">🎨 สร้างรูป</button><button class="tab" data-tab="storyface">👤 นิทาน</button><button class="tab" data-tab="story">📖 บท</button><button class="tab" data-tab="prompt">✨ แตก Prompt</button></nav>
+<main>
+<div id="offline" class="notice" hidden>ติดต่อโปรแกรมไม่ได้ · เปิด SnapGen บนคอมและเชื่อมต่อ Tailscale แล้วหน้านี้จะเชื่อมใหม่อัตโนมัติ</div>
+<section id="video-page"><p class="steps">เลือกรูป → ตั้งค่าโมเดล / วินาที → ใส่ Prompt → <b>Generate this</b></p><div id="slots"><p class="empty">กำลังอ่าน Slot จากโปรแกรม…</p></div><section class="panel"><div class="section-head"><b>วิดีโอที่สร้างแล้ว</b><span>ดูและดาวน์โหลดได้ที่นี่</span></div><div id="videos" class="gallery"></div></section></section>
+<section id="image-page" hidden>
+<p class="steps">ใส่ Prompt และแนบรูปอ้างอิง (ถ้ามี) → <b>↻ สร้างรูป</b> → ส่งรูปจากแกลเลอรีเข้า Slot วิดีโอ</p>
+<section class="panel"><div class="section-head"><b>🎨 สร้างรูป AI</b><span id="image-state">พร้อม</span></div>
+<div class="storybar"><label class="story-label">เรื่อง: <span id="story-name">—</span></label><div class="toolbar"><button class="orange" data-action="image_storyboard">Storyboard</button><button class="pink" id="auto-button" data-ui="auto">Auto-Gen</button><button class="red" data-ui="clear-gallery">🧹 ล้างรูป</button></div></div><p id="story-status" class="hint"></p>
+<div class="image-editor"><label class="prompt-label"><span class="sr-only">Prompt รูป</span><textarea id="image-prompt" data-image="prompt" placeholder="พิมพ์ Prompt หรือกดปุ่ม Prompt เพื่อเลือกจากคลังเดิม"></textarea></label><div class="image-tools"><fieldset><legend>📎 เลือกไฟล์แนบ</legend><select id="ref-select" aria-label="ชื่อไฟล์แนบ"></select><button data-ui="paste-ref">วาง</button><button class="orange" data-ui="image-library">เลือกรูปอ้างอิง</button><label class="button">＋ แนบจากมือถือ<input id="image-upload" type="file" accept="image/png,image/jpeg,image/webp" multiple hidden></label></fieldset><fieldset id="image-cameras"><legend>🎥 ควบคุมกล้อง</legend><button data-camera="auto">ตาม Prompt</button><button data-camera="face">เน้นหน้า</button><button data-camera="character">เน้นตัวละคร</button><button data-camera="object">มาโคร / วัตถุ</button></fieldset></div></div>
+<div class="toolbar image-actions"><button class="green" data-action="image_generate">↻ สร้างรูป</button><label>ขนาด: <select id="image-aspect" data-image="aspect"></select></label><label>แสง: <select id="image-lighting" data-image="lighting"></select></label><button class="purple" data-ui="image-prompts">Prompt</button><button class="red" data-ui="clear-image">Clear</button><button data-action="image_save">บันทึก</button><span id="ref-count" class="hint"></span></div>
+<pre id="image-log" class="log" aria-label="Log สร้างรูป"></pre></section>
+<section class="panel"><div class="section-head"><b>แกลเลอรี</b><span>แก้รูป · ส่งเข้า Slot · ดาวน์โหลด</span></div><div id="images" class="gallery"></div><button id="more-images" data-ui="more-images" hidden>โหลดรูปเก่าเพิ่ม</button></section></section>
+<section id="storyface-page" hidden>
+<p class="steps">เลือกตัวละครและวัย → กดครั้งเดียว → ระบบสร้างหน้าตรง มุมด้านข้าง และ Body ด้วยงานชุดเดียวกับโปรแกรมบนคอม</p>
+<section class="panel storyface-panel"><div class="section-head"><div><b>👤 นิทาน — ตัวละคร</b><div class="story-file-name">เรื่อง: <span id="storyface-title">—</span></div></div><span id="storyface-status">พร้อม</span></div>
+<div class="storyface-controls"><label>ตัวละคร<select id="storyface-character"></select></label><label>วัย<select id="storyface-age"></select></label><button class="green" id="storyface-generate" data-action="story_face_generate">🎭 สร้าง Face + มุมข้าง + Body</button></div>
+<p class="hint">Body ใช้ข้อมูลเพศ วัย และรูปร่างของตัวละคร โดยไม่เอารูปหน้าไปบังคับ Body</p><pre id="storyface-log" class="log" aria-label="Log หน้านิทาน"></pre></section>
+<section class="panel"><div class="section-head"><b>ผลตัวละคร</b><span>แกลเลอรีเดียวกับโปรแกรมบนคอม</span></div><div id="storyface-gallery" class="gallery"></div></section>
+</section>
+<section id="story-page" hidden>
+<p class="steps">แสดงบทเต็มต่อเนื่องตามไฟล์ Word · ลากเลือกฉากที่ต้องการ แล้วส่งไปสร้าง Storyboard</p>
+<section class="panel story-panel"><div class="section-head"><div><b>📖 บทเต็ม</b><div id="story-file-name" class="story-file-name">ยังไม่มีบท</div></div><span id="story-source-label"></span></div>
+<div class="story-page-tools"><button data-ui="story-desktop">🖥 ใช้บทที่เปิดในคอม</button><label class="button orange">＋ อัปโหลดบทจากมือถือ<input id="story-upload" type="file" accept=".docx,.txt,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain" hidden></label><input id="story-search" placeholder="ค้นหาข้อความในบท"><button data-ui="story-find">ค้นหา</button><button data-ui="story-copy-all">คัดลอกบทเต็ม</button></div>
+<div class="story-selection-actions"><button class="purple" data-ui="story-copy-selection">คัดลอกข้อความที่เลือก</button><button class="green" data-ui="story-split-selection">ส่งข้อความที่เลือกไปแตก Prompt</button></div>
+<p class="hint">สีตัวหนังสือยึดตามไฟล์ Word ต้นฉบับ · เลือกคร่อมหลายย่อหน้าได้ และระบบจะส่งเฉพาะข้อความที่เลือก</p>
+<div id="story-document" class="story-document"><p class="empty">กำลังอ่านบท…</p></div></section>
+</section>
+<section id="prompt-page" hidden>
+<p class="steps">ครั้งแรกเริ่มเรื่องและ Context บนโปรแกรม → ส่งท่อนบทจากหน้า “บท” → สร้าง Storyboard → ได้ Prompt รูปและวิดีโอแยกตาม Slot</p>
+<section class="panel prompt-split-panel"><div class="section-head"><b>✨ สร้าง Storyboard + Prompt</b><div class="prompt-head-actions"><span id="prompt-split-status">พร้อมสร้าง</span><button data-ui="prompt-paste-short">📋 วางบทสั้น</button></div></div>
+<textarea id="prompt-split-scene" placeholder="วางท่อนบทหรือฉากที่ต้องการแตก Prompt"></textarea>
+<div class="prompt-split-actions"><button class="red" data-ui="prompt-split-clear">ล้างบท</button><button class="green" id="prompt-split-button" data-ui="prompt-split-start">🎬 สร้าง Storyboard + Prompt</button></div>
+<p id="prompt-split-error" class="split-error" hidden></p></section>
+<section class="panel"><div class="section-head"><b>ผลลัพธ์ / Slot</b><span id="prompt-result-summary">Storyboard · Prompt วิดีโอ · Prompt รูป</span></div>
+<div class="prompt-view-tabs"><button class="green active" data-split-view="storyboard">Storyboard</button><button class="purple" data-split-view="video">Prompt วิดีโอ</button><button class="purple" data-split-view="image">Prompt รูป</button><button class="red" data-ui="prompt-slots-clear">ล้าง Slot</button></div>
+<div id="prompt-split-results" class="prompt-slot-results"><p class="empty">ผลลัพธ์จะแสดงที่นี่</p></div>
+<div class="prompt-save-row"><button data-ui="prompt-slots-save">บันทึก Slot</button></div></section>
+</section>
+</main><footer><span>● SnapGen</span><span>ใช้รูป Prompt และการตั้งค่าร่วมกับโปรแกรมบนคอม</span></footer>
+<div id="toast" role="status" aria-live="polite" hidden></div>
+<dialog id="dialog"><div class="dialog-head"><h2 id="dialog-title"></h2><button data-ui="close-dialog" aria-label="ปิด">✕</button></div><div id="dialog-body"></div></dialog>
+</body></html>

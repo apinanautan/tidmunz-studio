@@ -1,0 +1,70 @@
+# Environment created separately on each machine
+.venv312/
+
+# Runtime data, downloaded AI tools/models, settings, and user exports
+snapgen_data/
+export/
+
+# RIFE is downloaded to snapgen_data/tools on first use
+snapgen_modules/rife-ncnn-vulkan/
+
+# Python bytecode cache, except the application core required by the launcher
+__pycache__/*
+!__pycache__/snapgen_core.cpython-312.pyc
+snapgen_modules/__pycache__/
+tools/__pycache__/
+vendor/**/__pycache__/
+
+# Generated release package
+tools/release/
+
+# Runtime status and logs
+snapgen_update_last.json
+*.log
+run_out.txt
+module_dis.txt
+test_artifacts/
+tests/
+snapgen_data/error_reports/
+
+# Local credentials and machine-specific configuration
+ltx_cloud.json
+minimax_cloud.json
+snapgen_vast_ed25519
+snapgen_vast_ed25519.pub
+/chatgpt-api/
+/**/secrets/accounts/
+/**/outputs/chatgpt-admin.sqlite
+.claude/
+.codex/
+STATE.md
+/docs/MINIMAX_H3_LINK_NOTES.md
+
+# Shortcuts and OS files
+*.lnk
+Thumbs.db
+desktop.ini
+
+# Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Local cleanup artefacts (do not add to the repository)
+/snapgen_backups/
+/snapgen_modules/*.bak_*
+/tools/ffmpeg-*/
+/tools/**/__pycache__/
+/__slot_dis.txt
+/desktop_now.png
+/sftp_*.txt
+
+# Root-only test artefacts (do not add to the repository)
+/.pytest_cache/
+/test_artifacts/
+/test_outputs/
+/test_*.py
+/test_*.mp4
+/temp_*.jpg
+/snapgen_*.png

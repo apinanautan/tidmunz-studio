@@ -1,0 +1,42 @@
+# Work Report: Final Character Visual Bible Architecture
+
+- Task: Final architecture fix for Prompt-Ref Character Reference / Visual Bible so AI is the single semantic source of truth and Python cannot reinterpret or swap wardrobe after AI output.
+- Status: completed
+- Summary: Introduced canonical Character Visual Bible v5, converted Prompt-Ref validation to structural validation plus targeted missing-field repair, removed Python wardrobe semantics/presets, bound Character Ref by character_id/exact name, serialized one canonical object directly to the three-view prompt, and added a runtime debug snapshot.
+- Files Changed:
+  - `snapgen_modules/snapgen_character_visual_bible.py`
+  - `snapgen_modules/snapgen_character_ref_request.py`
+  - `snapgen_modules/snapgen_character_wardrobe.py`
+  - `snapgen_modules/snapgen_prompt_ref_visual_normalization.py`
+  - `snapgen_modules/snapgen_context_tools.py`
+  - `snapgen_modules/snapgen_page_ref.py`
+  - `tests/fixtures/maew_phi_ai_visual_bible.json`
+  - `tests/test_character_visual_bible_integration.py`
+  - `tests/test_character_wardrobe_context.py`
+  - `tests/test_prompt_ref_visual_normalization.py`
+  - `กฏของโปรแกรม/PROMPT_REF_CONTEXT_SYSTEM.md`
+  - `docs/work-reports/2026-08-08_final-character-visual-bible-architecture.md`
+  - `docs/work-reports/LATEST.md`
+- Important Changes:
+  - Canonical schema uses `character_id`, `appearance`, `occupation`, `social_status`, `wardrobe`, `visual_identity`, `evidence`, `assumptions` only for Character Visual Bible semantics.
+  - Legacy Thai keys/typos migrate once to canonical fields; duplicate aliases are not retained in canonical output.
+  - Prompt-Ref AI is the semantic owner. Python no longer decides monk/student/ritual/rural clothing or any other character wardrobe preset.
+  - Complete AI Visual Bible is accepted without a second semantic audit turn.
+  - Missing fields trigger one targeted repair request containing only character ID/name and missing paths. Repair is merged by ID/name and cannot overwrite existing non-empty data.
+  - Shared Context normalization is structural only; `invent=True` no longer creates semantic character appearance/clothing defaults.
+  - `snapgen_character_wardrobe.py` is now a compatibility serializer/no-op facade and contains no semantic presets.
+  - Character Ref selects by `character_id` or exact canonical name, never array index.
+  - Character Ref prompt serializes the same canonical appearance/wardrobe for Front / 3/4 / Full-body; Character Ref does not use secondary semantic GPT refinement/research.
+  - Runtime Character Ref writes `snapgen_data/debug/ref_last_request.json` before the Image AI request.
+- Integration Fixture: `แมวผี (อาย)` verifies แม่, ลุงเทือง, ร่างทรงพ่อแก่, กัน, แมว and array-reordering invariance.
+- Tests/Build:
+  - Character Visual Bible integration: 8/8 PASS.
+  - Combined canonical Visual Bible + wardrobe + Prompt-Ref normalization: 19/19 PASS.
+  - Python compile for all touched runtime modules: PASS.
+  - Runtime debug snapshot generated and inspected: mother canonical object + final prompt contain home clothing and no จีวร/สบง.
+  - Existing Prompt-Ref/Storyboard baseline remains 18 tests, failures=4, errors=4; no increase.
+- Remaining Issues: Existing unrelated baseline failures remain outside this task.
+- Risks: `snapgen_gui_v2.py` and parts of Ref UI contain unrelated pre-existing working-tree changes. Task-only blobs for shared context/ref were staged from HEAD plus this architecture patch to avoid committing unrelated work.
+- Git Commit: SELF (final hash reported after commit)
+- Debug Snapshot: `snapgen_data/debug/ref_last_request.json`
+- Date/Time: 2026-08-08 19:54:46 +07:00

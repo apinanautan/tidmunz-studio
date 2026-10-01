@@ -1,0 +1,37 @@
+# Work Report: Story-Driven Character Reference Wardrobe
+
+- Task: ทำให้ Character Reference ใช้บทต้นฉบับเป็น input หลักเพียงอย่างเดียว แล้วสร้าง appearance/wardrobe ที่สอดคล้องเรื่องอัตโนมัติ โดยไม่ต้องให้ผู้ใช้กรอก wardrobe และต้อง compatibility กับ Context เก่า
+- Status: completed
+- Summary: เพิ่ม wardrobe contract แบบ story-driven, เติม/normalize wardrobe ให้ Context เก่าและใหม่, แยก explicit/inferred, ส่ง world/identity/social context และ wardrobe lock เข้า Character Ref prompt, ซ่อน manual outfit selector จาก flow ปกติ และล็อก Front / 3/4 / Full-body ให้เป็นคน/ชุดเดียวกัน
+- Files Changed:
+  - `snapgen_modules/snapgen_character_wardrobe.py`
+  - `snapgen_modules/snapgen_context_tools.py`
+  - `snapgen_modules/snapgen_page_ref.py`
+  - `tests/test_character_wardrobe_context.py`
+  - `docs/work-reports/2026-08-08_character-reference-story-wardrobe.md`
+  - `docs/work-reports/LATEST.md`
+- Important Changes:
+  - `wardrobe.default_outfit` รองรับ top, bottom, footwear, outerwear, accessories, colors, materials, condition, overall_style
+  - `wardrobe_source` เป็น `explicit` เฉพาะเมื่อ evidence รองรับเสื้อผ้าจริง; กรณีสมมุติหรือไม่มี evidence จะเป็น `inferred`
+  - `wardrobe_reason` เก็บเหตุผลสั้น ๆ จาก era/location/weather/age/gender/occupation/status/role/story summary
+  - รองรับ `variants` / legacy `outfit_variants` โดยไม่บังคับ scene wardrobe architecture ใหม่
+  - `normalize_context_master()` เติม wardrobe contract ให้ Context เก่าที่ไม่มี field ใหม่โดยไม่ crash
+  - หน้า Ref ไม่ต้องรับ wardrobe input จากผู้ใช้ใน flow ปกติ; internal legacy widgets ยังอยู่เพื่อ compatibility แต่ไม่แสดง
+  - Character Ref prompt ส่ง identity, age, gender presentation, nationality/ethnicity (ถ้ามี), occupation, social status, era, culture/location, weather และ default wardrobe เข้า Image AI
+  - Character Reference ใช้ EXACTLY 3 depictions: Front face, 3/4 face, Full-body front และ wardrobe lock ชุดเดียวกัน 100%
+  - Full-body บังคับเห็นเสื้อ ท่อนล่าง รองเท้า และ silhouette ครบ
+- Tests/Build:
+  - `py -3 -m py_compile snapgen_modules/snapgen_character_wardrobe.py snapgen_modules/snapgen_context_tools.py snapgen_modules/snapgen_page_ref.py` = PASS
+  - `py -3 -m unittest tests.test_character_wardrobe_context` = PASS, 6/6
+  - `py -3 -m unittest tests.test_character_wardrobe_context tests.test_ref_ghost_detection` = PASS สำหรับ unittest-discovered tests, 6/6
+  - Baseline suite: `py -3 -m unittest tests.test_prompt_ref_single_history tests.test_storyboard_split_prompt_banks tests.test_storyboard_ref_preview` = FAILED 18 tests, failures=4, errors=4 ซึ่งเท่ากับ baseline ก่อนงานนี้ ไม่มี regression ใหม่ในจำนวน failure/error
+  - `pytest` ไม่ได้ติดตั้งใน environment (`No module named pytest`) จึงไม่ได้เพิ่ม dependency ใหม่
+  - staged task-only source ถูก compile ตรวจแยกจาก uncommitted working-tree changes เดิมแล้ว
+- Remaining Issues:
+  - Prompt-Ref semantic extraction เดิมยังอาจส่ง field บางตัวว่าง; wardrobe normalizer จึงมี deterministic story-context fallback เพื่อให้ Ref ใช้งานได้ทันที
+  - outfit variants ถูกเก็บได้ แต่ยังไม่ได้ทำ scene wardrobe engine เพิ่ม เพราะไม่จำเป็นต่อหน้า Character Ref งานนี้
+- Risks:
+  - working tree มี uncommitted งานเดิมจำนวนมาก จึง stage source ของงานนี้จาก HEAD + task patch แยก เพื่อไม่ลากงานเก่าเข้า commit
+  - inference เป็น conservative default และตั้งใจหลีกเลี่ยงแฟชั่นสุ่ม; หาก story context มีข้อมูลน้อยมาก ความเฉพาะเจาะจงจะลดลงแต่ยังไม่ crash
+- Git Commit: SELF (exact hash reported after commit; a commit cannot embed its own final hash without changing that hash)
+- Date/Time: 2026-08-08 18:41:36 +07:00

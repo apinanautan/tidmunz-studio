@@ -1,0 +1,28 @@
+{
+  "enabled": true,
+  "match_case": false,
+  "words": [
+    "เลือด",
+    "ฆ่า",
+    "ตาย",
+    "ศพ",
+    "ยิง",
+    "มีด",
+    "ปืน",
+    "ระเบิด",
+    "ทรมาน",
+    "ข่มขืน",
+    "เปลือย",
+    "nude",
+    "naked",
+    "blood",
+    "kill",
+    "dead",
+    "corpse",
+    "gun",
+    "knife",
+    "explode",
+    "torture",
+    "rape"
+  ]
+}

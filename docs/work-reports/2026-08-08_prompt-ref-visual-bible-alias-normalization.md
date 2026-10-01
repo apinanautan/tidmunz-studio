@@ -1,0 +1,36 @@
+# Work Report: Prompt-Ref Visual Bible Alias Normalization
+
+- Task: แก้ Prompt-Ref Visual Bible normalization ให้ typo aliases เช่น `ดวงต` / `เสื้อผ` ถูกย้ายเข้า canonical keys ก่อน validation และป้องกัน repair response ค่าว่างล้างข้อมูลภาพเดิม
+- Status: completed
+- Summary: เพิ่ม canonical alias normalizer + non-destructive repair merge และติดตั้ง patch เข้ากับ Prompt-Ref v4 runtime ผ่าน Ref startup โดยไม่ commit `snapgen_gui_v2.py` working-tree changes ก้อนใหญ่จาก session ก่อน
+- Root Cause:
+  - GPT/runtime บางรอบมีค่าจริงอยู่ใน typo key เช่น `ดวงต` แต่ canonical `ดวงตา` ถูกเติมเป็นค่าว่างภายหลัง
+  - Visual Bible validator ตรวจ canonical keys จึงมองว่าข้อมูลขาดและยิง `VISUAL BIBLE REPAIR REQUIRED`
+  - audit/visual repair เดิม replace normalized object ทั้งก้อน จึงมีโอกาสให้ empty repair value ล้าง non-empty existing value
+- Files Changed:
+  - `snapgen_modules/snapgen_prompt_ref_visual_normalization.py`
+  - `snapgen_modules/snapgen_page_ref.py`
+  - `tests/test_prompt_ref_visual_normalization.py`
+  - `docs/work-reports/2026-08-08_prompt-ref-visual-bible-alias-normalization.md`
+  - `docs/work-reports/LATEST.md`
+- Important Changes:
+  - aliases: `ดวงต -> ดวงตา`, `เสื้อผ -> เสื้อผ้า`
+  - canonical non-empty value always wins over alias
+  - alias is removed from normalized output after merge
+  - alias normalization runs before the existing Prompt-Ref normalizer/validator
+  - repair merge policy preserves non-empty existing values when repair returns empty strings/lists/dicts
+  - entity lists are merged by `(entity_type, name)` when possible instead of positional blind replacement
+  - `needs_ref=true` validator receives canonicalized data; existing validator already skips human repair requirements when `needs_ref=false`
+  - existing Prompt-Ref history/chat architecture is unchanged
+  - runtime scan of current `story_breakdown.json`, `prompt_ref_context.json`, `context_master.json` found live duplicate typo alias `ดวงต`; `เสื้อผ` is supported proactively from reported runtime output
+- Tests/Build:
+  - `py -3 -m py_compile snapgen_modules/snapgen_prompt_ref_visual_normalization.py snapgen_modules/snapgen_page_ref.py snapgen_modules/snapgen_character_wardrobe.py` = PASS
+  - `py -3 -m unittest tests.test_prompt_ref_visual_normalization tests.test_character_wardrobe_context` = PASS 13/13
+  - new visual normalization regression tests = 6/6
+  - Prompt-Ref/Storyboard baseline = 18 tests, failures=4, errors=4, unchanged from pre-task baseline
+- Remaining Issues:
+  - Prompt-Ref v4 implementation in `snapgen_gui_v2.py` remains part of pre-existing uncommitted working-tree work; this task deliberately did not stage that unrelated large diff
+- Risks:
+  - patch installation relies on `snapgen_page_ref.install()` during normal startup; current app calls `_install_ref_mode()` before interactive Prompt-Ref use
+- Git Commit: SELF (final hash reported after commit)
+- Date/Time: 2026-08-08 19:24:16 +07:00

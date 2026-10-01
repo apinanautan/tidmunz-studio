@@ -1,0 +1,55 @@
+{
+  "action": "next",
+  "model": "gpt-5-5",
+  "conversation_id": "<PROMPT_REF_CONVERSATION_ID>",
+  "parent_message_id": "<PROMPT_REF_PARENT_MESSAGE_ID>",
+  "client_prepare_state": "none",
+  "system_hints": [],
+  "supports_buffering": true,
+  "supported_encodings": [
+    "v1"
+  ],
+  "force_parallel_switch": "auto",
+  "conversation_mode": {
+    "kind": "primary_assistant"
+  },
+  "messages": [
+    {
+      "id": "<NEW_USER_MESSAGE_ID>",
+      "author": {
+        "role": "user"
+      },
+      "content": {
+        "content_type": "multimodal_text",
+        "parts": [
+          {
+            "content_type": "image_asset_pointer",
+            "asset_pointer": "sediment://<UPLOADED_FILE_ID>",
+            "size_bytes": 0,
+            "width": 0,
+            "height": 0
+          },
+          "<WHOLE_STORYBOARD_JSON_REQUEST>"
+        ]
+      },
+      "metadata": {
+        "attachments": [
+          {
+            "id": "<UPLOADED_FILE_ID>",
+            "size": 0,
+            "name": "prompt_ref_storyboard.png",
+            "mime_type": "image/png",
+            "width": 0,
+            "height": 0,
+            "source": "local",
+            "is_big_paste": false
+          }
+        ],
+        "selected_sources": [],
+        "serialization_metadata": {
+          "custom_symbol_offsets": []
+        }
+      }
+    }
+  ]
+}

@@ -41,6 +41,8 @@ SIZES = {"16:9": (1920, 1080), "9:16": (1080, 1920)}
 FPS = 25
 CROSSFADE = 0.5
 PLAN_WINDOW = 180.0  # seconds of narration planned per GPT request
+IMAGE_COUNTS = ("35", "50", "80")  # ChatGPT allows ~120 images a day
+MAX_CHARACTER_REFS = 6
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 STAGES = (
     ("context", "วิเคราะห์บท", 5),
@@ -160,6 +162,16 @@ def correct_with_script(segments: list, script: str) -> list:
     return fixed
 
 
+def limit_scenes(scenes: list, target: int, duration: float) -> list:
+    """Merge the shortest scenes into the previous one until ``target`` remain."""
+    scenes = list(scenes)
+    while len(scenes) > max(1, target):
+        durs = segment_durations([s["start"] for s in scenes], duration)
+        shortest = min(range(1, len(scenes)), key=lambda i: durs[i])
+        del scenes[shortest]
+    return scenes
+
+
 def segment_durations(starts: list, duration: float) -> list:
     ends = list(starts[1:]) + [duration]
     return [max(0.5, round(e - s, 3)) for s, e in zip(starts, ends)]
@@ -229,7 +241,7 @@ def context_request(script: str) -> str:
         "อ่านบทนิทานด้านล่างทั้งเรื่อง แล้วสร้าง Context สำหรับทำภาพประกอบ ตอบ JSON เท่านั้น ห้าม markdown.\n"
         "กฎ: ใช้ชื่อตัวละครตามที่บทเรียกจริง; ถ้าตัวละครมีหลายช่วงวัยที่หน้าตาต่างกันมากในเรื่อง ให้แยกเป็นคนละรายการ เช่น "
         "'นายจำนง (วัยหนุ่ม)' กับ 'นายจำนง (วัย 50)'; ระบุยุคสมัยและสถานที่จากบท ห้ามเดาเป็นยุคโบราณถ้าบทเป็นยุคปัจจุบัน; "
-        "รายละเอียดหน้าตาที่บทไม่ได้บอกให้กำหนดอย่างสมเหตุผลและคงที่ทั้งเรื่อง.\n"
+        "รายละเอียดหน้าตาที่บทไม่ได้บอกให้กำหนดอย่างสมเหตุผลและคงที่ทั้งเรื่อง; เรียงตัวละครตามความสำคัญ ตัวหลักก่อน.\n"
         "schema: {\"version\":3,\"story\":{\"title\":\"\",\"summary\":\"\",\"era\":\"\",\"main_location\":\"\"},"
         "\"characters\":[{\"name\":\"\",\"อายุ\":\"\",\"เพศ\":\"\",\"บทบาท\":\"\",\"รูปร่าง\":\"\",\"สีผิว\":\"\",\"ทรงผม\":\"\","
         "\"ใบหน้า\":\"\",\"เสื้อผ้า\":\"\",\"ลักษณะเด่น\":\"\",\"visual_identity\":\"\"}],"
@@ -288,7 +300,7 @@ def install(g: dict, root: tk.Misc) -> tk.Frame:
     script_var = tk.StringVar(value="ลากไฟล์บทมาวาง หรือกดเลือก (.docx / .txt)")
     audio_var = tk.StringVar(value="ลากไฟล์เสียงมาวาง หรือกดเลือก (.wav / .mp3 / .m4a)")
     aspect_var = tk.StringVar(value="16:9")
-    seconds_var = tk.IntVar(value=10)
+    count_var = tk.StringVar(value="50")
     subtitle_var = tk.BooleanVar(value=False)
     review_var = tk.BooleanVar(value=False)
     stage_var = tk.StringVar(value="พร้อม")
@@ -310,9 +322,9 @@ def install(g: dict, root: tk.Misc) -> tk.Frame:
     options.pack(fill="x", padx=8, pady=2)
     tk.Label(options, text="ภาพ", bg=bg).pack(side="left")
     ttk.Combobox(options, textvariable=aspect_var, values=list(SIZES), width=6, state="readonly").pack(side="left", padx=(4, 14))
-    tk.Label(options, text="เปลี่ยนภาพประมาณทุก", bg=bg).pack(side="left")
-    tk.Spinbox(options, from_=5, to=30, textvariable=seconds_var, width=4).pack(side="left", padx=4)
-    tk.Label(options, text="วินาที", bg=bg).pack(side="left", padx=(0, 14))
+    tk.Label(options, text="จำนวนรูปทั้งเรื่อง", bg=bg).pack(side="left")
+    ttk.Combobox(options, textvariable=count_var, values=IMAGE_COUNTS, width=5, state="readonly").pack(side="left", padx=4)
+    tk.Label(options, text=f"รูป (+ รูปตัวละครไม่เกิน {MAX_CHARACTER_REFS})", bg=bg).pack(side="left", padx=(0, 14))
     tk.Checkbutton(options, text="ใส่ซับไตเติล", variable=subtitle_var, bg=bg).pack(side="left", padx=(0, 10))
     tk.Checkbutton(options, text="หยุดให้ตรวจแผนก่อนสร้างรูป", variable=review_var, bg=bg).pack(side="left")
 
@@ -433,7 +445,7 @@ def install(g: dict, root: tk.Misc) -> tk.Frame:
         if project.get("audio"):
             audio_var.set(f"{Path(project['audio']).name} · {fmt_time(project.get('duration'))}")
         aspect_var.set(project.get("aspect", aspect_var.get()))
-        seconds_var.set(int(project.get("seconds", seconds_var.get())))
+        count_var.set(str(project.get("image_count", count_var.get())))
         subtitle_var.set(bool(project.get("subtitles", subtitle_var.get())))
         save_project()
         refresh_all()
@@ -471,7 +483,7 @@ def install(g: dict, root: tk.Misc) -> tk.Frame:
         project.update({"audio": path, "duration": round(duration, 2)})
         save_project()
         audio_var.set(f"{Path(path).name} · {fmt_time(duration)}")
-        log(f"เสียงยาว {fmt_time(duration)} → ประมาณ {round(duration / max(5, seconds_var.get()))} ภาพ")
+        log(f"เสียงยาว {fmt_time(duration)} → {count_var.get()} รูป เปลี่ยนภาพเฉลี่ยทุก {duration / int(count_var.get()):.0f} วินาที")
 
     file_card(inputs, "📄 ไฟล์บท", script_var, choose_script)
     file_card(inputs, "🎙 ไฟล์เสียงบรรยาย", audio_var, choose_audio)
@@ -709,6 +721,7 @@ def install(g: dict, root: tk.Misc) -> tk.Frame:
         project = state["project"]
         refs_dir = Path(state["folder"]) / "refs"
         characters = [c for c in (project.get("context") or {}).get("characters", []) if c.get("name")]
+        characters = characters[:MAX_CHARACTER_REFS]  # main characters first (Context order)
         existing = character_refs()
         todo = [c for c in characters if c["name"] not in existing]
         for n, character in enumerate(todo, 1):
@@ -738,7 +751,8 @@ def install(g: dict, root: tk.Misc) -> tk.Frame:
             check_stop()
             window = windows[w]
             span = window[-1]["end"] - window[0]["start"]
-            count = max(1, round(span / max(5, int(project.get("seconds", 10)))))
+            target = int(project.get("image_count", 50))
+            count = max(1, round(target * span / float(project["duration"])))
             set_progress("plan", w / len(windows), f"วางแผนช่วง {w + 1}/{len(windows)} ({fmt_time(window[0]['start'])})")
             previous = scenes[-1]["prompt"][:200] if scenes else ""
             reply = with_retries("วางแผนฉาก", lambda: parse_json_reply(
@@ -767,7 +781,12 @@ def install(g: dict, root: tk.Misc) -> tk.Frame:
             save_project()
             ui(refresh_table)
         project.pop("planned_windows", None)
-        log(f"✓ วางแผน {len(scenes)} ฉาก")
+        target = int(project.get("image_count", 50))
+        if len(scenes) > target:
+            scenes = limit_scenes(scenes, target, float(project["duration"]))
+            project["scenes"] = scenes
+            save_project()
+        log(f"✓ วางแผน {len(scenes)} ฉาก (ไม่เกิน {target} รูป)")
 
     def scene_prompt(scene):
         context = state["project"].get("context") or {}
@@ -896,12 +915,15 @@ def install(g: dict, root: tk.Misc) -> tk.Frame:
         missing = sum(1 for s in scenes if not (s.get("image") and os.path.isfile(s["image"])))
         if done.get("plan") and missing == 0 and (chars or 0) <= 0:
             return True
-        estimate = missing if done.get("plan") else round(project["duration"] / max(5, int(project.get("seconds", 10))))
-        char_text = f"รูปตัวละคร {chars} รูป + " if chars else ("รูปตัวละคร ~5 รูป + " if chars is None else "")
+        estimate = missing if done.get("plan") else int(project.get("image_count", 50))
+        if chars is not None:
+            chars = min(chars, MAX_CHARACTER_REFS)
+        char_text = f"รูปตัวละคร {chars} รูป + " if chars else (f"รูปตัวละครไม่เกิน {MAX_CHARACTER_REFS} รูป + " if chars is None else "")
         return messagebox.askyesno(
             "เล่าภาพ — ยืนยันใช้เครดิต",
             f"เรื่องนี้จะสร้าง {char_text}รูปฉากประมาณ {estimate} รูป\n"
-            f"(เสียงยาว {fmt_time(project['duration'])}, เปลี่ยนภาพทุก ~{project.get('seconds')} วินาที)\n\nเริ่มเลยไหม?",
+            f"(เสียงยาว {fmt_time(project['duration'])}, เปลี่ยนภาพเฉลี่ยทุก {project['duration'] / int(project.get('image_count', 50)):.0f} วินาที)\n"
+            "ChatGPT สร้างรูปได้ประมาณ 120 รูปต่อวัน ถ้าครบโควตาโปรแกรมจะหยุดรอ แล้วกดทำต่อวันถัดไปได้\n\nเริ่มเลยไหม?",
             parent=page)
 
     def start_pipeline(only=None):
@@ -920,7 +942,16 @@ def install(g: dict, root: tk.Misc) -> tk.Frame:
             for scene in project["scenes"]:
                 scene.pop("image", None)
             project["done"].pop("images", None)
-        project.update({"aspect": aspect_var.get(), "seconds": int(seconds_var.get()),
+        wanted = int(count_var.get())
+        if project.get("done", {}).get("plan") and int(project.get("image_count", wanted)) != wanted and only is None:
+            if not messagebox.askyesno(
+                    "เล่าภาพ", f"เปลี่ยนจำนวนรูปเป็น {wanted} ต้องวางแผนฉากใหม่ (รูปฉากเดิมจะไม่ถูกใช้) ต่อไหม?", parent=page):
+                return
+            project["scenes"] = []
+            for key in ("plan", "images", "video"):
+                project["done"].pop(key, None)
+        project["image_count"] = wanted
+        project.update({"aspect": aspect_var.get(),
                         "subtitles": bool(subtitle_var.get())})
         project["done"].pop("video", None)
         if only is None and not credit_check():

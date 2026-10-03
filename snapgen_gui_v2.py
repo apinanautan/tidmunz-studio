@@ -1046,6 +1046,9 @@ try:
             uses_main_story = False
             conversation_state = own_state
             conversation_save_fn = payload.get("_conversation_save")
+        if payload.get("_temporary_chat"):
+            # A one-off temporary chat never joins any story history.
+            uses_main_story = False
         if uses_main_story:
             # Prompt-Ref, Storyboard, Image Slots, edits and video are one
             # production. Keep one cursor owner so pages cannot split the same
@@ -12933,6 +12936,9 @@ def _restore_image_mode_latest():
                 uses_main_story = False
                 conversation_state = own_state
                 conversation_save_fn = payload.get("_conversation_save")
+            if payload.get("_temporary_chat"):
+                # A one-off temporary chat never joins any story history.
+                uses_main_story = False
             if uses_main_story:
                 conversation_state = globals().get("_prompt_ref_conversation")
                 conversation_save_fn = globals().get("_save_prompt_ref_conversation")

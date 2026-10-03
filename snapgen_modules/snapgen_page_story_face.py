@@ -205,6 +205,8 @@ def install(g: dict, root: tk.Misc) -> tk.Misc:
         """
         if fresh:
             payload["_temporary_chat"] = True
+            for key in ("_use_story_history", "_use_ref_story_history", "_use_story_face_history"):
+                payload.pop(key, None)
             payload.pop("_conversation_state", None)
             payload.pop("_conversation_save", None)
             return payload

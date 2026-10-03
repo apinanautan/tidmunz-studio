@@ -24,6 +24,10 @@ RETRY_COUNT = 0
 RETRY_DELAY = 5  # seconds between retries
 
 
+# Set once ChatGPT refuses to read back a temporary chat in this session.
+_temporary_chat_unsupported = [False]
+
+
 def _is_conversation_lost(text):
     """True when ChatGPT cannot open the chat from the active account."""
     lowered = str(text or "").casefold()
@@ -1306,7 +1310,7 @@ def generate_image(prompt, *, output_dir=None, name_hint=None,
         }.get(aspect_ratio, "1024x1024"),
         "response_format": "b64_json",
     }
-    if temporary_chat:
+    if temporary_chat and not _temporary_chat_unsupported[0]:
         payload["metadata"] = {"history_and_training_disabled": True}
     if is_edit and ref_images:
         payload["images"] = ref_images
@@ -1367,6 +1371,15 @@ def generate_image(prompt, *, output_dir=None, name_hint=None,
     def reset_lost_history(text):
         """Forget a page-owned chat that the active account cannot open."""
         nonlocal lost_history_reset, retry_fresh_chat
+        temporary = (payload.get("metadata") or {}).get("history_and_training_disabled")
+        if temporary and not lost_history_reset and _is_conversation_lost(text):
+            # Some accounts cannot read back a temporary chat; a new normal
+            # chat is still separate from every story history.
+            lost_history_reset = retry_fresh_chat = True
+            payload.pop("metadata", None)
+            _temporary_chat_unsupported[0] = True
+            log("[image-gen] บัญชีนี้ใช้แชตชั่วคราวไม่ได้ — สร้างในแชตใหม่แยกแทน")
+            return True
         if (
             lost_history_reset
             or not isinstance(conversation_state, dict)

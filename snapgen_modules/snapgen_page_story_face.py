@@ -1318,8 +1318,8 @@ def install(g: dict, root: tk.Misc) -> tk.Misc:
             "mixed rural heritage, rough coarse uneven features")),
         ("face shape", (
             "extremely long narrow horse-like face", "very round moon face", "very square blocky face with a huge jaw",
-            "sharply pointed heart face with a tiny chin", "very wide short face", "gaunt skull-like face with hollow cheeks",
-            "pear face with heavy jowls", "extremely angular bony face")),
+            "sharply pointed heart face with a tiny chin", "very wide short face", "very long face with a sloping forehead",
+            "pear face, narrow top and wide bottom", "extremely angular face with sharp corners")),
         ("eyes", (
             "very small deep-set squinting eyes", "very large bulging round eyes", "heavy drooping hooded eyes",
             "sharply upturned slit eyes", "sad strongly downturned eyes", "very close-set narrow eyes",

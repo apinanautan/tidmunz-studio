@@ -80,7 +80,7 @@ def _number_key(number):
 
 
 def _karaoke_story_rows(characters, dataset_text=""):
-    """Normalize Story Face rows, keeping only the first occurrence of each name."""
+    """Normalize Story Face rows: every name + variant once (variants are separate rows)."""
     rows = []
     seen_names = set()
     for character in characters or []:
@@ -89,11 +89,11 @@ def _karaoke_story_rows(characters, dataset_text=""):
         name = str(character.get("name") or "").strip()
         if not name:
             continue
-        name_key = name.casefold()
+        variant = str(character.get("variant") or "").strip()
+        name_key = (name.casefold(), variant.casefold())
         if name_key in seen_names:
             continue
         seen_names.add(name_key)
-        variant = str(character.get("variant") or "").strip()
         rows.append({
             "order": len(rows) + 1,
             "name": name,

@@ -53,6 +53,16 @@ STAGES = (
     ("images", "สร้างรูปฉาก", 50),
     ("video", "ตัดต่อ", 15),
 )
+# Slot 2 auto mode: the same pipeline, plus one AI video clip per scene.
+VIDEO_STAGES = (
+    ("context", "วิเคราะห์บท", 4),
+    ("transcribe", "ฟังเสียง", 6),
+    ("plan", "วางแผนฉาก", 5),
+    ("characters", "รูปตัวละคร", 5),
+    ("images", "สร้างรูปฉาก", 20),
+    ("clips", "สร้างคลิปวิดีโอ", 50),
+    ("video", "ตัดต่อ", 10),
+)
 DEFAULT_STYLE = "ภาพสมจริงแบบภาพยนตร์ แสงธรรมชาติ รายละเอียดสูง ไม่มีตัวหนังสือหรือคำบรรยายในภาพ"
 
 
@@ -208,9 +218,46 @@ def limit_scenes(scenes: list, target: int, duration: float) -> list:
     return scenes
 
 
+def split_long_scenes(scenes: list, duration: float, clip_seconds: float, max_factor: float = 1.6) -> list:
+    """Video mode: a shot longer than ~1.6 clips becomes continuing sub-shots.
+
+    A narration sentence can run 20 s while a clip lasts 6 s; one clip would
+    otherwise be slowed and then frozen for most of that time.
+    """
+    out = []
+    durs = segment_durations([s["start"] for s in scenes], duration)
+    for scene, length in zip(scenes, durs):
+        parts = 1
+        if clip_seconds > 0 and length > clip_seconds * max_factor:
+            parts = int(-(-length // clip_seconds))
+        for j in range(parts):
+            piece = dict(scene, start=round(scene["start"] + j * length / parts, 2))
+            if j:
+                note = f" (ช็อตต่อเนื่อง {j + 1}/{parts} ของฉากเดียวกัน มุมกล้องต่างจากช็อตก่อน)"
+                piece["prompt"] = scene["prompt"] + note
+                piece["video_prompt"] = (scene.get("video_prompt") or "") + note
+                piece["motion"] = MOTIONS[(MOTIONS.index(scene.get("motion", MOTIONS[0])) + j) % len(MOTIONS)] \
+                    if scene.get("motion") in MOTIONS else MOTIONS[j % len(MOTIONS)]
+            out.append(piece)
+    return out
+
+
 def segment_durations(starts: list, duration: float) -> list:
     ends = list(starts[1:]) + [duration]
     return [max(0.5, round(e - s, 3)) for s, e in zip(starts, ends)]
+
+
+def clip_fit_filter(clip_seconds: float, target: float, width: int, height: int) -> str:
+    """Fit one AI clip to its narration slot: trim if long, slow (≤1.6x) then hold if short."""
+    factor = 1.0
+    if clip_seconds > 0 and clip_seconds < target:
+        factor = min(1.6, target / clip_seconds)
+    hold = max(0.0, target - clip_seconds * factor)
+    vf = (f"setpts={factor:.4f}*PTS,fps={FPS},"
+          f"scale={width}:{height}:force_original_aspect_ratio=increase,crop={width}:{height}")
+    if hold > 0.01:
+        vf += f",tpad=stop_mode=clone:stop_duration={hold + 0.2:.3f}"
+    return vf + f",trim=duration={target:.3f},setpts=PTS-STARTPTS,format=yuv420p"
 
 
 def zoompan_filter(motion: str, frames: int, width: int, height: int) -> str:
@@ -349,7 +396,7 @@ def character_description(character: dict) -> str:
     return " ".join(p for p in parts if p and p not in ("ไม่ระบุ", "-"))
 
 
-def plan_request(window: list, count: int, names: list, previous: str, era: str) -> str:
+def plan_request(window: list, count: int, names: list, previous: str, era: str, clip_seconds: float = 0) -> str:
     lines = "\n".join(f"[{s['start']:.1f}] {s['text']}" for s in window)
     return (
         f"วางแผนภาพประกอบเสียงบรรยายช่วง {fmt_time(window[0]['start'])}–{fmt_time(window[-1]['end'])} "
@@ -357,11 +404,18 @@ def plan_request(window: list, count: int, names: list, previous: str, era: str)
         "เลือกจุดเปลี่ยนภาพที่เหตุการณ์ สถานที่ หรือผู้พูดเปลี่ยน ภาพติดกันห้ามซ้ำมุมกล้องเดิม. "
         f"ยุค/บรรยากาศ: {era}. ตัวละครที่ใช้ได้ (ใช้ชื่อตรงตัวเท่านั้น): {', '.join(names) or '-'}. "
         + (f"ภาพก่อนหน้าคือ: {previous}. " if previous else "")
-        + "ตอบ JSON เท่านั้น: {\"scenes\":[{\"start\":0.0,\"characters\":[],\"location\":\"\",\"prompt\":\"\",\"motion\":\"\"}]} "
+        + (f"แต่ละช็อตจะเป็นคลิปวิดีโอยาว {clip_seconds:g} วินาที ช็อตหนึ่งไม่ควรยาวเกิน {clip_seconds * 1.5:g} วินาทีของเสียง. "
+           if clip_seconds else "")
+        + "ตอบ JSON เท่านั้น: {\"scenes\":[{\"start\":0.0,\"characters\":[],\"location\":\"\",\"prompt\":\"\",\"motion\":\"\""
+        + (",\"video_prompt\":\"\"" if clip_seconds else "") + "}]} "
         "start = เวลาเริ่มของประโยคที่ภาพนี้เริ่ม (ต้องเป็นตัวเลขในวงเล็บด้านล่าง). "
         "characters = ชื่อตัวละครที่ปรากฏในภาพนี้ (ว่างได้ถ้าเป็นภาพสถานที่). "
         "prompt = คำบรรยายภาพนิ่งภาษาไทย: ใครทำอะไร ที่ไหน เวลา แสง มุมกล้อง อารมณ์ ไม่มีตัวหนังสือในภาพ. "
-        f"motion = หนึ่งใน {', '.join(MOTIONS)}.\n\n" + lines
+        f"motion = หนึ่งใน {', '.join(MOTIONS)}. "
+        + (f"video_prompt = คำสั่งการเคลื่อนไหวของคลิป {clip_seconds:g} วินาทีภาษาไทยที่เริ่มจากภาพนิ่งนี้: "
+           "ใครขยับอย่างไร สีหน้า การเคลื่อนไหวของสิ่งรอบตัว และกล้องเคลื่อนอย่างไร ไม่มีบทพูด ไม่มีตัวหนังสือ. "
+           if clip_seconds else "")
+        + "\n\n" + lines
     )
 
 
@@ -383,10 +437,90 @@ def parse_json_reply(text: str) -> dict:
 # ── page ──────────────────────────────────────────────────────────────────
 
 def install(g: dict, root: tk.Misc) -> tk.Frame:
-    from snapgen_page_builder import append_log, build_page, make_log_box, make_styled_button
+    from snapgen_page_builder import build_page
+    page, box = build_page(root, "🎞️ เล่าภาพ — ใส่บท + เสียงบรรยาย แล้วกดเริ่ม ได้วิดีโอภาพประกอบทั้งเรื่อง")
+    _build(g, root, page, box, mode="image")
+    return page
+
+
+def install_video_auto(g: dict, root: tk.Misc, slot_index: int = 1):
+    """Slot 2 'ออโต้': swap the Slot for the automatic panel and back."""
+    runtime = g.get("_runtime_g") or g
+    prompts = runtime.get("slot_prompts") or []
+    if len(prompts) <= slot_index:
+        return None
+    slot_frame = prompts[slot_index].master.master.master  # Text -> content -> body -> Slot frame
+    container = slot_frame.master
+    grid = {k: v for k, v in slot_frame.grid_info().items() if k in ("row", "column", "rowspan", "columnspan", "sticky", "padx", "pady")}
+    panel = tk.Frame(container, bg="#F8FAFC", highlightthickness=2, highlightbackground="#60A5FA")
+    header = tk.Frame(panel, bg="#DBEAFE")
+    header.pack(fill="x")
+    tk.Label(header, text=f"🤖 Slot {slot_index + 1} ออโต้ — บท + เสียง → วิดีโอทั้งเรื่อง (ใช้โมเดลและความยาวคลิปตามที่ตั้งใน Slot {slot_index + 1})",
+             bg="#DBEAFE", fg="#1E3A8A", font=("TkDefaultFont", 10, "bold")).pack(side="left", padx=10, pady=6)
+    body = tk.Frame(panel, bg="#F8FAFC")
+    body.pack(fill="both", expand=True)
+    controls = _build(g, root, panel, body, mode="video", slot_index=slot_index)
+
+    row = int(grid.get("row", slot_index) or 0)
+    other_rows = [r for r in range(2) if r != row]
+    saved_rows = {r: container.grid_rowconfigure(r) for r in [row, *other_rows]}
+
+    def show_auto():
+        if not grid:
+            return
+        slot_frame.grid_remove()
+        panel.grid(**grid)
+        # The automatic panel needs room for its scene table: give it 3/4.
+        container.grid_rowconfigure(row, weight=3, uniform="")
+        for r in other_rows:
+            container.grid_rowconfigure(r, weight=1, uniform="")
+        controls["refresh_clip_info"]()
+
+    def show_slot():
+        if controls["busy"]():
+            messagebox.showinfo("ออโต้", "กำลังทำงานอยู่ — กดหยุดก่อนกลับเป็น Slot ปกติ", parent=panel)
+            return
+        panel.grid_remove()
+        slot_frame.grid()
+        for r, cfg in saved_rows.items():
+            container.grid_rowconfigure(r, weight=cfg.get("weight", 1), uniform=cfg.get("uniform", ""))
+
+    tk.Button(header, text=f"↩ กลับเป็น Slot {slot_index + 1} ปกติ", command=show_slot, relief="flat",
+              bg="#FFFFFF", fg="#1E3A8A", cursor="hand2").pack(side="right", padx=8, pady=4)
+    toggle_style = dict(text="🤖 ออโต้", command=show_auto, relief="flat", bg="#2563EB", fg="#FFFFFF",
+                        activebackground="#1D4ED8", activeforeground="#FFFFFF", cursor="hand2",
+                        font=("TkDefaultFont", 9, "bold"), padx=10)
+    placed = False
+    try:
+        # Sit next to the Slot's own Generate button so nothing is covered.
+        generate_btn = (runtime.get("slot_buttons") or [])[slot_index]
+        row_frame = generate_btn.master
+        if generate_btn.winfo_manager() == "pack":
+            side = generate_btn.pack_info().get("side", "left")
+            tk.Button(row_frame, **toggle_style).pack(side=side, padx=4, after=generate_btn)
+            placed = True
+        elif generate_btn.winfo_manager() == "grid":
+            info = generate_btn.grid_info()
+            columns = [int(w.grid_info().get("column", 0)) for w in row_frame.grid_slaves(row=int(info["row"]))]
+            tk.Button(row_frame, **toggle_style).grid(row=int(info["row"]), column=max(columns) + 1, padx=4,
+                                                      sticky=info.get("sticky", ""))
+            placed = True
+    except Exception:
+        placed = False
+    if not placed:
+        tk.Button(slot_frame, **toggle_style).place(relx=1.0, x=-6, y=2, anchor="ne")
+    runtime["video_auto_show"] = show_auto
+    runtime["video_auto_hide"] = show_slot
+    return panel
+
+
+def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "image", slot_index: int = 1) -> dict:
+    from snapgen_page_builder import append_log, make_log_box, make_styled_button
 
     runtime = g.get("_runtime_g") or g
-    page, box = build_page(root, "🎞️ เล่าภาพ — ใส่บท + เสียงบรรยาย แล้วกดเริ่ม ได้วิดีโอภาพประกอบทั้งเรื่อง")
+    video_mode = mode == "video"
+    stages = VIDEO_STAGES if video_mode else STAGES
+    work_dir_name = "วิดีโอออโต้" if video_mode else "เล่าภาพ"
     bg = box.cget("bg")
 
     state = {"project": None, "folder": None, "busy": False, "stop": False, "lock": threading.RLock()}
@@ -398,6 +532,34 @@ def install(g: dict, root: tk.Misc) -> tk.Frame:
     review_var = tk.BooleanVar(value=False)
     stage_var = tk.StringVar(value="พร้อม")
     detail_var = tk.StringVar(value="")
+
+    def slot_settings():
+        """(model, clip seconds, aspect) from the Slot the auto mode drives."""
+        try:
+            cfg = runtime["slot_cfg_vars"][slot_index]
+            model = str(cfg["model"].get() or "").strip()
+            seconds = float(str(cfg["duration"].get() or "8").strip().rstrip("s") or 8)
+            aspect = str(cfg["aspect"].get() or "").strip()
+        except Exception:
+            model, seconds, aspect = "", 8.0, "16:9"
+        return model, max(2.0, seconds), aspect if aspect in SIZES else "16:9"
+
+    def desired_count() -> int:
+        if not video_mode:
+            return int(count_var.get())
+        duration = float((state["project"] or {}).get("duration") or 0)
+        return max(1, int(-(-duration // slot_settings()[1]))) if duration else 0
+
+    def desired_aspect() -> str:
+        return slot_settings()[2] if video_mode else aspect_var.get()
+
+    def refresh_clip_info():
+        if not video_mode:
+            return
+        model, seconds, aspect = slot_settings()
+        count = desired_count()
+        clip_info_var.set(f"โมเดล {model or '-'} · คลิปละ {seconds:g} วินาที · {aspect}"
+                          + (f" → ประมาณ {count} คลิป" if count else " (เปลี่ยนได้ที่ ⚙ ของ Slot ก่อนกดออโต้)"))
 
     # ── input row ──
     inputs = tk.Frame(box, bg=bg)
@@ -413,11 +575,15 @@ def install(g: dict, root: tk.Misc) -> tk.Frame:
 
     options = tk.Frame(box, bg=bg)
     options.pack(fill="x", padx=8, pady=2)
-    tk.Label(options, text="ภาพ", bg=bg).pack(side="left")
-    ttk.Combobox(options, textvariable=aspect_var, values=list(SIZES), width=6, state="readonly").pack(side="left", padx=(4, 14))
-    tk.Label(options, text="จำนวนรูปทั้งเรื่อง", bg=bg).pack(side="left")
-    ttk.Combobox(options, textvariable=count_var, values=IMAGE_COUNTS, width=5, state="readonly").pack(side="left", padx=4)
-    tk.Label(options, text="รูปฉาก (+ รูปตัวละครตามเรื่อง)", bg=bg).pack(side="left", padx=(0, 14))
+    clip_info_var = tk.StringVar(value="")
+    if video_mode:
+        tk.Label(options, textvariable=clip_info_var, bg=bg, fg="#1E3A8A").pack(side="left", padx=(0, 14))
+    else:
+        tk.Label(options, text="ภาพ", bg=bg).pack(side="left")
+        ttk.Combobox(options, textvariable=aspect_var, values=list(SIZES), width=6, state="readonly").pack(side="left", padx=(4, 14))
+        tk.Label(options, text="จำนวนรูปทั้งเรื่อง", bg=bg).pack(side="left")
+        ttk.Combobox(options, textvariable=count_var, values=IMAGE_COUNTS, width=5, state="readonly").pack(side="left", padx=4)
+        tk.Label(options, text="รูปฉาก (+ รูปตัวละครตามเรื่อง)", bg=bg).pack(side="left", padx=(0, 14))
     tk.Checkbutton(options, text="ใส่ซับไตเติล", variable=subtitle_var, bg=bg).pack(side="left", padx=(0, 10))
     tk.Checkbutton(options, text="หยุดให้ตรวจแผนก่อนสร้างรูป", variable=review_var, bg=bg).pack(side="left")
 
@@ -439,7 +605,7 @@ def install(g: dict, root: tk.Misc) -> tk.Frame:
     stage_row = tk.Frame(box, bg=bg)
     stage_row.pack(fill="x", padx=8, pady=(2, 4))
     stage_labels = {}
-    for key, title, _weight in STAGES:
+    for key, title, _weight in stages:
         label = tk.Label(stage_row, text=f"○ {title}", bg=bg, fg="#94A3B8")
         label.pack(side="left", padx=(0, 14))
         stage_labels[key] = label
@@ -531,7 +697,7 @@ def install(g: dict, root: tk.Misc) -> tk.Frame:
         except Exception as exc:
             messagebox.showerror("เล่าภาพ", f"อ่านไฟล์บทไม่ได้: {exc}", parent=page)
             return
-        folder = project_folder_for(export_root() / "เล่าภาพ", script, text)
+        folder = project_folder_for(export_root() / work_dir_name, script, text)
         folder.mkdir(parents=True, exist_ok=True)
         state["folder"] = str(folder)
         try:
@@ -552,6 +718,7 @@ def install(g: dict, root: tk.Misc) -> tk.Frame:
         subtitle_var.set(bool(project.get("subtitles", subtitle_var.get())))
         save_project()
         refresh_all()
+        refresh_clip_info()
 
     def choose_script(path=None):
         if state["busy"]:
@@ -586,7 +753,11 @@ def install(g: dict, root: tk.Misc) -> tk.Frame:
         project.update({"audio": path, "duration": round(duration, 2)})
         save_project()
         audio_var.set(f"{Path(path).name} · {fmt_time(duration)}")
-        log(f"เสียงยาว {fmt_time(duration)} → {count_var.get()} รูป เปลี่ยนภาพเฉลี่ยทุก {duration / int(count_var.get()):.0f} วินาที")
+        if video_mode:
+            refresh_clip_info()
+            log(f"เสียงยาว {fmt_time(duration)} → {desired_count()} คลิป (คลิปละ {slot_settings()[1]:g} วินาที)")
+        else:
+            log(f"เสียงยาว {fmt_time(duration)} → {count_var.get()} รูป เปลี่ยนภาพเฉลี่ยทุก {duration / int(count_var.get()):.0f} วินาที")
 
     file_card(inputs, "📄 ไฟล์บท", script_var, choose_script)
     file_card(inputs, "🎙 ไฟล์เสียงบรรยาย", audio_var, choose_audio)
@@ -620,13 +791,16 @@ def install(g: dict, root: tk.Misc) -> tk.Frame:
         for i, scene in enumerate((state["project"] or {}).get("scenes", [])):
             image = scene.get("image")
             status = "✓" if image and os.path.isfile(image) else ("ผิดพลาด" if scene.get("error") else "—")
+            if video_mode:
+                clip = scene.get("clip")
+                status = f"รูป{status} คลิป" + ("✓" if clip and os.path.isfile(clip) else ("✗" if scene.get("clip_error") else "—"))
             table.insert("", "end", iid=str(i), values=(
                 i + 1, fmt_time(scene.get("start")), ", ".join(scene.get("characters") or []),
                 scene.get("prompt", "").replace("\n", " "), status))
 
     def refresh_stages(active=None):
         done = (state["project"] or {}).get("done", {})
-        for key, title, _w in STAGES:
+        for key, title, _w in stages:
             if done.get(key):
                 stage_labels[key].config(text=f"✓ {title}", fg="#16A34A")
             elif key == active:
@@ -640,8 +814,8 @@ def install(g: dict, root: tk.Misc) -> tk.Frame:
         if state["busy"]:
             return
         done = (state["project"] or {}).get("done", {})
-        total = sum(w for _k, _t, w in STAGES)
-        percent = int(sum(w for k, _t, w in STAGES if done.get(k)) * 100 / total)
+        total = sum(w for _k, _t, w in stages)
+        percent = int(sum(w for k, _t, w in stages if done.get(k)) * 100 / total)
         bar.configure(value=percent)
         if percent == 100:
             stage_var.set("เสร็จแล้ว 100% — กด ▶ เปิดวิดีโอ")
@@ -651,8 +825,8 @@ def install(g: dict, root: tk.Misc) -> tk.Frame:
 
     def set_progress(stage_key, fraction, detail=""):
         done_weight = 0
-        total = sum(w for _k, _t, w in STAGES)
-        for key, title, weight in STAGES:
+        total = sum(w for _k, _t, w in stages)
+        for key, title, weight in stages:
             if key == stage_key:
                 percent = int((done_weight + weight * max(0.0, min(1.0, fraction))) * 100 / total)
                 ui(lambda p=percent, t=title: (bar.configure(value=p), stage_var.set(f"{t} ... {p}%")))
@@ -822,6 +996,23 @@ def install(g: dict, root: tk.Misc) -> tk.Frame:
 
     def stage_transcribe():
         project, folder = state["project"], Path(state["folder"])
+        # The same narration may already be transcribed by the other page
+        # (เล่าภาพ / Slot 2 ออโต้): reuse it instead of running Whisper again.
+        same_audio = os.path.normcase(os.path.abspath(project["audio"]))
+        for other in (export_root() / "เล่าภาพ", export_root() / "วิดีโอออโต้"):
+            for candidate in other.glob("*/project.json") if other.is_dir() else []:
+                if candidate.parent == folder:
+                    continue
+                try:
+                    data = json.loads(candidate.read_text(encoding="utf-8"))
+                except (OSError, ValueError):
+                    continue
+                transcript = candidate.parent / "transcript.json"
+                if (data.get("done", {}).get("transcribe") and transcript.is_file()
+                        and os.path.normcase(os.path.abspath(str(data.get("audio") or ""))) == same_audio):
+                    shutil.copy2(transcript, folder / "transcript.json")
+                    log(f"ใช้ข้อความถอดเสียงที่ทำไว้แล้วจาก {candidate.parent.parent.name}/{candidate.parent.name}")
+                    return
         import snapgen_voice_input
         set_progress("transcribe", 0.02, "กำลังเปิด Whisper ...")
         model, backend = snapgen_voice_input._get_whisper_model(log_fn=log)
@@ -910,7 +1101,8 @@ def install(g: dict, root: tk.Misc) -> tk.Frame:
             set_progress("plan", w / len(windows), f"วางแผนช่วง {w + 1}/{len(windows)} ({fmt_time(window[0]['start'])})")
             previous = scenes[-1]["prompt"][:200] if scenes else ""
             reply = with_retries("วางแผนฉาก", lambda: parse_json_reply(
-                chat(plan_request(window, count, names, previous, era))))
+                chat(plan_request(window, count, names, previous, era,
+                                  float(project.get("clip_seconds") or 0) if video_mode else 0))))
             items = [s for s in reply.get("scenes") or [] if isinstance(s, dict) and str(s.get("prompt") or "").strip()]
             window_start = 0.0 if w == 0 else window[0]["start"]
             seg_starts = [s["start"] for s in window]
@@ -928,6 +1120,7 @@ def install(g: dict, root: tk.Misc) -> tk.Frame:
                 scenes.append({
                     "start": start, "characters": chars, "location": str(item.get("location") or ""),
                     "prompt": str(item.get("prompt") or "").strip(),
+                    "video_prompt": str(item.get("video_prompt") or "").strip(),
                     "motion": item.get("motion") if item.get("motion") in MOTIONS else MOTIONS[len(scenes) % 4],
                 })
             project["scenes"] = scenes
@@ -940,7 +1133,16 @@ def install(g: dict, root: tk.Misc) -> tk.Frame:
             scenes = limit_scenes(scenes, target, float(project["duration"]))
             project["scenes"] = scenes
             save_project()
-        log(f"✓ วางแผน {len(scenes)} ฉาก (ไม่เกิน {target} รูป)")
+        if video_mode:
+            before = len(scenes)
+            scenes = split_long_scenes(scenes, float(project["duration"]), float(project.get("clip_seconds") or 8))
+            project["scenes"] = scenes
+            save_project()
+            if len(scenes) > before:
+                log(f"แบ่งช็อตที่ยาวเกินคลิปเพิ่ม {len(scenes) - before} ช็อต (ไม่ให้ภาพค้างนาน)")
+            log(f"✓ วางแผน {len(scenes)} คลิป")
+        else:
+            log(f"✓ วางแผน {len(scenes)} ฉาก (ไม่เกิน {target} รูป)")
 
     def scene_prompt(scene):
         context = state["project"].get("context") or {}
@@ -1014,8 +1216,13 @@ def install(g: dict, root: tk.Misc) -> tk.Frame:
             set_progress("video", 0.75 * i / len(scenes), f"ทำภาพเคลื่อนไหว {i + 1}/{len(scenes)}")
             frames = max(1, round(length * FPS))
             clip = work / f"clip_{i:04d}.mp4"
-            run(["-i", scene["image"], "-vf", zoompan_filter(scene.get("motion", "zoom_in"), frames, width, height),
-                 "-frames:v", str(frames), *encode, str(clip)])
+            if video_mode:
+                source = scene["clip"]
+                fit = clip_fit_filter(media_duration(source), length, width, height)
+                run(["-i", source, "-an", "-vf", fit, "-frames:v", str(frames), *encode, str(clip)])
+            else:
+                run(["-i", scene["image"], "-vf", zoompan_filter(scene.get("motion", "zoom_in"), frames, width, height),
+                     "-frames:v", str(frames), *encode, str(clip)])
             clips.append((clip, length))
 
         # Crossfade in groups of 20, then crossfade the groups together.
@@ -1033,7 +1240,7 @@ def install(g: dict, root: tk.Misc) -> tk.Frame:
         picture, _total = crossfade(groups, work / "picture.mp4") if len(groups) > 1 else groups[0]
 
         set_progress("video", 0.92, "ใส่เสียงบรรยาย" + (" และซับไตเติล" if project.get("subtitles") else "") + " ...")
-        final = folder / f"{safe_name(Path(project['script']).stem)}_เล่าภาพ_{time.strftime('%Y%m%d-%H%M')}.mp4"
+        final = folder / f"{safe_name(Path(project['script']).stem)}_{work_dir_name}_{time.strftime('%Y%m%d-%H%M')}.mp4"
         audio_args = ["-i", project["audio"], "-map", "0:v", "-map", "1:a", "-c:a", "aac", "-b:a", "192k", "-shortest",
                       "-movflags", "+faststart"]
         if project.get("subtitles"):
@@ -1058,8 +1265,122 @@ def install(g: dict, root: tk.Misc) -> tk.Frame:
         project["last_video"] = str(final)
         log(f"✓ วิดีโอเสร็จ: {final}")
 
+    def run_on_ui(fn):
+        """Run fn on the Tk thread and return its result to this worker."""
+        result, event = {}, threading.Event()
+
+        def call():
+            try:
+                result["value"] = fn()
+            except Exception as exc:
+                result["error"] = exc
+            finally:
+                event.set()
+        root.after(0, call)
+        event.wait()
+        if "error" in result:
+            raise result["error"]
+        return result.get("value")
+
+    def video_output_dir() -> Path:
+        value = runtime.get("EXPORT_VIDEO") or g.get("EXPORT_VIDEO")
+        return Path(str(value)) if value else export_root() / "video"
+
+    def make_clip(scene, index):
+        """Generate one clip by driving the Slot exactly like pressing its Generate button."""
+        busy = runtime["slot_busy"]
+        waited = 0
+        while busy[slot_index]:
+            check_stop()
+            time.sleep(2)
+            waited += 2
+            if waited > 1800:
+                raise RuntimeError(f"Slot {slot_index + 1} ไม่ว่างนานเกินไป")
+        out_dir = video_output_dir()
+        before = {str(f): f.stat().st_mtime for f in out_dir.glob("*.mp4")} if out_dir.is_dir() else {}
+        started = time.time()
+        errors = []
+        prompt = (scene.get("video_prompt") or scene["prompt"]).strip()
+        prompt += "\nไม่มีบทพูด ไม่มีตัวหนังสือในภาพ ตัวละครหน้าตาเหมือนในภาพเริ่มต้นตลอดคลิป"
+
+        def submit():
+            state["show_error_backup"] = runtime.get("show_error")
+            runtime["show_error"] = lambda title, msg="", *a, **k: errors.append(f"{title}: {msg}")
+            runtime["slot_images"][slot_index].set(scene["image"])
+            box = runtime["slot_prompts"][slot_index]
+            box.delete("1.0", tk.END)
+            box.insert("1.0", prompt)
+            runtime["on_generate_slot"](slot_index)
+            return bool(runtime["slot_busy"][slot_index])
+
+        def restore():
+            if "show_error_backup" in state:
+                runtime["show_error"] = state.pop("show_error_backup")
+        try:
+            if not run_on_ui(submit):
+                raise RuntimeError("Slot ไม่รับงาน: " + ("; ".join(errors) or "ตรวจรูป/พรอมต์/โมเดลใน Slot"))
+            waited = 0
+            while busy[slot_index]:
+                time.sleep(3)
+                waited += 3
+                if waited % 30 == 0:
+                    set_progress("clips", state.get("clip_fraction", 0), f"{state.get('clip_label', '')} · รอ {waited // 60}:{waited % 60:02d}")
+                if waited > 3600:
+                    raise RuntimeError("รอคลิปเกิน 60 นาที")
+        finally:
+            run_on_ui(restore)
+        if errors:
+            raise RuntimeError("; ".join(errors)[:400])
+        new_files = [f for f in out_dir.glob("*.mp4")
+                     if f.stat().st_mtime >= started - 1 and before.get(str(f)) != f.stat().st_mtime]
+        if not new_files:
+            raise RuntimeError("Slot ทำงานเสร็จแต่ไม่พบไฟล์วิดีโอใหม่")
+        newest = max(new_files, key=lambda f: f.stat().st_mtime)  # post-processed version is written last
+        clips_dir = Path(state["folder"]) / "clips"
+        clips_dir.mkdir(exist_ok=True)
+        target = clips_dir / f"clip_{index + 1:03d}.mp4"
+        shutil.copy2(newest, target)
+        return str(target)
+
+    def stage_clips(indices=None):
+        project = state["project"]
+        scenes = project["scenes"]
+        todo = indices if indices is not None else [
+            i for i, sc in enumerate(scenes) if not (sc.get("clip") and os.path.isfile(sc["clip"]))]
+        started, failures_in_row = time.time(), 0
+        for n, i in enumerate(todo, 1):
+            check_stop()
+            scene = scenes[i]
+            if not (scene.get("image") and os.path.isfile(scene["image"])):
+                raise RuntimeError(f"ฉาก {i + 1} ยังไม่มีรูป")
+            eta = ""
+            if n > 1:
+                remaining = (time.time() - started) / (n - 1) * (len(todo) - n + 1)
+                eta = f" · เหลือประมาณ {int(remaining // 60)} นาที"
+            state["clip_fraction"] = (n - 1) / max(1, len(todo))
+            state["clip_label"] = f"สร้างคลิป {n}/{len(todo)} (ฉากที่ {i + 1}) ด้วย {project.get('video_model')}{eta}"
+            set_progress("clips", state["clip_fraction"], state["clip_label"])
+            try:
+                scene["clip"] = with_retries(f"คลิปฉาก {i + 1}", lambda: make_clip(scene, i), attempts=2)
+                scene.pop("clip_error", None)
+                failures_in_row = 0
+            except (Stopped, HistoryLost):
+                raise
+            except Exception as exc:
+                scene["clip_error"] = str(exc)[:300]
+                failures_in_row += 1
+                if failures_in_row >= 3:
+                    save_project()
+                    raise RuntimeError("สร้างคลิปล้มเหลว 3 ฉากติดกัน (เครดิตวิดีโอหมดหรือโมเดลมีปัญหา) — แก้แล้วกดเริ่มเพื่อทำต่อ")
+            save_project()
+            ui(refresh_table)
+        missing = [i + 1 for i, sc in enumerate(scenes) if not (sc.get("clip") and os.path.isfile(sc["clip"]))]
+        if missing:
+            raise RuntimeError(f"ยังขาดคลิปฉาก {', '.join(map(str, missing[:15]))} — กดเริ่มอีกครั้งเพื่อลองใหม่")
+        log(f"✓ คลิปครบ {len(scenes)} ฉาก")
+
     STAGE_FUNCS = {"context": stage_context, "transcribe": stage_transcribe, "characters": stage_characters,
-                   "plan": stage_plan, "images": stage_images, "video": stage_video}
+                   "plan": stage_plan, "images": stage_images, "clips": stage_clips, "video": stage_video}
 
     # ── control ──
     def ask_on_ui(title, message) -> bool:
@@ -1095,6 +1416,9 @@ def install(g: dict, root: tk.Misc) -> tk.Frame:
             f"รูปตัวละคร {len(new_refs)} รูป (เฉพาะตัวละครที่ปรากฏในฉาก):\n{people}\n"
             + (f"   ไม่ทำรูปให้กลุ่มคน: {', '.join(groups)}\n" if groups else "")
             + f"\nรูปฉาก {missing} รูป (เปลี่ยนภาพเฉลี่ยทุก {project['duration'] / max(1, len(project.get('scenes') or [1])):.0f} วินาที)\n"
+            + (f"คลิปวิดีโอ {sum(1 for x in project.get('scenes') or [] if not (x.get('clip') and os.path.isfile(x['clip'])))} คลิป "
+               f"ด้วย {project.get('video_model')} คลิปละ {project.get('clip_seconds'):g} วินาที (ใช้เครดิตวิดีโอตามโมเดล)\n"
+               if video_mode else "")
             + quota + "\n\nเริ่มสร้างรูปเลยไหม?")
 
     def start_pipeline(only=None):
@@ -1107,22 +1431,36 @@ def install(g: dict, root: tk.Misc) -> tk.Frame:
         if not project.get("audio"):
             messagebox.showinfo("เล่าภาพ", "เลือกไฟล์เสียงบรรยายก่อน", parent=page)
             return
-        if project.get("scenes") and project.get("aspect") and project["aspect"] != aspect_var.get():
+        aspect = desired_aspect()
+        if project.get("scenes") and project.get("aspect") and project["aspect"] != aspect:
             if not messagebox.askyesno("เล่าภาพ", "เปลี่ยนสัดส่วนภาพ ต้องสร้างรูปฉากใหม่ทั้งหมด ต่อไหม?", parent=page):
                 return
             for scene in project["scenes"]:
                 scene.pop("image", None)
-            project["done"].pop("images", None)
-        wanted = int(count_var.get())
-        if project.get("done", {}).get("plan") and int(project.get("image_count", wanted)) != wanted and only is None:
+                scene.pop("clip", None)
+            for key in ("images", "clips"):
+                project["done"].pop(key, None)
+        if video_mode:
+            model, seconds, _aspect = slot_settings()
+            if not model:
+                messagebox.showinfo("ออโต้", f"ตั้งโมเดลวิดีโอใน Slot {slot_index + 1} ก่อน", parent=page)
+                return
+            changed_clip = project.get("done", {}).get("plan") and float(project.get("clip_seconds") or seconds) != seconds
+            project.update({"clip_seconds": seconds, "video_model": model})
+        else:
+            changed_clip = False
+        wanted = desired_count()
+        if project.get("done", {}).get("plan") and only is None and (
+                changed_clip or int(project.get("image_count", wanted)) != wanted):
+            what = "ความยาวคลิป" if changed_clip else "จำนวนรูป"
             if not messagebox.askyesno(
-                    "เล่าภาพ", f"เปลี่ยนจำนวนรูปเป็น {wanted} ต้องวางแผนฉากใหม่ (รูปฉากเดิมจะไม่ถูกใช้) ต่อไหม?", parent=page):
+                    "เล่าภาพ", f"เปลี่ยน{what}แล้ว ต้องวางแผนฉากใหม่ (รูปและคลิปเดิมจะไม่ถูกใช้) ต่อไหม?", parent=page):
                 return
             project["scenes"] = []
-            for key in ("plan", "images", "video"):
+            for key in ("plan", "images", "clips", "video"):
                 project["done"].pop(key, None)
         project["image_count"] = wanted
-        project.update({"aspect": aspect_var.get(),
+        project.update({"aspect": aspect,
                         "subtitles": bool(subtitle_var.get())})
         project["done"].pop("video", None)
         save_project()
@@ -1132,7 +1470,7 @@ def install(g: dict, root: tk.Misc) -> tk.Frame:
         def worker():
             current = None
             try:
-                keys = [only] if only else [k for k, _t, _w in STAGES]
+                keys = [only] if only else [k for k, _t, _w in stages]
                 confirmed = False
                 for key in keys:
                     current = key
@@ -1145,7 +1483,7 @@ def install(g: dict, root: tk.Misc) -> tk.Frame:
                             return
                         confirmed = True
                     ui(refresh_stages, key)
-                    log(f"▶ {dict((k, t) for k, t, _w in STAGES)[key]}")
+                    log(f"▶ {dict((k, t) for k, t, _w in stages)[key]}")
                     STAGE_FUNCS[key]()
                     project["done"][key] = True
                     save_project()
@@ -1207,6 +1545,10 @@ def install(g: dict, root: tk.Misc) -> tk.Frame:
         def worker():
             try:
                 stage_images(selected)
+                if video_mode:
+                    for i in selected:
+                        project["scenes"][i].pop("clip", None)
+                    project["done"].pop("clips", None)
             except Exception as exc:
                 log(f"❌ {exc}")
             finally:
@@ -1257,5 +1599,5 @@ def install(g: dict, root: tk.Misc) -> tk.Frame:
 
     table.bind("<Double-1>", edit_prompt)
     table.bind("<<TreeviewSelect>>", show_preview)
-    g["narrate_open_project"] = open_project
-    return page
+    g["video_auto_open_project" if video_mode else "narrate_open_project"] = open_project
+    return {"open_project": open_project, "refresh_clip_info": refresh_clip_info, "busy": lambda: state["busy"]}

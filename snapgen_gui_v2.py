@@ -17339,6 +17339,13 @@ def _install_ref_mode():
     audio_page = _install_audio_page(_page_env, root)
     _page_env["_runtime_g"] = g  # เล่าภาพ reads Image-page refs installed later
     narrate_page = _install_narrate_page(_page_env, root)
+    try:
+        # Slot 2 "🤖 ออโต้": the เล่าภาพ pipeline plus one video clip per scene,
+        # generated through Slot 2's own model settings.
+        from snapgen_page_narrate import install_video_auto as _install_video_auto
+        _install_video_auto(_page_env, root, slot_index=1)
+    except Exception as _video_auto_error:
+        print(f"[SnapGen] Slot 2 auto install failed: {_video_auto_error}")
 
     # Page modules share `_page_env`, while global toolbar controls read `g`.
     # Keep each page Log reachable from global controls such as the microphone.

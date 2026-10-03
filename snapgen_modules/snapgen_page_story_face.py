@@ -154,6 +154,35 @@ def soften_injury_text(value: str) -> str:
     return result
 
 
+_AGE_WORDS = (
+    # Most specific words first; ข้อมูลชุด often gives only a word, not a number.
+    ("ทารก", "a newborn baby, under 1 year old"), ("แรกเกิด", "a newborn baby, under 1 year old"),
+    ("วัยเข้าโรงเรียน", "about 6-7 years old"), ("ประถม", "about 6-8 years old"), ("เด็ก", "about 6-10 years old"),
+    ("วัยรุ่น", "about 15-18 years old"), ("หนุ่มสาว", "about 20-25 years old"),
+    ("หญิงสาว", "about 20-25 years old"), ("ชายหนุ่ม", "about 22-28 years old"), ("สาว", "about 20-25 years old"),
+    ("หนุ่ม", "about 22-28 years old"), ("วัยกลางคน", "about 45-55 years old"), ("กลางคน", "about 45-55 years old"),
+    ("วัยทำงาน", "about 30-40 years old"), ("ชรา", "about 70-80 years old"), ("แก่", "about 65-75 years old"),
+    ("ผู้สูงอายุ", "about 65-75 years old"), ("ยาย", "about 65-75 years old"),
+)
+
+
+def _numeric_age(age, context=""):
+    """An explicit age for the prompt: keep numbers, else map Thai age words to a range."""
+    age = str(age or "").strip()
+    if re.search(r"\d", age):
+        return age
+    for source in (age, str(context or "")):
+        for word, value in _AGE_WORDS:
+            if value and word in source:
+                return f"{age} ({value})" if age else value
+    return age
+
+
+def _is_young_age(age):
+    numbers = [int(n) for n in re.findall(r"\d+", str(age or ""))]
+    return bool(numbers) and max(numbers) <= 30
+
+
 def install(g: dict, root: tk.Misc) -> tk.Misc:
     """Build this page and return its root frame."""
     globals().update(g)
@@ -1463,10 +1492,17 @@ def install(g: dict, root: tk.Misc) -> tk.Misc:
         )
         if dataset_facts:
             prompt = prompt.rstrip() + "\n\nSTORY DATASET DETAILS: " + soften_injury_text(dataset_facts) + "."
-        dataset_age = str(character.get("age") or "").strip()
+        dataset_age = _numeric_age(
+            str(character.get("age") or "").strip(),
+            " ".join(str(character.get(k) or "") for k in ("name", "variant", "role")),
+        )
         if dataset_age:
+            young = _is_young_age(dataset_age)
             prompt += (
                 f"\n\nAGE LOCK — MANDATORY: this person is {dataset_age}. The face must look exactly that age; "
+                + ("Young skin: firm, full cheeks, smooth natural texture with pores only — NO wrinkles, NO crow's-feet, "
+                   "NO nasolabial folds, NO sagging, NO age spots; ignore any general rule about age lines. " if young else "")
+                +
                 "do not make them look older even if the identity reference looks older — keep only the identity "
                 "(bone structure, eyes, nose, lips) and render the skin, firmness and features of this age."
             )
@@ -2154,7 +2190,8 @@ def install(g: dict, root: tk.Misc) -> tk.Misc:
             "design_page ต้องเป็นแผนรวมทั้งเรื่องที่อธิบายความแตกต่างของทุกใบหน้าในหน้าเดียว. "
             "แต่ละ subject ต้องมี name, variant, identity_group, identity_master, reference_from, age, gender, "
             "body_build, height, weight, role, life_condition, expression, appearance, face_design, face_profile, skin_detail, "
-            "hair, clothes, injury_look, source. gender ต้องเป็น male หรือ female ตามข้อมูล ห้ามปล่อยว่างเมื่อระบุเพศได้. "
+            "hair, clothes, injury_look, source. age ต้องเป็นตัวเลขช่วงอายุเสมอ เช่น 'ประมาณ 20-25 ปี' แม้ต้นฉบับเขียนแค่ "
+            "หญิงสาว/วัยรุ่น/วัยกลางคน ให้แปลงเป็นตัวเลขตามช่วงวัยนั้น ห้ามใช้อายุของวัยอื่นของคนเดียวกัน. gender ต้องเป็น male หรือ female ตามข้อมูล ห้ามปล่อยว่างเมื่อระบุเพศได้. "
             "injury_look: ถ้าบทระบุว่าตัวละครบาดเจ็บ มีเลือด แผล รอยฟกช้ำ หรือคราบ ให้เก็บไว้เฉพาะช่องนี้ "
             "โดยเขียนเป็นการแต่งหน้าเอฟเฟกต์ภาพยนตร์ที่ไม่รุนแรงแทนของจริง เช่น คราบสีแดงเข้มคล้ายซอสมะเขือเทศที่แห้งแล้วที่มุมปาก "
             "รอยแต่งหน้าโทนม่วงอมน้ำเงินจางๆ ใต้ตา รอยเปื้อนดินมอมแมม ผ้าพันแผลสะอาด; ต้องยังดูออกว่าบาดเจ็บตามบท "
@@ -2296,7 +2333,8 @@ def install(g: dict, root: tk.Misc) -> tk.Misc:
     def _batch_face_prompt(character, overview, face_profile=""):
         name = str(character.get("name") or "").strip()
         variant = str(character.get("variant") or "").strip()
-        age = str(character.get("age") or "").strip()
+        age = _numeric_age(str(character.get("age") or "").strip(),
+                           " ".join(str(character.get(k) or "") for k in ("name", "variant", "role")))
         role = str(character.get("role") or "").strip()
         life_condition = str(character.get("life_condition") or "").strip()
         # Acting emotion belongs in video prompts, not in a reusable face asset.

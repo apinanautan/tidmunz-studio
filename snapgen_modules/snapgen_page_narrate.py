@@ -87,6 +87,37 @@ def read_script(path) -> str:
     return path.read_text(encoding="utf-8-sig", errors="replace").strip()
 
 
+def script_hash(text: str) -> str:
+    import hashlib
+    return hashlib.sha256(_squash(text).encode("utf-8")).hexdigest()
+
+
+def _squash(text: str) -> str:
+    return re.sub(r"\s+", "", str(text or ""))
+
+
+def project_folder_for(base: Path, script: str, text: str) -> Path:
+    """One folder (and one GPT history) per story.
+
+    The same file, or the same script content moved elsewhere, reopens its
+    project.  A different story whose file happens to have the same name
+    gets "<name> (2)", "<name> (3)" ... instead of sharing a history.
+    """
+    stem = safe_name(Path(script).stem)
+    digest = script_hash(text)
+    for n in range(1, 100):
+        folder = Path(base) / (stem if n == 1 else f"{stem} ({n})")
+        try:
+            existing = json.loads((folder / "project.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return folder
+        same_file = os.path.normcase(os.path.abspath(str(existing.get("script") or ""))) == \
+            os.path.normcase(os.path.abspath(str(script)))
+        if same_file or existing.get("script_hash") == digest:
+            return folder
+    raise RuntimeError("มีโปรเจกต์ชื่อซ้ำกันมากเกินไป")
+
+
 def plan_windows(segments: list, window: float = PLAN_WINDOW) -> list:
     """Group transcript segments into consecutive windows of about ``window`` s."""
     groups, current, start = [], [], None
@@ -495,14 +526,23 @@ def install(g: dict, root: tk.Misc) -> tk.Frame:
             os.replace(temp, path)
 
     def open_project(script: str):
-        folder = export_root() / "เล่าภาพ" / safe_name(Path(script).stem)
+        try:
+            text = read_script(script)
+        except Exception as exc:
+            messagebox.showerror("เล่าภาพ", f"อ่านไฟล์บทไม่ได้: {exc}", parent=page)
+            return
+        folder = project_folder_for(export_root() / "เล่าภาพ", script, text)
         folder.mkdir(parents=True, exist_ok=True)
         state["folder"] = str(folder)
         try:
             project = json.loads((folder / "project.json").read_text(encoding="utf-8"))
         except (OSError, ValueError):
             project = {"version": 2, "conversation": {}, "done": {}, "scenes": []}
+            log("เรื่องใหม่ — จะเปิดประวัติ GPT ใหม่ของเรื่องนี้เมื่อกดเริ่ม")
+        else:
+            log("เปิดงานเดิมของเรื่องนี้ — ทำต่อในประวัติ GPT เดิม")
         project["script"] = script
+        project["script_hash"] = script_hash(text)
         state["project"] = project
         script_var.set(Path(script).name)
         if project.get("audio"):

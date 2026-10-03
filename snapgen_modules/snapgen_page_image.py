@@ -2143,6 +2143,9 @@ def install(g: dict, root: tk.Misc) -> Dict[str, Any]:
         "img_ref_row": ref_row,
         "img_ref_label": ref_label,
         "img_ref_folder": ref_folder,
+        # Same attachment matching the Image page uses (Slot 2 ออโต้ reuses it).
+        "img_match_refs_for_text": _matching_ref_files_for_text,
+        "img_list_ref_files": _list_ref_files,
         "img_ref_names_var": ref_names_var,
         "img_ref_match_var": ref_match_var,
         "img_gallery_frame": gallery_frame,

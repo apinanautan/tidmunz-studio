@@ -132,8 +132,7 @@ VIDEO_STAGES = (
     ("context", "วิเคราะห์บท", 4),
     ("transcribe", "ฟังเสียง", 6),
     ("plan", "วางแผนฉาก", 5),
-    ("characters", "รูปตัวละคร", 5),
-    ("images", "สร้างรูปฉาก", 20),
+    ("images", "สร้างรูปฉาก", 25),
     ("clips", "สร้างคลิปวิดีโอ", 50),
     ("video", "ตัดต่อ", 10),
 )
@@ -204,6 +203,20 @@ def project_folder_for(base: Path, script: str, text: str) -> Path:
         if same_file or existing.get("script_hash") == digest:
             return folder
     raise RuntimeError("มีโปรเจกต์ชื่อซ้ำกันมากเกินไป")
+
+
+def match_reference_files(text: str, folder) -> list:
+    """Fallback matcher: images in ``folder`` whose file name appears in ``text``."""
+    if not folder or not os.path.isdir(str(folder)):
+        return []
+    lowered = str(text or "").casefold()
+    found = []
+    for name in sorted(os.listdir(folder)):
+        stem, ext = os.path.splitext(name)
+        if ext.lower() in (".png", ".jpg", ".jpeg", ".webp") and len(stem.strip()) >= 2 and stem.strip().casefold() in lowered:
+            found.append((stem.strip(), os.path.join(folder, name)))
+    found.sort(key=lambda item: -len(item[0]))
+    return found
 
 
 def plan_windows(segments: list, window: float = PLAN_WINDOW) -> list:
@@ -622,6 +635,20 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
             model, seconds, aspect = "", 8.0, "16:9"
         return model, max(2.0, seconds), aspect if aspect in SIZES else "16:9"
 
+    def attachment_folder():
+        folder = (runtime.get("img_ref_folder") or [None])[0]
+        return folder if folder and os.path.isdir(str(folder)) else None
+
+    def attachments_for(scene):
+        """Video flow: the Image page's attachments, matched by name like Image AI does."""
+        text = " ".join([scene_prompt(scene), " ".join(scene.get("characters") or []), str(scene.get("location") or "")])
+        matcher = runtime.get("img_match_refs_for_text")
+        if callable(matcher):
+            found = matcher(text)
+        else:
+            found = match_reference_files(text, attachment_folder())
+        return [str(path) for _name, path in found][:6]
+
     def desired_count() -> int:
         if not video_mode:
             return int(count_var.get())
@@ -636,7 +663,9 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
             return
         model, seconds, aspect = slot_settings()
         count = desired_count()
-        clip_info_var.set(f"โมเดล {model or '-'} · คลิปละ {seconds:g} วินาที · {aspect}"
+        folder = attachment_folder()
+        clip_info_var.set(f"ไฟล์แนบ: {Path(folder).name if folder else 'ยังไม่ได้เลือก (เลือกที่หน้ารูป AI)'} · "
+                          f"โมเดล {model or '-'} · คลิปละ {seconds:g} วินาที · {aspect}"
                           + (f" → ประมาณ {count} คลิป" if count else " (เปลี่ยนได้ที่ ⚙ ของ Slot ก่อนกดออโต้)"))
 
     # ── input row ──
@@ -1255,7 +1284,10 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
                 remaining = (time.time() - started) / (n - 1) * (len(todo) - n + 1)
                 eta = f" · เหลือประมาณ {int(remaining // 60)} นาที"
             set_progress("images", (n - 1) / max(1, len(todo)), f"สร้างรูปฉาก {n}/{len(todo)} (ฉากที่ {i + 1}){eta}")
-            ref_paths = [refs[c] for c in scene.get("characters") or [] if c in refs][:4]
+            if video_mode:
+                ref_paths = attachments_for(scene)
+            else:
+                ref_paths = [refs[c] for c in scene.get("characters") or [] if c in refs][:4]
             try:
                 scene["image"] = with_retries(f"ฉาก {i + 1}", lambda: make_image(
                     scene_prompt(scene), ref_paths, images_dir, f"scene_{i + 1:03d}", project["aspect"]))
@@ -1501,6 +1533,18 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
         """Shown after planning (text only, no image credits), with exact numbers."""
         project = state["project"]
         existing = character_refs()
+        if video_mode:
+            scenes = project.get("scenes") or []
+            matched = sorted({Path(p).stem for sc in scenes for p in attachments_for(sc)})
+            missing = sum(1 for sc in scenes if not (sc.get("image") and os.path.isfile(sc["image"])))
+            clips = sum(1 for sc in scenes if not (sc.get("clip") and os.path.isfile(sc["clip"])))
+            if missing + clips == 0:
+                return True
+            return ask_on_ui(
+                "ออโต้ — ยืนยันใช้เครดิต",
+                f"วางแผนเสร็จแล้ว\n\nไฟล์แนบที่จะใช้ ({len(matched)}): {', '.join(matched[:15]) or '-'}\n"
+                f"รูปฉาก {missing} รูป + คลิปวิดีโอ {clips} คลิป ด้วย {project.get('video_model')} "
+                f"คลิปละ {project.get('clip_seconds'):g} วินาที\n\nเริ่มเลยไหม?")
         new_refs = [(c, n) for c, n in characters_needing_refs(project.get("context") or {}, project.get("scenes") or [])
                     if c["name"] not in existing]
         missing = sum(1 for s in project.get("scenes") or [] if not (s.get("image") and os.path.isfile(s["image"])))
@@ -1545,6 +1589,10 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
                 project["done"].pop(key, None)
         if video_mode:
             model, seconds, _aspect = slot_settings()
+            if not attachment_folder():
+                messagebox.showinfo("ออโต้", "เลือกโฟลเดอร์ไฟล์แนบ (รูปตัวละคร/สถานที่) ที่หน้ารูป AI ก่อน — "
+                                    "ออโต้ใช้ไฟล์แนบชุดเดียวกับ flow สร้างวิดีโอ", parent=page)
+                return
             if not model:
                 messagebox.showinfo("ออโต้", f"ตั้งโมเดลวิดีโอใน Slot {slot_index + 1} ก่อน", parent=page)
                 return

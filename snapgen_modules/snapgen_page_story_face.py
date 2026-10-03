@@ -1508,6 +1508,17 @@ def install(g: dict, root: tk.Misc) -> tk.Misc:
                 ctx_tab.config(bg="#E5E7EB",fg="#111827")
                 ds_tab.config(bg="#2563EB",fg="white")
                 chars = batch_chars
+                try:
+                    import snapgen_page_karaoke as _numbers
+                    numbered = _numbers._dataset_numbered_lines(batch_source_state.get("text") or "")
+                except Exception:
+                    numbered = []
+                if numbered:
+                    for c in chars:
+                        if isinstance(c, dict):
+                            c["_dataset_number"] = _numbers._dataset_number(
+                                str(c.get("name") or ""), str(c.get("variant") or ""), numbered)
+                    chars = sorted(chars, key=lambda c: _numbers._number_key(str(c.get("_dataset_number") or "")))
             if not chars: tk.Label(cf, text="Empty", bg="#FFFFFF",fg="#9CA3AF").pack(pady=40); return
             wrap = tk.Frame(cf, bg="#FFFFFF")
             wrap.pack(fill="both", expand=True)
@@ -1519,6 +1530,12 @@ def install(g: dict, root: tk.Misc) -> tk.Misc:
             ca.configure(yscrollcommand=sc.set)
             ca.pack(side="left", fill="both", expand=True)
             sc.pack(side="right", fill="y")
+
+            def _wheel(event):
+                ca.yview_scroll(int(-1 * (int(getattr(event, "delta", 0) or 0) / 120)), "units")
+                return "break"
+            win.bind_all("<MouseWheel>", _wheel)
+            win.bind("<Destroy>", lambda _e: win.unbind_all("<MouseWheel>"), add="+")
             for ch in chars:
                 imp = ch.get("_important", False)
                 n = str(ch.get("name","") or ch.get("display_name","") or "").strip()
@@ -1533,6 +1550,8 @@ def install(g: dict, root: tk.Misc) -> tk.Misc:
                 bg2 = "#FEF2F2" if imp else "#F9FAFB"
                 fg2 = "#991B1B" if imp else "#111827"
                 pre = "* " if imp else ""
+                if tab != "context" and ch.get("_dataset_number"):
+                    pre += f"{ch['_dataset_number']}.  "
                 tk.Button(inner, text=pre+lbl, anchor="w",
                     command=lambda c=ch: (_apply_story_face_character(c, win), win.destroy()),
                     bg=bg2, fg=fg2, activebackground="#E0E7FF",

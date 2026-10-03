@@ -796,9 +796,55 @@ def _snapgen_bridge_needs_login(msg):
 
 g["_snapgen_bridge_needs_login"] = _snapgen_bridge_needs_login
 
+_snapgen_rate_limit_popup_at = [0.0]
+
+
+def _snapgen_rate_limit_text(raw):
+    """Thai message for a ChatGPT tool rate limit, or "" when it is something else."""
+    lowered = raw.casefold()
+    if not ("image rate limit" in lowered or "ratelimitexception" in lowered or "ถึงลิมิต" in raw):
+        return ""
+    notice = ""
+    match = re.search(r"image rate limit:\s*(.+?)(?:\"|\\n|$)", raw, re.I)
+    if match:
+        notice = match.group(1).strip().rstrip("\\").strip()
+    if not notice:
+        found = re.search(r"[^\"]*ถึงลิมิต[^\"]*", raw)
+        notice = found.group(0).strip() if found else "ChatGPT แจ้งว่าใช้สร้างรูปถึงลิมิตแล้ว"
+    when = ""
+    hours = re.search(r"อีก\s*(\d+)\s*ชั่วโมง|in\s*(\d+)\s*hours?", notice, re.I)
+    minutes = re.search(r"อีก\s*(\d+)\s*นาที|in\s*(\d+)\s*minutes?", notice, re.I)
+    delta = 0
+    if hours:
+        delta += int(hours.group(1) or hours.group(2)) * 3600
+    if minutes:
+        delta += int(minutes.group(1) or minutes.group(2)) * 60
+    if delta:
+        when = time.strftime("%H:%M", time.localtime(time.time() + delta))
+    return (
+        "⛔ ติดลิมิตสร้างรูปของ ChatGPT\n"
+        + notice
+        + (f"\nสร้างรูปได้อีกครั้งประมาณ {when} น." if when else "")
+        + "\n\nไม่ต้อง refresh capture — บัญชียังปกติ แค่โควตารูปของแพ็กเกจหมด "
+        "รอถึงเวลารีเซ็ต หรือเพิ่มบัญชี ChatGPT อีกบัญชีใน Bridge"
+    )
+
+
 def _snapgen_friendly_bridge_error(msg):
     raw = str(msg)
     lowered = raw.casefold()
+    limit_text = _snapgen_rate_limit_text(raw)
+    if limit_text:
+        # Tell the user clearly once (not for every queued job).
+        if time.time() - _snapgen_rate_limit_popup_at[0] > 600:
+            _snapgen_rate_limit_popup_at[0] = time.time()
+            try:
+                _root = globals().get("root") or tk._default_root
+                if _root is not None:
+                    _root.after(0, lambda m=limit_text: messagebox.showwarning("ติดลิมิตสร้างรูป", m))
+            except Exception:
+                pass
+        return limit_text
     if "cloudflare browser challenge" in lowered or "chatgpt_browser_challenge" in lowered:
         return (
             "Cloudflare ปฏิเสธ Chrome session ก่อนคำขอถึง ChatGPT — SnapGen หยุดงานนี้และไม่ยิงซ้ำ\n\n"

@@ -148,6 +148,10 @@ class HistoryLost(RuntimeError):
     """The story's GPT conversation no longer exists; never replaced silently."""
 
 
+class RateLimited(RuntimeError):
+    """ChatGPT's image quota is used up; stop instead of retrying."""
+
+
 # ── pure helpers (unit-tested) ────────────────────────────────────────────
 
 def safe_name(text: str) -> str:
@@ -985,6 +989,11 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
             except Exception as exc:
                 last = exc
                 text = str(exc).lower()
+                if "image rate limit" in text or "ratelimitexception" in text or "ถึงลิมิต" in str(exc):
+                    # ChatGPT quota is used up: retrying only wastes time.
+                    friendly = runtime.get("_snapgen_friendly_bridge_error") or g.get("_snapgen_friendly_bridge_error")
+                    message = friendly(str(exc)) if callable(friendly) else str(exc)
+                    raise RateLimited(message) from exc
                 log(f"❌ {label} ครั้งที่ {attempt}: {str(exc)[:200]}")
                 if "conversation_not_found" in text or ("conversation" in text and ("not found" in text or "404" in text)):
                     # One story = one GPT history. Never open a replacement
@@ -1252,7 +1261,7 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
                     scene_prompt(scene), ref_paths, images_dir, f"scene_{i + 1:03d}", project["aspect"]))
                 scene.pop("error", None)
                 failures_in_row = 0
-            except (Stopped, HistoryLost):
+            except (Stopped, HistoryLost, RateLimited):
                 raise
             except Exception as exc:
                 scene["error"] = str(exc)[:300]
@@ -1458,7 +1467,7 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
                 scene["clip"] = with_retries(f"คลิปฉาก {i + 1}", lambda: make_clip(scene, i), attempts=2)
                 scene.pop("clip_error", None)
                 failures_in_row = 0
-            except (Stopped, HistoryLost):
+            except (Stopped, HistoryLost, RateLimited):
                 raise
             except Exception as exc:
                 scene["clip_error"] = str(exc)[:300]
@@ -1594,6 +1603,10 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
             except Stopped:
                 log("⏸ หยุดแล้ว — กดเริ่มเพื่อทำต่อจากจุดเดิม")
                 ui(stage_var.set, "หยุดแล้ว (ทำต่อได้)")
+            except RateLimited as exc:
+                log("⛔ " + str(exc).splitlines()[0])
+                ui(stage_var.set, "ติดลิมิตสร้างรูป — กด ▶ ทำต่อ หลังเวลารีเซ็ต (งานที่ทำแล้วเก็บไว้ครบ)")
+                ui(detail_var.set, " ".join(str(exc).splitlines()[1:3]))
             except Exception as exc:
                 log(f"❌ {current}: {exc}")
                 ui(stage_var.set, "ติดปัญหา — แก้แล้วกดเริ่มเพื่อทำต่อ")

@@ -10,7 +10,7 @@ import subprocess
 
 MARKER = 'conversation_state: dict[str, str | None] = {'
 FILE_MARKER = 'elif item_type in {"input_file", "file"}:'
-CAPABILITY_VERSION = 9
+CAPABILITY_VERSION = 10
 CAPABILITY_FILE = ".snapgen_bridge_capabilities.json"
 CONVERSATION_NOT_FOUND_MARKER = "chatgpt_conversation_not_found"
 
@@ -28,6 +28,7 @@ def _write_capability_version(bridge_dir) -> None:
         "vision_story_cursor": True,
         "conversation_not_found_error": True,
         "temporary_image_chat": True,
+        "image_rate_limit_notice": True,
     }, indent=2) + "\n", encoding="utf-8")
     temp.replace(path)
 
@@ -454,6 +455,8 @@ def install(bridge_dir, log=print) -> bool:
     image_cursor_changed = _install_image_cursor(bridge_dir, log)
     from snapgen_bridge_vision_cursor_patch import install as _install_vision_cursor
     vision_cursor_changed = _install_vision_cursor(bridge_dir, log)
+    from snapgen_bridge_rate_limit_patch import install as _install_rate_limit
+    vision_cursor_changed = _install_rate_limit(bridge_dir, log) or vision_cursor_changed
     path = Path(bridge_dir) / "chatgpt_api" / "api" / "openai_compat.py"
     if not path.is_file():
         raise RuntimeError(f"ไม่พบ Bridge source: {path}")

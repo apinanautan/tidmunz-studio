@@ -212,6 +212,21 @@ def install(g: dict, root: tk.Misc) -> tk.Misc:
         payload["_conversation_save"] = _save_face_store
         return payload
 
+    def _open_face_chat(request_fn):
+        """Run request_fn(); if the story chat lives in another account, restart it once."""
+        import snapgen_image_gen as _img
+        try:
+            return request_fn()
+        except urllib.error.HTTPError as exc:
+            body = exc.read().decode("utf-8", errors="replace")
+            own = _face_conversation()
+            if not own.get("conversation_id") or not _img._is_conversation_lost(body):
+                raise RuntimeError(f"HTTP {exc.code}: {body[:400]}") from exc
+            own.clear()
+            _save_face_store()
+            print("[นิทาน] แชตเดิมอยู่ในบัญชี ChatGPT อื่น — เริ่มแชตใหม่ของเรื่องนี้ในบัญชีปัจจุบัน")
+            return request_fn()
+
     def _load_face_context_text():
         try:
             return face_context_path.read_text(encoding="utf-8")
@@ -361,23 +376,27 @@ def install(g: dict, root: tk.Misc) -> tk.Misc:
         import snapgen_page_narrate as _narrate
 
         def chat(content):
+            def send():
+                own = _face_conversation()
+                body = {"model": "auto", "chatgpt_image_intercept": False, "temperature": 0.2,
+                        "messages": [{"role": "user", "content": content}]}
+                if own.get("conversation_id") and own.get("parent_message_id"):
+                    body["metadata"] = {"conversation_id": own["conversation_id"], "parent_message_id": own["parent_message_id"]}
+                    if own.get("account_alias"):
+                        body["chatgpt_account"] = own["account_alias"]
+                base_fn = globals().get("_chatgpt_api_base")
+                base = base_fn() if callable(base_fn) else "http://127.0.0.1:8000/v1"
+                request = urllib.request.Request(
+                    base.rstrip("/") + "/chat/completions", data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
+                    headers={"Authorization": "Bearer local-dev-key", "Content-Type": "application/json; charset=utf-8"},
+                    method="POST")
+                lock = globals().get("_bridge_queue_lock") or threading.Lock()
+                with lock:
+                    with urllib.request.urlopen(request, timeout=600) as response:
+                        return json.loads(response.read().decode("utf-8", errors="replace"))
+
+            result = _open_face_chat(send)
             own = _face_conversation()
-            body = {"model": "auto", "chatgpt_image_intercept": False, "temperature": 0.2,
-                    "messages": [{"role": "user", "content": content}]}
-            if own.get("conversation_id") and own.get("parent_message_id"):
-                body["metadata"] = {"conversation_id": own["conversation_id"], "parent_message_id": own["parent_message_id"]}
-                if own.get("account_alias"):
-                    body["chatgpt_account"] = own["account_alias"]
-            base_fn = globals().get("_chatgpt_api_base")
-            base = base_fn() if callable(base_fn) else "http://127.0.0.1:8000/v1"
-            request = urllib.request.Request(
-                base.rstrip("/") + "/chat/completions", data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
-                headers={"Authorization": "Bearer local-dev-key", "Content-Type": "application/json; charset=utf-8"},
-                method="POST")
-            lock = globals().get("_bridge_queue_lock") or threading.Lock()
-            with lock:
-                with urllib.request.urlopen(request, timeout=600) as response:
-                    result = json.loads(response.read().decode("utf-8", errors="replace"))
             if result.get("error"):
                 raise RuntimeError(json.dumps(result["error"], ensure_ascii=False)[:400])
             extract = globals().get("_extract_bridge_cursor")
@@ -982,22 +1001,28 @@ def install(g: dict, root: tk.Misc) -> tk.Misc:
             ],
             "temperature": 0.2,
         }
+        def send():
+            own = _face_conversation()
+            payload_data.pop("metadata", None)
+            payload_data.pop("chatgpt_account", None)
+            if own.get("conversation_id") and own.get("parent_message_id"):
+                payload_data["metadata"] = {"conversation_id": own["conversation_id"],
+                                            "parent_message_id": own["parent_message_id"]}
+                if own.get("account_alias"):
+                    payload_data["chatgpt_account"] = own["account_alias"]
+            payload = json.dumps(payload_data, ensure_ascii=False).encode("utf-8")
+            base_fn = globals().get("_chatgpt_api_base")
+            base = base_fn() if callable(base_fn) else "http://127.0.0.1:8000/v1"
+            request = urllib.request.Request(
+                base.rstrip("/") + "/chat/completions", data=payload,
+                headers={"Authorization": "Bearer local-dev-key", "Content-Type": "application/json", "User-Agent": "Tidmun-Studio/1.0"},
+                method="POST",
+            )
+            with urllib.request.urlopen(request, timeout=180) as response:
+                return json.loads(response.read().decode("utf-8"))
+
+        result = _open_face_chat(send)
         own = _face_conversation()
-        if own.get("conversation_id") and own.get("parent_message_id"):
-            payload_data["metadata"] = {"conversation_id": own["conversation_id"],
-                                        "parent_message_id": own["parent_message_id"]}
-            if own.get("account_alias"):
-                payload_data["chatgpt_account"] = own["account_alias"]
-        payload = json.dumps(payload_data, ensure_ascii=False).encode("utf-8")
-        base_fn = globals().get("_chatgpt_api_base")
-        base = base_fn() if callable(base_fn) else "http://127.0.0.1:8000/v1"
-        request = urllib.request.Request(
-            base.rstrip("/") + "/chat/completions", data=payload,
-            headers={"Authorization": "Bearer local-dev-key", "Content-Type": "application/json", "User-Agent": "Tidmun-Studio/1.0"},
-            method="POST",
-        )
-        with urllib.request.urlopen(request, timeout=180) as response:
-            result = json.loads(response.read().decode("utf-8"))
         if result.get("conversation_id") and result.get("parent_message_id"):
             own.update({"conversation_id": str(result["conversation_id"]),
                         "parent_message_id": str(result["parent_message_id"])})

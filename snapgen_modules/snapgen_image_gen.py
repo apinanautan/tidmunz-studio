@@ -23,6 +23,16 @@ TIMEOUT = 300  # seconds per request
 RETRY_COUNT = 0
 RETRY_DELAY = 5  # seconds between retries
 
+
+def _is_conversation_lost(text):
+    """True when ChatGPT cannot open the chat from the active account."""
+    lowered = str(text or "").casefold()
+    return any(marker in lowered for marker in (
+        "conversation_not_found", "conversation not found", "conversation was not found",
+        "conversation_inaccessible",
+        "บัญชีที่ถูกต้อง", "correct account",
+    ))
+
 # ── State ─────────────────────────────────────────────────────────
 _queue_lock = threading.Lock()
 _active_count = 0
@@ -1351,8 +1361,40 @@ def generate_image(prompt, *, output_dir=None, name_hint=None,
     last_error = None
     request_started = time.time()
     artifact_ids_before = set()
-    for attempt in range(1 + RETRY_COUNT):
-        if attempt > 0:
+    lost_history_reset = False
+    retry_fresh_chat = False
+
+    def reset_lost_history(text):
+        """Forget a page-owned chat that the active account cannot open."""
+        nonlocal lost_history_reset, retry_fresh_chat
+        if (
+            lost_history_reset
+            or not isinstance(conversation_state, dict)
+            or current_history is not conversation_state
+            or not expected_conversation_id
+            or not _is_conversation_lost(text)
+        ):
+            return False
+        # The chat lives in another ChatGPT account (account switched), so
+        # this story continues in a new chat on the active account.
+        lost_history_reset = retry_fresh_chat = True
+        for key in ("conversation_id", "parent_message_id", "account_alias", "story_context_parent_message_id"):
+            conversation_state.pop(key, None)
+        if callable(conversation_save_fn):
+            conversation_save_fn()
+        log("[image-gen] แชตเดิมอยู่ในบัญชี ChatGPT อื่น — เริ่มแชตใหม่ของเรื่องนี้ในบัญชีปัจจุบัน")
+        return True
+
+    current_history = None
+    expected_conversation_id = ""
+    attempt = -1
+    while True:
+        attempt += 1
+        if retry_fresh_chat:
+            retry_fresh_chat = False
+        elif attempt > RETRY_COUNT + (1 if lost_history_reset else 0):
+            break
+        elif attempt > 0:
             log(f"[image-gen] retry {attempt}/{RETRY_COUNT} in {RETRY_DELAY}s...")
             time.sleep(RETRY_DELAY)
 
@@ -1415,6 +1457,8 @@ def generate_image(prompt, *, output_dir=None, name_hint=None,
             if "error" in result:
                 err = result["error"]
                 msg = err.get("message", str(err)) if isinstance(err, dict) else str(err)
+                if reset_lost_history(f"{msg} {err}"):
+                    continue
                 raise RuntimeError(f"Bridge error: {msg}")
 
             if expected_conversation_id:
@@ -1515,6 +1559,8 @@ def generate_image(prompt, *, output_dir=None, name_hint=None,
                 body = e.read().decode("utf-8", errors="replace")[:500]
             except Exception:
                 pass
+            if reset_lost_history(body):
+                continue
             last_error = RuntimeError(f"HTTP {e.code}: {body}")
         except urllib.error.URLError as e:
             last_error = RuntimeError(f"Connection error: {e.reason}")

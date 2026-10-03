@@ -131,6 +131,29 @@ def _apply_story_body_reference(_face_prompt, body_facts=""):
     )
 
 
+# Story injuries are shown as non-graphic film/stage makeup. Image generation
+# refuses literal blood and wounds, but the story still needs the character
+# to look hurt: the look survives, the graphic wording does not.
+_INJURY_SOFTEN = (
+    (r"เลือด(?:ไหล|ออก|สด|ท่วม|โชก|อาบ|กบปาก)?", "คราบสีแดงเข้มแบบแต่งหน้าเอฟเฟกต์ภาพยนตร์ (คล้ายซอสมะเขือเทศที่แห้งแล้ว)"),
+    # not แผลง (แผลงฤทธิ์) and not ผ้าพันแผล (a clean bandage is fine as written)
+    (r"(?<!พัน)(?:บาด)?แผล(?!ง)(?:เปิด|ฉกรรจ์|ลึก|สด|แตก|ถลอก)?", "รอยแต่งหน้าเอฟเฟกต์ภาพยนตร์โทนแดงจางๆ"),
+    (r"(?:รอย)?ฟกช้ำ(?:ดำเขียว)?|รอยช้ำ|ช้ำเลือด|หน้าช้ำ|ตาช้ำ", "รอยแต่งหน้าโทนม่วงอมน้ำเงินจางๆ แบบแต่งหน้าละคร"),
+    (r"\b(?:bloody|bloodied|blood-soaked|blood)\b", "dark red film-makeup smudge (dried ketchup-like)"),
+    (r"\b(?:open wounds?|wounds?|gashes|gash|lacerations?|cuts)\b", "light reddish stage-makeup marks"),
+    (r"\b(?:bruised|bruises|bruise)\b", "soft purple-blue theatrical makeup tint"),
+    (r"\b(?:gore|gory)\b", "non-graphic film makeup"),
+)
+
+
+def soften_injury_text(value: str) -> str:
+    """Replace graphic injury words with non-graphic film-makeup wording."""
+    result = str(value or "")
+    for pattern, replacement in _INJURY_SOFTEN:
+        result = re.sub(pattern, replacement, result, flags=re.IGNORECASE)
+    return result
+
+
 def install(g: dict, root: tk.Misc) -> tk.Misc:
     """Build this page and return its root frame."""
     globals().update(g)
@@ -1151,6 +1174,8 @@ def install(g: dict, root: tk.Misc) -> tk.Misc:
             "as pores, fine lines, wrinkles, freckles, moles, scars, or texture. Do not replace skin detail with "
             "smooth beauty skin. This clean-face instruction overrides earlier clothing, grooming, accessory, "
             "headwear, jewelry, and hairstyle details."
+            + (" EXCEPTION: the STORY MAKEUP EFFECT above is required non-graphic film makeup for the story — "
+               "keep it exactly as described; it is not decorative makeup." if "STORY MAKEUP EFFECT" in str(prompt or "") else "")
         )
 
     def _apply_face_age_override(prompt, age_label):
@@ -1939,7 +1964,14 @@ def install(g: dict, root: tk.Misc) -> tk.Misc:
             "design_page ต้องเป็นแผนรวมทั้งเรื่องที่อธิบายความแตกต่างของทุกใบหน้าในหน้าเดียว. "
             "แต่ละ subject ต้องมี name, variant, identity_group, identity_master, reference_from, age, gender, "
             "body_build, height, weight, role, life_condition, expression, appearance, face_design, face_profile, skin_detail, "
-            "hair, clothes, source. gender ต้องเป็น male หรือ female ตามข้อมูล ห้ามปล่อยว่างเมื่อระบุเพศได้. "
+            "hair, clothes, injury_look, source. gender ต้องเป็น male หรือ female ตามข้อมูล ห้ามปล่อยว่างเมื่อระบุเพศได้. "
+            "injury_look: ถ้าบทระบุว่าตัวละครบาดเจ็บ มีเลือด แผล รอยฟกช้ำ หรือคราบ ให้เก็บไว้เฉพาะช่องนี้ "
+            "โดยเขียนเป็นการแต่งหน้าเอฟเฟกต์ภาพยนตร์ที่ไม่รุนแรงแทนของจริง เช่น คราบสีแดงเข้มคล้ายซอสมะเขือเทศที่แห้งแล้วที่มุมปาก "
+            "รอยแต่งหน้าโทนม่วงอมน้ำเงินจางๆ ใต้ตา รอยเปื้อนดินมอมแมม ผ้าพันแผลสะอาด; ต้องยังดูออกว่าบาดเจ็บตามบท "
+            "แต่ห้ามใช้คำว่า เลือด แผลเปิด บาดแผลลึก เนื้อ กระดูก หรือรายละเอียดน่ากลัว และห้ามใส่เรื่องบาดเจ็บในช่องอื่น "
+            "(appearance, skin_detail, life_condition, face_design ต้องเป็นสภาพปกติ). "
+            "ถ้าคนเดียวกันมีทั้งสภาพปกติและสภาพบาดเจ็บ ให้สภาพปกติเป็น identity_master และแยกสภาพบาดเจ็บเป็น subject variant "
+            "'สภาพบาดเจ็บ' ที่ reference_from ตัวหลัก; ถ้าไม่บาดเจ็บให้ injury_look เป็นค่าว่าง. "
             "identity_group คือรหัสคนจริงคนเดียวกัน ใช้ชื่อหลักสั้นคงที่ เช่น นายพยง; ทุกวัยและทุกอารมณ์ของคนเดียวกัน "
             "ต้องใช้ identity_group เดียวกัน. identity_master เป็น boolean: true ได้เพียงหนึ่ง subject ต่อ identity_group "
             "โดยเลือกวัย/สภาพปกติที่เห็นใบหน้าชัดที่สุดเป็นรูปหลัก และจัด subject ตัวหลักไว้ก่อนตัวแปรอื่น. "
@@ -1997,7 +2029,7 @@ def install(g: dict, root: tk.Misc) -> tk.Misc:
                     for key in (
                         "name", "variant", "identity_group", "reference_from", "age", "gender", "body_build", "height", "weight",
                         "role", "life_condition", "expression", "appearance", "face_design", "face_profile", "skin_detail",
-                        "hair", "clothes", "source",
+                        "hair", "clothes", "injury_look", "source",
                     )
                 }
                 normalized["expression"] = ""
@@ -2082,6 +2114,7 @@ def install(g: dict, root: tk.Misc) -> tk.Misc:
         skin_detail = str(character.get("skin_detail") or "").strip()
         hair = str(character.get("hair") or "").strip()
         clothes = str(character.get("clothes") or "").strip()
+        injury_look = soften_injury_text(str(character.get("injury_look") or "").strip())
         identity = name + (f" ({variant})" if variant else "")
         identity_group = str(character.get("identity_group") or _identity_family_key(character)).strip()
         identity_role = "MAIN IDENTITY MASTER" if character.get("identity_master") else f"IDENTITY VARIANT; REFERENCE FROM: {character.get('reference_from') or identity_group}"
@@ -2097,8 +2130,11 @@ def install(g: dict, root: tk.Misc) -> tk.Misc:
                 f"skin detail: {skin_detail}" if skin_detail else "",
                 f"hair identity: {hair}" if hair else "",
                 f"clothes: {clothes}" if clothes else "",
+                (f"STORY MAKEUP EFFECT (non-graphic film makeup for the story, not a real injury; keep it visible): {injury_look}"
+                 if injury_look else ""),
             ) if value
         )
+        details = soften_injury_text(details)
         age_for_3d = _three_d_age_reserve(character)
         rules = (
             age_for_3d
@@ -2182,6 +2218,8 @@ def install(g: dict, root: tk.Misc) -> tk.Misc:
                 story_face_dir = export_story_face_dir
                 story_face_dir.mkdir(parents=True, exist_ok=True)
                 first_face_by_name = {}
+                # Shared by run_all (fills it) and run_one (reads it).
+                face_profiles = {}
 
                 def resolve_characters():
                     if batch_source:
@@ -2256,6 +2294,8 @@ def install(g: dict, root: tk.Misc) -> tk.Misc:
                     if identity_images:
                         payload["images"] = identity_images
                     hint = f"{name}-{variant}-face" if variant else f"{name}-face"
+                    final_prompt = soften_injury_text(final_prompt)
+                    payload["prompt"] = final_prompt
                     try:
                         out = g["_do_image_request"](
                             payload, is_edit=bool(identity_images), prompt=final_prompt,
@@ -2263,9 +2303,26 @@ def install(g: dict, root: tk.Misc) -> tk.Misc:
                             output_dir=str(story_face_dir), save_sidecar=False,
                         )
                     except Exception as exc:
-                        raise RuntimeError(
-                            f"ขั้นสร้างรูปผ่าน GPT ล้มเหลว: {exc}"
-                        ) from exc
+                        refused = any(word in str(exc).lower() for word in (
+                            "policy", "safety", "moderation", "not allowed", "can't help", "cannot help",
+                            "unable to generate", "violat", "ไม่สามารถ"))
+                        if not (refused and "STORY MAKEUP EFFECT" in final_prompt):
+                            raise RuntimeError(f"ขั้นสร้างรูปผ่าน GPT ล้มเหลว: {exc}") from exc
+                        # Refused because of the injury look: make the face without it
+                        # so the character still gets a usable identity image.
+                        root.after(0, lambda n=display_name: _new_log(
+                            f"[auto-face] {n}: GPT ไม่ยอมทำรอยบาดเจ็บ — ทำหน้าปกติแทน (แต่งรอยภายหลังได้)"))
+                        final_prompt = re.sub(r"; STORY MAKEUP EFFECT[^;]*", "", final_prompt)
+                        final_prompt = final_prompt.replace("STORY MAKEUP EFFECT", "")
+                        payload["prompt"] = final_prompt
+                        try:
+                            out = g["_do_image_request"](
+                                payload, is_edit=bool(identity_images), prompt=final_prompt,
+                                name_hint=hint, raw_prompt=prompt,
+                                output_dir=str(story_face_dir), save_sidecar=False,
+                            )
+                        except Exception as exc2:
+                            raise RuntimeError(f"ขั้นสร้างรูปผ่าน GPT ล้มเหลว: {exc2}") from exc2
                     first_face_by_name.setdefault(identity_key, out)
                     root.after(0, lambda out=out, display_name=display_name: (_new_log(f"✓ {display_name}: {out}"), _new_gallery_add(out, True), _notify_done()))
 
@@ -2282,7 +2339,7 @@ def install(g: dict, root: tk.Misc) -> tk.Misc:
                             0 if item.get("identity_master") else 1,
                         ),
                     )
-                    face_profiles = _assign_cast_face_profiles(characters)
+                    face_profiles.update(_assign_cast_face_profiles(characters) or {})
                     names = [
                         str(c.get("name", "")).strip()
                         + (f" ({str(c.get('variant', '')).strip()})" if str(c.get("variant", "")).strip() else "")

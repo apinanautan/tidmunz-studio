@@ -2115,8 +2115,11 @@ def install(g: dict, root: tk.Misc) -> tk.Misc:
             "รอยแต่งหน้าโทนม่วงอมน้ำเงินจางๆ ใต้ตา รอยเปื้อนดินมอมแมม ผ้าพันแผลสะอาด; ต้องยังดูออกว่าบาดเจ็บตามบท "
             "แต่ห้ามใช้คำว่า เลือด แผลเปิด บาดแผลลึก เนื้อ กระดูก หรือรายละเอียดน่ากลัว และห้ามใส่เรื่องบาดเจ็บในช่องอื่น "
             "(appearance, skin_detail, life_condition, face_design ต้องเป็นสภาพปกติ). "
-            "ถ้าคนเดียวกันมีทั้งสภาพปกติและสภาพบาดเจ็บ ให้สภาพปกติเป็น identity_master และแยกสภาพบาดเจ็บเป็น subject variant "
-            "'สภาพบาดเจ็บ' ที่ reference_from ตัวหลัก; ถ้าไม่บาดเจ็บให้ injury_look เป็นค่าว่าง. "
+            "ถ้าคนเดียวกันมีทั้งสภาพปกติและสภาพบาดเจ็บ ให้สภาพปกติเป็น identity_master และแยกสภาพบาดเจ็บเป็นอีก subject "
+            "ที่ reference_from ตัวหลัก; ถ้าไม่บาดเจ็บให้ injury_look เป็นค่าว่าง. "
+            "variant ต้องคัดลอกคำของผู้ใช้หลัง // (หรือคำบรรยายวัย/สภาพในข้อนั้น) ตามต้นฉบับทุกตัวอักษร "
+            "ห้ามตั้งชื่อใหม่หรือสรุปเอง เช่น ต้นฉบับ 'ปกติ + ตอนโดนตบปากช้ำมีเลือด แก้มช้ำ' ต้องได้ variant 'ปกติ' และ "
+            "'ตอนโดนตบปากช้ำมีเลือด แก้มช้ำ'. "
             "identity_group คือรหัสคนจริงคนเดียวกัน ใช้ชื่อหลักสั้นคงที่ เช่น นายพยง; ทุกวัยและทุกอารมณ์ของคนเดียวกัน "
             "ต้องใช้ identity_group เดียวกัน. identity_master เป็น boolean: true ได้เพียงหนึ่ง subject ต่อ identity_group "
             "โดยเลือกวัย/สภาพปกติที่เห็นใบหน้าชัดที่สุดเป็นรูปหลัก และจัด subject ตัวหลักไว้ก่อนตัวแปรอื่น. "
@@ -2260,7 +2263,7 @@ def install(g: dict, root: tk.Misc) -> tk.Misc:
         hair = str(character.get("hair") or "").strip()
         clothes = str(character.get("clothes") or "").strip()
         injury_look = soften_injury_text(str(character.get("injury_look") or "").strip())
-        identity = name + (f" ({variant})" if variant else "")
+        identity = soften_injury_text(name + (f" ({variant})" if variant else ""))
         identity_group = str(character.get("identity_group") or _identity_family_key(character)).strip()
         identity_role = "MAIN IDENTITY MASTER" if character.get("identity_master") else f"IDENTITY VARIANT; REFERENCE FROM: {character.get('reference_from') or identity_group}"
         details = "; ".join(

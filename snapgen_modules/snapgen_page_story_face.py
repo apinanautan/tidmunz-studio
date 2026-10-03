@@ -1526,6 +1526,11 @@ def install(g: dict, root: tk.Misc) -> tk.Misc:
                             chars = list(chars) + [{"_prop_line": True, "_dataset_number": number,
                                                     "name": line.replace("**", "").strip()}]
                     chars = sorted(chars, key=lambda c: _numbers._number_key(str(c.get("_dataset_number") or "")))
+                    wording = _numbers._dataset_variant_labels(
+                        [c for c in chars if isinstance(c, dict) and not c.get("_prop_line")], numbered)
+                    for c in chars:
+                        if id(c) in wording:
+                            c["_dataset_variant"] = wording[id(c)]
             if not chars: tk.Label(cf, text="Empty", bg="#FFFFFF",fg="#9CA3AF").pack(pady=40); return
             wrap = tk.Frame(cf, bg="#FFFFFF")
             wrap.pack(fill="both", expand=True)
@@ -1549,7 +1554,7 @@ def install(g: dict, root: tk.Misc) -> tk.Misc:
                 if tab == "context":
                     summ = " ".join(ch.get(k,"") for k in ("age","skin","hair") if ch.get(k))
                 else:
-                    variant = str(ch.get("variant", "") or "").strip()
+                    variant = str(ch.get("_dataset_variant") or ch.get("variant", "") or "").strip()
                     age = str(ch.get("age","") or "").strip()
                     role = str(ch.get("role","") or "").strip()
                     summ = " | ".join(x for x in (variant, age, role) if x)

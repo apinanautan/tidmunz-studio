@@ -75,6 +75,49 @@ def _dataset_number(name, variant, numbered_lines):
     return best if best_score >= 0.5 else ""
 
 
+def _line_parts(line):
+    """Variant wordings written after // in a ข้อมูลชุด line, e.g. ['ปกติ', 'ตอนโดนตบ…']."""
+    if "//" not in line:
+        return []
+    return [part.strip() for part in line.split("//", 1)[1].split("+") if part.strip()]
+
+
+def _dataset_variant_labels(characters, numbered_lines):
+    """{id(character): wording from ข้อมูลชุด} for variants GPT renamed.
+
+    Characters sharing a numbered line and a name take that line's // parts:
+    a variant that already matches a part keeps it, the rest take the unused
+    parts in order (GPT's 'สภาพบาดเจ็บ' becomes 'ตอนโดนตบปากช้ำมีเลือด แก้มช้ำ').
+    """
+    lines = dict(numbered_lines)
+    groups = {}
+    for character in characters:
+        number = str(character.get("_dataset_number") or "")
+        if number in lines:
+            key = (number, str(character.get("name") or "").casefold())
+            groups.setdefault(key, []).append(character)
+    labels = {}
+    for (number, _name), members in groups.items():
+        parts = _line_parts(lines[number])
+        if len(parts) < 2:
+            continue
+        unused = list(parts)
+        pending = []
+        for character in members:
+            grams = _bigrams(character.get("variant"))
+            best = max(unused, key=lambda part: len(grams & _bigrams(part)) / max(1, len(grams)), default=None)
+            if best is not None and grams and len(grams & _bigrams(best)) / len(grams) >= 0.6:
+                unused.remove(best)
+                labels[id(character)] = best
+            else:
+                pending.append(character)
+        if len(pending) == len(members):
+            continue  # the // parts are not variants (e.g. children's names)
+        for character, part in zip(pending, unused):
+            labels[id(character)] = part
+    return labels
+
+
 def _number_key(number):
     return tuple(int(part) for part in number.split(".")) if number else (10 ** 6,)
 
@@ -109,7 +152,13 @@ def _karaoke_story_rows(characters, dataset_text=""):
         # Stable: rows without a number stay at the end in their old order.
         rows.sort(key=lambda row: _number_key(row["number"]))
         for row in rows:
+            row["_dataset_number"] = row["number"]
+        wording = _dataset_variant_labels(rows, numbered)
+        for row in rows:
             row["order"] = row["number"] or "-"
+            if id(row) in wording:
+                row["variant"] = wording[id(row)]
+            row.pop("_dataset_number", None)
     return rows
 
 

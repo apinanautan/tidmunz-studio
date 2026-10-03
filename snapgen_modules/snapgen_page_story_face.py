@@ -1245,7 +1245,8 @@ def install(g: dict, root: tk.Misc) -> tk.Misc:
         "eye shape and spacing, eyebrows, nose structure, lips, jaw, cheekbones, ears, skin tone, and distinctive "
         "marks. The CURRENT TARGET PROMPT has priority for variable condition: requested age, stress, exhaustion, "
         "illness, hardship, weight loss or gain, sun damage, poor sleep, grooming, expression, wrinkles, skin firmness, "
-        "facial fat, hair color or density, and other visible life changes must be clearly rendered. Identity similarity "
+        "facial fat, hair color or density, any STORY MAKEUP EFFECT, and other visible life changes must be clearly "
+        "rendered even when the reference face is clean. Identity similarity "
         "does not mean copying the reference condition. Do not copy the reference age, clothing, "
         "background, lighting, pose, or expression. Output one person only."
     )
@@ -1437,6 +1438,26 @@ def install(g: dict, root: tk.Misc) -> tk.Misc:
     def _apply_story_face_character(character, selector=None, reference_override=None):
         name = str(character.get("name", "")).strip()
         prompt = _build_story_face_prompt_from_character(character)
+        # The shared builder reads Context (Thai) keys only; ข้อมูลชุด rows keep
+        # their facts in English keys, so add them here or the version/injury is lost.
+        dataset_facts = "; ".join(
+            f"{label}: {str(character.get(key)).strip()}"
+            for key, label in (
+                ("variant", "TARGET VERSION — MUST BE VISIBLE"), ("age", "age"), ("gender", "gender"),
+                ("body_build", "body build"), ("role", "role"), ("appearance", "appearance"),
+                ("face_design", "face design"), ("face_profile", "face geometry"),
+                ("skin_detail", "skin detail"), ("hair", "hair identity"),
+            )
+            if str(character.get(key) or "").strip()
+        )
+        if dataset_facts:
+            prompt = prompt.rstrip() + "\n\nSTORY DATASET DETAILS: " + soften_injury_text(dataset_facts) + "."
+        injury_look = soften_injury_text(str(character.get("injury_look") or "").strip())
+        if injury_look:
+            prompt += (
+                "\n\nSTORY MAKEUP EFFECT (non-graphic film makeup for the story, not a real injury; it must be clearly "
+                "visible on the face so this version is obviously different from the normal face): " + injury_look
+            )
         visible_condition = _condition_text(character)
         selected_condition[0] = visible_condition
         selected_body.update(name=name.casefold(), facts=_story_body_facts(character))

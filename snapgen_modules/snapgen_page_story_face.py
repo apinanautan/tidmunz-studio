@@ -1518,6 +1518,13 @@ def install(g: dict, root: tk.Misc) -> tk.Misc:
                         if isinstance(c, dict):
                             c["_dataset_number"] = _numbers._dataset_number(
                                 str(c.get("name") or ""), str(c.get("variant") or ""), numbered)
+                    # Numbered items that are not people (vehicles, objects) stay
+                    # in the list too; they are created on the Prop page.
+                    used = {str(c.get("_dataset_number") or "") for c in chars if isinstance(c, dict)}
+                    for number, line in numbered:
+                        if number not in used and not any(u.startswith(number + ".") for u in used):
+                            chars = list(chars) + [{"_prop_line": True, "_dataset_number": number,
+                                                    "name": line.replace("**", "").strip()}]
                     chars = sorted(chars, key=lambda c: _numbers._number_key(str(c.get("_dataset_number") or "")))
             if not chars: tk.Label(cf, text="Empty", bg="#FFFFFF",fg="#9CA3AF").pack(pady=40); return
             wrap = tk.Frame(cf, bg="#FFFFFF")
@@ -1546,14 +1553,30 @@ def install(g: dict, root: tk.Misc) -> tk.Misc:
                     age = str(ch.get("age","") or "").strip()
                     role = str(ch.get("role","") or "").strip()
                     summ = " | ".join(x for x in (variant, age, role) if x)
+                if ch.get("_prop_line"):
+                    summ = "ไม่ใช่คน → กดเพื่อสร้างที่หน้า Prop"
                 lbl = n + ("  " + summ if summ else "")
                 bg2 = "#FEF2F2" if imp else "#F9FAFB"
                 fg2 = "#991B1B" if imp else "#111827"
                 pre = "* " if imp else ""
                 if tab != "context" and ch.get("_dataset_number"):
                     pre += f"{ch['_dataset_number']}.  "
+                def _pick(c=ch):
+                    if c.get("_prop_line"):
+                        name_var = g.get("prop_name_var")
+                        if name_var is not None:
+                            name_var.set(str(c.get("name") or ""))
+                        mode_btn = g.get("prop_mode_btn")
+                        win.destroy()
+                        if mode_btn is not None:
+                            mode_btn.invoke()
+                        return
+                    _apply_story_face_character(c, win)
+                    win.destroy()
+                if ch.get("_prop_line"):
+                    pre = "📦 " + pre
                 tk.Button(inner, text=pre+lbl, anchor="w",
-                    command=lambda c=ch: (_apply_story_face_character(c, win), win.destroy()),
+                    command=_pick,
                     bg=bg2, fg=fg2, activebackground="#E0E7FF",
                     activeforeground=fg2, relief="flat", bd=0,
                     padx=12, pady=9, wraplength=500, justify="left",

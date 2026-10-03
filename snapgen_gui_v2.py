@@ -17319,12 +17319,15 @@ def _install_ref_mode():
     from snapgen_page_story_face import install as _install_story_face_page
     from snapgen_page_karaoke import install as _install_karaoke_page
     from snapgen_page_audio import install as _install_audio_page
+    from snapgen_page_narrate import install as _install_narrate_page
 
     ref_page = _install_ref_page(_page_env, root)
     prop_page = _install_prop_page(_page_env, root)
     new_page = _install_story_face_page(_page_env, root)
     karaoke_page = _install_karaoke_page(_page_env, root)
     audio_page = _install_audio_page(_page_env, root)
+    _page_env["_runtime_g"] = g  # เล่าภาพ reads Image-page refs installed later
+    narrate_page = _install_narrate_page(_page_env, root)
 
     # Page modules share `_page_env`, while global toolbar controls read `g`.
     # Keep each page Log reachable from global controls such as the microphone.
@@ -17355,6 +17358,7 @@ def _install_ref_mode():
         "new_page": new_page,
         "karaoke_page": karaoke_page,
         "audio_page": audio_page,
+        "narrate_page": narrate_page,
     })
     # MODE BUTTON CONTRACT — keep all top-level modes visually identical.
     # Uses snapgen_button_styles.py as single source of truth.
@@ -17429,6 +17433,12 @@ def _install_ref_mode():
     mode_buttons["audio"] = audio_mode_btn
     g["audio_mode_btn"] = audio_mode_btn
     _mode_btn_map["audio"] = audio_mode_btn
+    narrate_mode_btn = tk.Button(mode_frame, text="🎞️ เล่าภาพ", command=lambda: switch_mode("narrate"))
+    style_mode_button(narrate_mode_btn)
+    narrate_mode_btn.pack(side="left", padx=MODE_PACK_PADX)
+    mode_buttons["narrate"] = narrate_mode_btn
+    g["narrate_mode_btn"] = narrate_mode_btn
+    _mode_btn_map["narrate"] = narrate_mode_btn
     g["_style_mode_button"] = style_mode_button
 
     def _sync_ref_mode_buttons(active):
@@ -17446,6 +17456,7 @@ def _install_ref_mode():
             prop_page.pack_forget()
             karaoke_page.pack_forget()
             audio_page.pack_forget()
+            narrate_page.pack_forget()
             ref_page.pack(fill="both", expand=True)
             if footer: footer.pack_forget()
             g.get("current_mode").set("ref")
@@ -17462,6 +17473,7 @@ def _install_ref_mode():
             ref_page.pack_forget()
             karaoke_page.pack_forget()
             audio_page.pack_forget()
+            narrate_page.pack_forget()
             prop_page.pack(fill="both", expand=True)
             if footer: footer.pack_forget()
             g.get("current_mode").set("prop")
@@ -17478,6 +17490,7 @@ def _install_ref_mode():
             prop_page.pack_forget()
             karaoke_page.pack_forget()
             audio_page.pack_forget()
+            narrate_page.pack_forget()
             new_page.pack(fill="both", expand=True)
             if footer: footer.pack_forget()
             g.get("current_mode").set("new")
@@ -17494,6 +17507,7 @@ def _install_ref_mode():
             prop_page.pack_forget()
             new_page.pack_forget()
             audio_page.pack_forget()
+            narrate_page.pack_forget()
             karaoke_page.pack(fill="both", expand=True)
             refresh_names = g.get("refresh_karaoke_story_names")
             if callable(refresh_names):
@@ -17514,6 +17528,7 @@ def _install_ref_mode():
             new_page.pack_forget()
             karaoke_page.pack_forget()
             audio_page.pack_forget()
+            narrate_page.pack_forget()
             controller = g.get("video_page_controller")
             if controller is None:
                 raise RuntimeError("video_page_controller is missing")
@@ -17540,12 +17555,26 @@ def _install_ref_mode():
             prop_page.pack_forget()
             new_page.pack_forget()
             karaoke_page.pack_forget()
+            narrate_page.pack_forget()
             audio_page.pack(fill="both", expand=True)
             if footer: footer.pack_forget()
             g.get("current_mode").set("audio")
             _set_mode_active("audio")
         except Exception as e:
             print(f"[SnapGen] Audio page error: {e}")
+
+    def show_narrate_mode():
+        try:
+            if slots: slots.pack_forget()
+            if img_page: img_page.pack_forget()
+            for _other in (ref_page, prop_page, new_page, karaoke_page, audio_page):
+                _other.pack_forget()
+            narrate_page.pack(fill="both", expand=True)
+            if footer: footer.pack_forget()
+            g.get("current_mode").set("narrate")
+            _set_mode_active("narrate")
+        except Exception as e:
+            print(f"[SnapGen] Narrate page error: {e}")
 
     def switch_mode(mode):
         if mode == "video":
@@ -17573,6 +17602,8 @@ def _install_ref_mode():
             show_karaoke_mode(); return
         if mode == "audio":
             show_audio_mode(); return
+        if mode == "narrate":
+            show_narrate_mode(); return
         try: ref_page.pack_forget()
         except Exception: pass
         try: new_page.pack_forget()
@@ -17582,6 +17613,8 @@ def _install_ref_mode():
         try: karaoke_page.pack_forget()
         except Exception: pass
         try: audio_page.pack_forget()
+        except Exception: pass
+        try: narrate_page.pack_forget()
         except Exception: pass
         if old_switch: old_switch(mode)
         _sync_ref_mode_buttons(mode)

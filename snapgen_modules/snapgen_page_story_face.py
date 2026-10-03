@@ -1404,7 +1404,18 @@ def install(g: dict, root: tk.Misc) -> tk.Misc:
         if not matches:
             identity_ref_path[0] = None
             return None
-        label, path = max(matches, key=lambda item: item[1].stat().st_mtime)
+
+        def compact(value):
+            return re.sub(r"[^0-9A-Za-zก-๙]", "", str(value or "")).casefold()
+
+        own_name = compact(character.get("name"))
+
+        def rank(item):
+            # Same name first (not another age of the family), front face before
+            # side view, then the newest.
+            stem = re.sub(r"(?:[-_ ]face)(?:[-_ ]side)?(?:[-_ ]?\d+)?$", "", item[1].stem, flags=re.I)
+            return (compact(stem) == own_name, "side" not in item[1].stem.casefold(), item[1].stat().st_mtime)
+        label, path = max(matches, key=rank)
         identity_ref_path[0] = path
         return path
     
@@ -1452,6 +1463,13 @@ def install(g: dict, root: tk.Misc) -> tk.Misc:
         )
         if dataset_facts:
             prompt = prompt.rstrip() + "\n\nSTORY DATASET DETAILS: " + soften_injury_text(dataset_facts) + "."
+        dataset_age = str(character.get("age") or "").strip()
+        if dataset_age:
+            prompt += (
+                f"\n\nAGE LOCK — MANDATORY: this person is {dataset_age}. The face must look exactly that age; "
+                "do not make them look older even if the identity reference looks older — keep only the identity "
+                "(bone structure, eyes, nose, lips) and render the skin, firmness and features of this age."
+            )
         injury_look = soften_injury_text(str(character.get("injury_look") or "").strip())
         if injury_look:
             prompt += (
@@ -1463,7 +1481,13 @@ def install(g: dict, root: tk.Misc) -> tk.Misc:
         selected_body.update(name=name.casefold(), facts=_story_body_facts(character))
         selected_character_key[0] = _story_face_character_key(character)
         prompt = _append_condition_override(prompt, visible_condition)
-        new_name_var.set(name)
+        variant = str(character.get("variant") or "").strip()
+        file_name = name
+        if variant and not character.get("identity_master") and variant.casefold() not in name.casefold():
+            # Variant images get their own file name so they are never taken
+            # as the normal face reference of this person.
+            file_name = f"{name} {variant}"
+        new_name_var.set(file_name)
         _set_face_prompt(prompt)
         _new_log(_builder_set_selection_lock(lock_g, "character", name))
         reference = Path(reference_override) if reference_override and Path(reference_override).is_file() else _select_identity_reference_for_character(character)

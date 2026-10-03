@@ -195,7 +195,19 @@ def install(g: dict, root: tk.Misc) -> tk.Misc:
         """The GPT history of the current นิทาน story (created on first request)."""
         return face_store["histories"].setdefault(_face_story_key(), {})
 
-    def _face_payload_history(payload):
+    def _face_payload_history(payload, fresh=False):
+        """Attach นิทาน's story history, or a fresh temporary chat.
+
+        A new identity (no reference face) is drawn in a fresh chat: inside the
+        story history the model sees earlier faces and drifts toward them, so
+        different people end up looking alike. Variants keep the history and
+        attach their master face instead.
+        """
+        if fresh:
+            payload["_temporary_chat"] = True
+            payload.pop("_conversation_state", None)
+            payload.pop("_conversation_save", None)
+            return payload
         payload["_conversation_state"] = _face_conversation()
         payload["_conversation_save"] = _save_face_store
         return payload
@@ -1292,13 +1304,59 @@ def install(g: dict, root: tk.Misc) -> tk.Misc:
         "tall oval face, sloping forehead, narrow eyes with large spacing, prominent nose tip, thin upper lip and long chin",
     )
 
+    # Independent feature axes. Each cast member steps through every axis with a
+    # different stride, so no two people share the same combination and
+    # neighbours in the cast list differ on every axis at once.
+    _FACE_AXES = (
+        ("face shape", (
+            "long narrow face with a high forehead", "round full face with a low forehead",
+            "square face with a wide flat jaw", "heart-shaped face with a pointed chin",
+            "diamond face with very high cheekbones", "short wide face with a compact jaw",
+            "rectangular face with a long firm jaw", "pear-shaped face with full lower cheeks",
+            "angular bony face with hollow cheeks")),
+        ("eyes", (
+            "small deep-set narrow eyes", "large round wide-set eyes", "heavy hooded eyes",
+            "upturned almond eyes", "downturned tired-looking eyes", "close-set monolid eyes",
+            "prominent bulging eyes", "long narrow single-lid eyes")),
+        ("brows", (
+            "thick straight dark brows", "thin high-arched brows", "sparse faint brows",
+            "bushy uneven brows", "low heavy brows close to the eyes", "short rounded brows",
+            "slanted angry-angle brows")),
+        ("nose", (
+            "broad flat nose with wide nostrils", "long narrow straight nose", "small button nose",
+            "prominent hooked nose", "short upturned nose", "bulbous rounded nose tip",
+            "low flat nose bridge", "crooked slightly bent nose")),
+        ("mouth", (
+            "thin wide lips", "full thick lips", "small pursed mouth", "wide mouth with a thin upper lip",
+            "downturned mouth corners", "heavy lower lip", "uneven slightly asymmetrical lips")),
+        ("skin tone", (
+            "deep brown sun-tanned skin", "light fair skin", "medium tan olive skin",
+            "dark weathered farmer's skin", "pale yellowish skin", "warm golden-brown skin",
+            "reddish ruddy skin")),
+        ("build", (
+            "very slim gaunt face", "chubby face with a double chin", "average healthy fullness",
+            "muscular broad neck and jaw", "soft plump cheeks", "bony thin face with visible cheekbones")),
+        ("distinct mark", (
+            "a mole on one cheek", "freckles across the nose", "old acne scars on the cheeks",
+            "a small scar through one eyebrow", "a gap between the front teeth hidden by closed lips — show a slightly fuller upper lip instead",
+            "large ears that stick out", "a cleft chin", "deep dimples", "dark under-eye circles",
+            "a birthmark near the jaw", "no special mark")),
+    )
+    _FACE_STRIDES = (1, 3, 5, 3, 5, 2, 5, 7)
+
+    def _unique_face_profile(index):
+        parts = []
+        for (label, values), stride in zip(_FACE_AXES, _FACE_STRIDES):
+            parts.append(f"{label}: {values[(index * stride + stride // 2) % len(values)]}")
+        return "; ".join(parts)
+
     def _assign_cast_face_profiles(characters):
-        """Give each identity a deterministic facial geometry so prompts cannot converge."""
+        """Give each identity its own combination on every facial axis so faces cannot converge."""
         mapping = {}
         for character in characters or []:
             key = _identity_family_key(character)
             if key not in mapping:
-                mapping[key] = _CAST_FACE_PROFILES[len(mapping) % len(_CAST_FACE_PROFILES)]
+                mapping[key] = _unique_face_profile(len(mapping))
         return mapping
 
     def _reference_family_key(path):
@@ -1677,6 +1735,19 @@ def install(g: dict, root: tk.Misc) -> tk.Misc:
         else:
             prompt = prompt.replace("{age}", age_val)
         prompt = prompt.replace("{name}", name)
+        if not identity_ref_path[0]:
+            # A new person: give the same unique geometry the batch would give.
+            order = []
+            for item in _expand_group_characters(_current_dataset_characters()):
+                key = _identity_family_key(item)
+                if key not in order:
+                    order.append(key)
+            key = _identity_family_key({"name": name})
+            index = order.index(key) if key in order else int(hashlib.sha256(key.encode("utf-8")).hexdigest(), 16) % 997
+            prompt += (
+                "\n\nMANDATORY UNIQUE FACE GEOMETRY (every item must be clearly visible; this person must look obviously "
+                "different from a generic attractive face and from any other character): " + _unique_face_profile(index)
+            )
         body_base_prompt = prompt
         prompt, identity_images = _identity_reference_payload(prompt)
         _set_story_face_running(True)
@@ -1719,7 +1790,7 @@ def install(g: dict, root: tk.Misc) -> tk.Misc:
                     final_prompt = _apply_clean_face_lock(final_prompt)
 
                     front_payload = _build_story_face_payload(final_prompt)
-                    _face_payload_history(front_payload)
+                    _face_payload_history(front_payload, fresh=not identity_images)
                     if identity_images:
                         front_payload["images"] = identity_images
                     front = g["_do_image_request"](
@@ -1741,7 +1812,7 @@ def install(g: dict, root: tk.Misc) -> tk.Misc:
                     )
 
                     body_payload = _build_story_face_payload(body_prompt)
-                    _face_payload_history(body_payload)
+                    _face_payload_history(body_payload, fresh=not identity_images)
                     body = g["_do_image_request"](
                         body_payload, is_edit=False, prompt=body_prompt,
                         name_hint=f"{name}-body", raw_prompt=prompt,
@@ -2126,7 +2197,9 @@ def install(g: dict, root: tk.Misc) -> tk.Misc:
                 f"VISIBLE EXPRESSION — REQUIRED: {expression}" if expression else "",
                 f"appearance: {appearance}" if appearance else "",
                 f"face design: {face_design}" if face_design else "",
-                f"MANDATORY UNIQUE FACE GEOMETRY: {face_profile}" if face_profile else "",
+                (f"MANDATORY UNIQUE FACE GEOMETRY (every item must be clearly visible; this person must look "
+                 f"obviously different from a generic attractive face and from any other character): {face_profile}"
+                 if face_profile else ""),
                 f"skin detail: {skin_detail}" if skin_detail else "",
                 f"hair identity: {hair}" if hair else "",
                 f"clothes: {clothes}" if clothes else "",
@@ -2290,7 +2363,7 @@ def install(g: dict, root: tk.Misc) -> tk.Misc:
                     final_prompt = _apply_face_age_override(final_prompt, age_label)
                     final_prompt = _apply_clean_face_lock(final_prompt)
                     payload = _build_story_face_payload(final_prompt)
-                    _face_payload_history(payload)
+                    _face_payload_history(payload, fresh=not identity_images)
                     if identity_images:
                         payload["images"] = identity_images
                     hint = f"{name}-{variant}-face" if variant else f"{name}-face"

@@ -42,13 +42,14 @@ FPS = 25
 CROSSFADE = 0.5
 PLAN_WINDOW = 180.0  # seconds of narration planned per GPT request
 IMAGE_COUNTS = ("35", "50", "80")  # ChatGPT allows ~120 images a day
-MAX_CHARACTER_REFS = 6
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+# Scenes are planned before character images: the plan decides which
+# characters actually appear, so only those get a reference image.
 STAGES = (
     ("context", "วิเคราะห์บท", 5),
     ("transcribe", "ฟังเสียง", 10),
-    ("characters", "รูปตัวละคร", 10),
     ("plan", "วางแผนฉาก", 10),
+    ("characters", "รูปตัวละคร", 10),
     ("images", "สร้างรูปฉาก", 50),
     ("video", "ตัดต่อ", 15),
 )
@@ -236,18 +237,75 @@ def build_ass(segments: list, width: int, height: int, font: str = "Noto Sans Th
     return "\n".join(lines) + "\n"
 
 
-def context_request(script: str) -> str:
+def analysis_request(script: str) -> str:
+    """Step 1 of the Prompt-Ref Context method: facts with evidence from the script."""
     return (
-        "อ่านบทนิทานด้านล่างทั้งเรื่อง แล้วสร้าง Context สำหรับทำภาพประกอบ ตอบ JSON เท่านั้น ห้าม markdown.\n"
-        "กฎ: ใช้ชื่อตัวละครตามที่บทเรียกจริง; ถ้าตัวละครมีหลายช่วงวัยที่หน้าตาต่างกันมากในเรื่อง ให้แยกเป็นคนละรายการ เช่น "
-        "'นายจำนง (วัยหนุ่ม)' กับ 'นายจำนง (วัย 50)'; ระบุยุคสมัยและสถานที่จากบท ห้ามเดาเป็นยุคโบราณถ้าบทเป็นยุคปัจจุบัน; "
-        "รายละเอียดหน้าตาที่บทไม่ได้บอกให้กำหนดอย่างสมเหตุผลและคงที่ทั้งเรื่อง; เรียงตัวละครตามความสำคัญ ตัวหลักก่อน.\n"
-        "schema: {\"version\":3,\"story\":{\"title\":\"\",\"summary\":\"\",\"era\":\"\",\"main_location\":\"\"},"
-        "\"characters\":[{\"name\":\"\",\"อายุ\":\"\",\"เพศ\":\"\",\"บทบาท\":\"\",\"รูปร่าง\":\"\",\"สีผิว\":\"\",\"ทรงผม\":\"\","
-        "\"ใบหน้า\":\"\",\"เสื้อผ้า\":\"\",\"ลักษณะเด่น\":\"\",\"visual_identity\":\"\"}],"
-        "\"locations\":[{\"name\":\"\",\"visual_description\":\"\"}],\"props\":[],"
-        "\"visual_rules\":{\"style\":\"\",\"palette\":\"\"}}\n\nบท:\n" + script
+        "อ่าน FULL STORY ด้านล่างทั้งเรื่องแล้วสรุปข้อเท็จจริงก่อน โดยยังไม่ต้องสร้าง SnapGen Context. ตอบ JSON เท่านั้น: "
+        '{"summary":"","protagonist":{"name":"","evidence":[]},"characters":'
+        '[{"name":"","role":"","importance":"main|supporting|minor","is_group":false,"evidence":[]}],'
+        '"locations":[{"name":"","evidence":[]}],"props":[{"name":"","evidence":[]}]} '
+        "ระบุตัวเอกและตัวละครจากสิ่งที่พูดหรือกระทำในเนื้อเรื่องจริง พร้อมข้อความหลักฐานสั้นๆ จากบท. "
+        "ถ้าผู้เล่าบอกชื่อตัวเอง เช่น 'ผมชื่อ ...' ให้ใช้ชื่อนั้น. "
+        "คำในวงเล็บท้ายหัวเรื่องเป็น metadata เว้นแต่ปรากฏเป็นบุคคลในเนื้อเรื่องด้วย. "
+        "importance: main = ตัวที่เรื่องเดินตาม, supporting = มีบทบาทและปรากฏหลายช่วง, minor = ผ่านมาสั้นๆ. "
+        "is_group = true เมื่อเป็นกลุ่มคนไม่มีตัวตนเฉพาะ เช่น ชาวบ้าน ทหาร ฝูงชน. "
+        "ถ้าตัวละครมีหลายช่วงวัยที่หน้าตาต่างกันมาก ให้แยกเป็นคนละรายการ เช่น 'นายจำนง (วัยหนุ่ม)' กับ 'นายจำนง (วัย 50)'. "
+        "เก็บตัวละคร สถานที่ และพร็อพที่มีผลต่อเหตุการณ์ให้ครบ.\n\nFULL STORY:\n" + script
     )
+
+
+def context_from_analysis_request(analysis: dict) -> str:
+    """Step 2: turn the facts into the program's SnapGen Context (same schema as Prompt-Ref)."""
+    try:
+        from snapgen_story_types import story_type_prompt_rules
+        type_rules = story_type_prompt_rules()
+    except Exception:
+        type_rules = ""
+    return (
+        "แปลง STORY_ANALYSIS_JSON ที่บันทึกจากขั้นวิเคราะห์เป็น SnapGen Context เท่านั้น:\n"
+        + json.dumps(analysis, ensure_ascii=False) + "\n\n"
+        "ห้ามตีความตัวละครหรือเปลี่ยนชื่อใหม่ ให้รักษาชื่อ บทบาท importance is_group สถานที่ และพร็อพตามเดิม. "
+        "ตอบ JSON object เท่านั้น ห้าม markdown. ใช้ข้อมูลจากบทจริง; รายละเอียดภาพที่บทไม่ระบุแต่จำเป็นให้สมมุติอย่างสมเหตุผล "
+        "คงที่ทั้งเรื่อง และลงท้าย '(สมมุติเพื่อภาพ)'. ระบุยุคสมัยตามบท ห้ามเดาเป็นยุคโบราณถ้าบทเป็นยุคปัจจุบัน. "
+        "ห้ามใส่คำบอกวัยหรือประเภทบุคคลต่อท้าย name เว้นแต่แยกช่วงวัยไว้แล้ว. "
+        + type_rules + " schema: "
+        "{\"version\":3,\"story\":{\"title\":\"\",\"summary\":\"\",\"era\":\"\",\"main_location\":\"\",\"story_type\":\"\","
+        "\"story_type_label\":\"\",\"key_places\":[]},"
+        "\"characters\":[{\"name\":\"\",\"importance\":\"\",\"is_group\":false,\"อายุ\":\"\",\"เพศ\":\"\",\"บทบาท\":\"\","
+        "\"รูปร่าง\":\"\",\"ส่วนสูง\":\"\",\"สีผิว\":\"\",\"ทรงผม\":\"\",\"ใบหน้า\":\"\",\"ดวงตา\":\"\",\"เสื้อผ้า\":\"\","
+        "\"visual_identity\":\"\",\"ลักษณะเด่น\":\"\",\"must_include\":[],\"must_not_include\":[],\"assumptions\":[],\"@ref\":null}],"
+        "\"locations\":[{\"name\":\"\",\"type\":\"\",\"story_fact\":\"\",\"visual_description\":\"\",\"atmosphere\":\"\"}],"
+        "\"props\":[],\"scene_map\":[],\"visual_rules\":{\"tone\":\"\",\"lighting\":{},\"palette\":\"\",\"camera\":{},\"style\":\"\"},"
+        "\"forbidden\":[],\"locks\":{}}. เก็บตัวละครทุกคน สถานที่ที่มีเหตุการณ์เกิดจริง และ props สำคัญให้ครบ"
+    )
+
+
+GROUP_WORDS = ("ชาวบ้าน", "ทหาร", "ฝูง", "กลุ่ม", "ผู้คน", "ฝูงชน", "พวก", "หลายคน")
+
+
+def is_group_character(character: dict) -> bool:
+    if character.get("is_group") is True:
+        return True
+    name = str(character.get("name") or "")
+    return any(word in name for word in GROUP_WORDS)
+
+
+def characters_needing_refs(context: dict, scenes: list) -> list:
+    """Characters that appear in the planned scenes, most frequent first.
+
+    The story decides the count: every named individual who is actually
+    shown gets one reference image; crowds and groups do not.
+    """
+    counts = {}
+    for scene in scenes:
+        for name in scene.get("characters") or []:
+            counts[name] = counts.get(name, 0) + 1
+    chosen = [
+        c for c in context.get("characters", [])
+        if c.get("name") in counts and not is_group_character(c)
+    ]
+    chosen.sort(key=lambda c: -counts[c["name"]])
+    return [(c, counts[c["name"]]) for c in chosen]
 
 
 def character_description(character: dict) -> str:
@@ -324,7 +382,7 @@ def install(g: dict, root: tk.Misc) -> tk.Frame:
     ttk.Combobox(options, textvariable=aspect_var, values=list(SIZES), width=6, state="readonly").pack(side="left", padx=(4, 14))
     tk.Label(options, text="จำนวนรูปทั้งเรื่อง", bg=bg).pack(side="left")
     ttk.Combobox(options, textvariable=count_var, values=IMAGE_COUNTS, width=5, state="readonly").pack(side="left", padx=4)
-    tk.Label(options, text=f"รูป (+ รูปตัวละครไม่เกิน {MAX_CHARACTER_REFS})", bg=bg).pack(side="left", padx=(0, 14))
+    tk.Label(options, text="รูปฉาก (+ รูปตัวละครตามเรื่อง)", bg=bg).pack(side="left", padx=(0, 14))
     tk.Checkbutton(options, text="ใส่ซับไตเติล", variable=subtitle_var, bg=bg).pack(side="left", padx=(0, 10))
     tk.Checkbutton(options, text="หยุดให้ตรวจแผนก่อนสร้างรูป", variable=review_var, bg=bg).pack(side="left")
 
@@ -651,22 +709,45 @@ def install(g: dict, root: tk.Misc) -> tk.Frame:
             pass
         if shared:
             context = shared["context"]
-            log("ใช้ Context ที่ทีมแตกไว้แล้ว ไม่ต้องให้ GPT วิเคราะห์ใหม่")
+            log("ใช้ Context ที่ทีมแตกไว้แล้ว (หน้า Prompt-Ref หรือเล่าภาพ) ไม่ต้องให้ GPT วิเคราะห์ใหม่")
         else:
-            set_progress("context", 0.2, "GPT กำลังอ่านบท ...")
+            # Same two-step method as Prompt-Ref: facts with evidence first,
+            # then the full SnapGen Context built only from those facts.
             script = read_script(project["script"])
-            context = with_retries("วิเคราะห์บท", lambda: parse_json_reply(chat(context_request(script))))
-            if not context.get("characters"):
-                raise RuntimeError("GPT ไม่ได้ระบุตัวละคร")
+            set_progress("context", 0.2, "GPT กำลังอ่านบทและหาหลักฐานตัวละคร ...")
+            analysis = with_retries("วิเคราะห์บท", lambda: parse_json_reply(chat(analysis_request(script))))
+            if not isinstance(analysis.get("characters"), list) or not analysis["characters"]:
+                raise RuntimeError("GPT วิเคราะห์บทไม่ครบ: ไม่มีรายชื่อตัวละคร")
+            (folder / "story_analysis.json").write_text(json.dumps(analysis, ensure_ascii=False, indent=2), encoding="utf-8")
+            set_progress("context", 0.6, "GPT กำลังสร้าง Context ตัวละครและสถานที่ ...")
+            context = with_retries("สร้าง Context", lambda: parse_json_reply(chat(context_from_analysis_request(analysis))))
+            if not isinstance(context.get("characters"), list) or not context["characters"]:
+                raise RuntimeError("GPT คืน Context ไม่ครบ")
+            try:
+                from snapgen_context_tools import normalize_context_master
+                extras = {c.get("name"): c for c in context["characters"] if isinstance(c, dict)}
+                context = normalize_context_master(folder, context)
+                for character in context.get("characters", []):  # keep page-only flags
+                    source = extras.get(character.get("name")) or {}
+                    for key in ("importance", "is_group"):
+                        if key in source:
+                            character[key] = source[key]
+            except Exception as exc:
+                log(f"จัดรูปแบบ Context ไม่ได้ ใช้ตามที่ GPT ตอบ: {exc}")
             try:
                 import snapgen_shared_context
                 snapgen_shared_context.save(project["script"], context, script)
+                log("บันทึก Context ไว้ข้างไฟล์บทแล้ว — หน้า Prompt-Ref และคนในทีมใช้ต่อได้")
             except Exception:
                 pass
         (folder / "context.json").write_text(json.dumps(context, ensure_ascii=False, indent=2), encoding="utf-8")
         project["context"] = context
-        names = [c.get("name") for c in context.get("characters", []) if c.get("name")]
-        log(f"✓ ตัวละคร {len(names)}: {', '.join(names)}")
+        labels = []
+        for c in context.get("characters", []):
+            if c.get("name"):
+                tag = "กลุ่ม" if is_group_character(c) else {"main": "หลัก", "supporting": "รอง", "minor": "ประกอบ"}.get(c.get("importance"), "")
+                labels.append(f"{c['name']}" + (f" ({tag})" if tag else ""))
+        log(f"✓ ตัวละคร {len(labels)}: {', '.join(labels)}")
 
     def stage_transcribe():
         project, folder = state["project"], Path(state["folder"])
@@ -720,8 +801,8 @@ def install(g: dict, root: tk.Misc) -> tk.Frame:
     def stage_characters():
         project = state["project"]
         refs_dir = Path(state["folder"]) / "refs"
-        characters = [c for c in (project.get("context") or {}).get("characters", []) if c.get("name")]
-        characters = characters[:MAX_CHARACTER_REFS]  # main characters first (Context order)
+        needed = characters_needing_refs(project.get("context") or {}, project.get("scenes") or [])
+        characters = [c for c, _count in needed]
         existing = character_refs()
         todo = [c for c in characters if c["name"] not in existing]
         for n, character in enumerate(todo, 1):
@@ -736,7 +817,7 @@ def install(g: dict, root: tk.Misc) -> tk.Frame:
             with_retries(f"รูปตัวละคร {name}",
                          lambda p=prompt, nm=safe_name(name): make_image(p, [], refs_dir, nm, "1:1"))
             log(f"✓ รูปตัวละคร {name}")
-        log(f"✓ รูปตัวละครครบ {len(characters)} ตัว (เปลี่ยนรูปได้ที่ {refs_dir})")
+        log(f"✓ รูปตัวละครครบ {len(characters)} ตัว ตามที่ปรากฏในฉาก (เปลี่ยนรูปได้ที่ {refs_dir})")
 
     def stage_plan():
         project, folder = state["project"], Path(state["folder"])
@@ -907,24 +988,40 @@ def install(g: dict, root: tk.Misc) -> tk.Frame:
                    "plan": stage_plan, "images": stage_images, "video": stage_video}
 
     # ── control ──
-    def credit_check() -> bool:
+    def ask_on_ui(title, message) -> bool:
+        """Ask a yes/no question from the worker thread and wait for the answer."""
+        answer, event = {}, threading.Event()
+
+        def ask():
+            answer["yes"] = messagebox.askyesno(title, message, parent=page)
+            event.set()
+        root.after(0, ask)
+        event.wait()
+        return bool(answer.get("yes"))
+
+    def confirm_credits() -> bool:
+        """Shown after planning (text only, no image credits), with exact numbers."""
         project = state["project"]
-        done = project.get("done", {})
-        chars = len((project.get("context") or {}).get("characters", [])) - len(character_refs()) if done.get("context") else None
-        scenes = project.get("scenes") or []
-        missing = sum(1 for s in scenes if not (s.get("image") and os.path.isfile(s["image"])))
-        if done.get("plan") and missing == 0 and (chars or 0) <= 0:
+        existing = character_refs()
+        new_refs = [(c, n) for c, n in characters_needing_refs(project.get("context") or {}, project.get("scenes") or [])
+                    if c["name"] not in existing]
+        missing = sum(1 for s in project.get("scenes") or [] if not (s.get("image") and os.path.isfile(s["image"])))
+        total = len(new_refs) + missing
+        if total == 0:
             return True
-        estimate = missing if done.get("plan") else int(project.get("image_count", 50))
-        if chars is not None:
-            chars = min(chars, MAX_CHARACTER_REFS)
-        char_text = f"รูปตัวละคร {chars} รูป + " if chars else (f"รูปตัวละครไม่เกิน {MAX_CHARACTER_REFS} รูป + " if chars is None else "")
-        return messagebox.askyesno(
+        people = "\n".join(f"   • {c['name']} — อยู่ใน {n} ฉาก" for c, n in new_refs[:20]) or "   (มีครบแล้ว)"
+        if len(new_refs) > 20:
+            people += f"\n   … และอีก {len(new_refs) - 20} ตัว"
+        groups = [c["name"] for c in (project.get("context") or {}).get("characters", []) if is_group_character(c)]
+        quota = ("\n⚠ เกิน 120 รูป จะใช้มากกว่า 1 วัน (หยุดรอเมื่อโควตาหมด แล้วกดทำต่อได้)" if total > 120
+                 else "\nChatGPT สร้างรูปได้ประมาณ 120 รูปต่อวัน ถ้าโควตาหมดระหว่างทาง โปรแกรมจะหยุดรอ แล้วกดทำต่อได้")
+        return ask_on_ui(
             "เล่าภาพ — ยืนยันใช้เครดิต",
-            f"เรื่องนี้จะสร้าง {char_text}รูปฉากประมาณ {estimate} รูป\n"
-            f"(เสียงยาว {fmt_time(project['duration'])}, เปลี่ยนภาพเฉลี่ยทุก {project['duration'] / int(project.get('image_count', 50)):.0f} วินาที)\n"
-            "ChatGPT สร้างรูปได้ประมาณ 120 รูปต่อวัน ถ้าครบโควตาโปรแกรมจะหยุดรอ แล้วกดทำต่อวันถัดไปได้\n\nเริ่มเลยไหม?",
-            parent=page)
+            f"วางแผนเสร็จแล้ว จะสร้างรูปทั้งหมด {total} รูป\n\n"
+            f"รูปตัวละคร {len(new_refs)} รูป (เฉพาะตัวละครที่ปรากฏในฉาก):\n{people}\n"
+            + (f"   ไม่ทำรูปให้กลุ่มคน: {', '.join(groups)}\n" if groups else "")
+            + f"\nรูปฉาก {missing} รูป (เปลี่ยนภาพเฉลี่ยทุก {project['duration'] / max(1, len(project.get('scenes') or [1])):.0f} วินาที)\n"
+            + quota + "\n\nเริ่มสร้างรูปเลยไหม?")
 
     def start_pipeline(only=None):
         project = state["project"]
@@ -954,8 +1051,6 @@ def install(g: dict, root: tk.Misc) -> tk.Frame:
         project.update({"aspect": aspect_var.get(),
                         "subtitles": bool(subtitle_var.get())})
         project["done"].pop("video", None)
-        if only is None and not credit_check():
-            return
         save_project()
         state["busy"], state["stop"] = True, False
         start_btn.config(state="disabled")
@@ -964,10 +1059,17 @@ def install(g: dict, root: tk.Misc) -> tk.Frame:
             current = None
             try:
                 keys = [only] if only else [k for k, _t, _w in STAGES]
+                confirmed = False
                 for key in keys:
                     current = key
                     if project["done"].get(key) and key != "video":
                         continue
+                    if key in ("characters", "images") and not confirmed:
+                        if not confirm_credits():
+                            log("⏸ ยังไม่สร้างรูป — แผนฉากยังอยู่ แก้แล้วกดเริ่มเพื่อทำต่อได้")
+                            ui(stage_var.set, "รอยืนยันก่อนสร้างรูป")
+                            return
+                        confirmed = True
                     ui(refresh_stages, key)
                     log(f"▶ {dict((k, t) for k, t, _w in STAGES)[key]}")
                     STAGE_FUNCS[key]()

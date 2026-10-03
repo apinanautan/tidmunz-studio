@@ -1308,41 +1308,41 @@ def install(g: dict, root: tk.Misc) -> tk.Misc:
     # different stride, so no two people share the same combination and
     # neighbours in the cast list differ on every axis at once.
     _FACE_AXES = (
+        ("casting type", (
+            "Thai-Chinese heritage bone structure, flat wide cheekbones",
+            "Isan heritage bone structure, strong prominent cheekbones",
+            "southern Thai heritage bone structure, deep brow ridge",
+            "northern hill-people heritage bone structure, flat mid-face",
+            "Khmer-Thai heritage bone structure, wide jaw",
+            "Mon-Thai heritage bone structure, long mid-face",
+            "mixed rural heritage, rough coarse uneven features")),
         ("face shape", (
-            "long narrow face with a high forehead", "round full face with a low forehead",
-            "square face with a wide flat jaw", "heart-shaped face with a pointed chin",
-            "diamond face with very high cheekbones", "short wide face with a compact jaw",
-            "rectangular face with a long firm jaw", "pear-shaped face with full lower cheeks",
-            "angular bony face with hollow cheeks")),
+            "extremely long narrow horse-like face", "very round moon face", "very square blocky face with a huge jaw",
+            "sharply pointed heart face with a tiny chin", "very wide short face", "gaunt skull-like face with hollow cheeks",
+            "pear face with heavy jowls", "extremely angular bony face")),
         ("eyes", (
-            "small deep-set narrow eyes", "large round wide-set eyes", "heavy hooded eyes",
-            "upturned almond eyes", "downturned tired-looking eyes", "close-set monolid eyes",
-            "prominent bulging eyes", "long narrow single-lid eyes")),
-        ("brows", (
-            "thick straight dark brows", "thin high-arched brows", "sparse faint brows",
-            "bushy uneven brows", "low heavy brows close to the eyes", "short rounded brows",
-            "slanted angry-angle brows")),
+            "very small deep-set squinting eyes", "very large bulging round eyes", "heavy drooping hooded eyes",
+            "sharply upturned slit eyes", "sad strongly downturned eyes", "very close-set narrow eyes",
+            "very wide-set eyes far apart")),
         ("nose", (
-            "broad flat nose with wide nostrils", "long narrow straight nose", "small button nose",
-            "prominent hooked nose", "short upturned nose", "bulbous rounded nose tip",
-            "low flat nose bridge", "crooked slightly bent nose")),
+            "very broad flat nose with wide flaring nostrils", "long thin pointed nose", "tiny button nose",
+            "large prominent hooked nose", "short strongly upturned nose", "big bulbous fleshy nose tip",
+            "crooked visibly bent nose")),
         ("mouth", (
-            "thin wide lips", "full thick lips", "small pursed mouth", "wide mouth with a thin upper lip",
-            "downturned mouth corners", "heavy lower lip", "uneven slightly asymmetrical lips")),
+            "very thin straight lips", "very thick protruding lips", "tiny pursed mouth", "very wide mouth",
+            "strongly downturned mouth corners", "heavy hanging lower lip")),
         ("skin tone", (
-            "deep brown sun-tanned skin", "light fair skin", "medium tan olive skin",
-            "dark weathered farmer's skin", "pale yellowish skin", "warm golden-brown skin",
-            "reddish ruddy skin")),
+            "very dark deep-brown skin", "very pale porcelain-white skin", "olive tan skin",
+            "dark leathery weathered skin", "sallow yellowish skin", "reddish ruddy skin")),
         ("build", (
-            "very slim gaunt face", "chubby face with a double chin", "average healthy fullness",
-            "muscular broad neck and jaw", "soft plump cheeks", "bony thin face with visible cheekbones")),
+            "very obese face with a big double chin", "emaciated thin face with sunken cheeks", "stocky heavy-set face",
+            "average face", "plump chubby baby-face", "lean wiry face with visible bones")),
         ("distinct mark", (
-            "a mole on one cheek", "freckles across the nose", "old acne scars on the cheeks",
-            "a small scar through one eyebrow", "a gap between the front teeth hidden by closed lips — show a slightly fuller upper lip instead",
-            "large ears that stick out", "a cleft chin", "deep dimples", "dark under-eye circles",
-            "a birthmark near the jaw", "no special mark")),
+            "a large mole on the cheek", "heavy freckles", "deep old acne pits", "a visible scar across the brow",
+            "big protruding ears", "a deep cleft chin", "very deep dimples", "dark heavy under-eye bags",
+            "a large birthmark near the jaw", "a unibrow", "very bushy eyebrows")),
     )
-    _FACE_STRIDES = (1, 3, 5, 3, 5, 2, 5, 7)
+    _FACE_STRIDES = (1, 3, 5, 3, 5, 5, 5, 7)
 
     def _unique_face_profile(index):
         parts = []
@@ -1746,7 +1746,7 @@ def install(g: dict, root: tk.Misc) -> tk.Misc:
             index = order.index(key) if key in order else int(hashlib.sha256(key.encode("utf-8")).hexdigest(), 16) % 997
             prompt += (
                 "\n\nMANDATORY UNIQUE FACE GEOMETRY (every item must be clearly visible; this person must look obviously "
-                "different from a generic attractive face and from any other character): " + _unique_face_profile(index)
+                "different from a generic attractive face and from any other character; cast like a real character actor with ordinary, imperfect, memorable features — NOT a pretty model; exaggerate these traits while staying photorealistic): " + _unique_face_profile(index)
             )
         body_base_prompt = prompt
         prompt, identity_images = _identity_reference_payload(prompt)
@@ -2198,7 +2198,7 @@ def install(g: dict, root: tk.Misc) -> tk.Misc:
                 f"appearance: {appearance}" if appearance else "",
                 f"face design: {face_design}" if face_design else "",
                 (f"MANDATORY UNIQUE FACE GEOMETRY (every item must be clearly visible; this person must look "
-                 f"obviously different from a generic attractive face and from any other character): {face_profile}"
+                 f"obviously different from a generic attractive face and from any other character; cast him/her like a real character actor with ordinary, imperfect, memorable features — NOT a pretty model, NOT an idealized average face, exaggerate these traits while staying photorealistic): {face_profile}"
                  if face_profile else ""),
                 f"skin detail: {skin_detail}" if skin_detail else "",
                 f"hair identity: {hair}" if hair else "",

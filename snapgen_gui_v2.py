@@ -994,6 +994,12 @@ try:
         )
         conversation_state = None
         conversation_save_fn = None
+        own_state = payload.get("_conversation_state")
+        if isinstance(own_state, dict):
+            # A page with its own story history (นิทาน): never the Prompt-Ref one.
+            uses_main_story = False
+            conversation_state = own_state
+            conversation_save_fn = payload.get("_conversation_save")
         if uses_main_story:
             # Prompt-Ref, Storyboard, Image Slots, edits and video are one
             # production. Keep one cursor owner so pages cannot split the same
@@ -1044,7 +1050,7 @@ try:
         for var_key in (
             "img_story_title_var",
             "ref_story_title_var",
-            "story_face_title_var",
+            # นิทาน (Story Face) has its own story and history: not reset here.
         ):
             value_var = g.get(var_key)
             if value_var is not None:
@@ -12875,6 +12881,12 @@ def _restore_image_mode_latest():
             )
             conversation_state = None
             conversation_save_fn = None
+            own_state = payload.get("_conversation_state")
+            if isinstance(own_state, dict):
+                # A page with its own story history (นิทาน): never the Prompt-Ref one.
+                uses_main_story = False
+                conversation_state = own_state
+                conversation_save_fn = payload.get("_conversation_save")
             if uses_main_story:
                 conversation_state = globals().get("_prompt_ref_conversation")
                 conversation_save_fn = globals().get("_save_prompt_ref_conversation")

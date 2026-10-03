@@ -136,6 +136,58 @@ def install(g: dict, root: tk.Misc) -> tk.Misc:
     globals().update(g)
     lock_g = {"_selection_locks": {}, "_selection_lock_vars": []}
     export_story_face_dir = g.get("EXPORT_STORY_FACE", BASE / "story_face")
+
+    # ── นิทาน owns its story, Context and GPT history ─────────────────────
+    # This page never uses the Prompt-Ref / Video / Image AI history or
+    # Context. One story (script file, else ข้อมูลชุด) = one GPT history.
+    face_store_path = BASE / "story_face_histories.json"
+    face_context_path = BASE / "story_face_context.json"
+    try:
+        face_store = json.loads(face_store_path.read_text(encoding="utf-8"))
+        if not isinstance(face_store, dict):
+            face_store = {}
+    except Exception:
+        face_store = {}
+    face_store.setdefault("histories", {})
+    face_store.setdefault("story", {})
+
+    def _save_face_store():
+        try:
+            temp = face_store_path.with_suffix(".tmp")
+            temp.write_text(json.dumps(face_store, ensure_ascii=False, indent=2), encoding="utf-8")
+            os.replace(temp, face_store_path)
+        except Exception as exc:
+            print(f"[นิทาน] บันทึกประวัติไม่สำเร็จ: {exc}")
+
+    def _face_story_key():
+        story = face_store.get("story") or {}
+        if story.get("hash"):
+            return "story:" + story["hash"]
+        text = re.sub(r"\s+", "", str((globals().get("_face_batch_state") or {}).get("text") or ""))
+        if text:
+            return "data:" + hashlib.sha256(text.encode("utf-8")).hexdigest()
+        return "general"
+
+    def _face_conversation():
+        """The GPT history of the current นิทาน story (created on first request)."""
+        return face_store["histories"].setdefault(_face_story_key(), {})
+
+    def _face_payload_history(payload):
+        payload["_conversation_state"] = _face_conversation()
+        payload["_conversation_save"] = _save_face_store
+        return payload
+
+    def _load_face_context_text():
+        try:
+            return face_context_path.read_text(encoding="utf-8")
+        except OSError:
+            return ""
+
+    # Every former Prompt-Ref Context read in this page now reads นิทาน's own Context.
+    globals()["_load_ref_context"] = _load_face_context_text
+    g["story_face_conversation"] = _face_conversation
+    g["story_face_save_history"] = _save_face_store
+    g["story_face_context_path"] = face_context_path
     new_page = tk.Frame(root, bg="#FAFAF7")
     g["new_page"] = new_page
 
@@ -220,7 +272,7 @@ def install(g: dict, root: tk.Misc) -> tk.Misc:
     story_history_row = tk.Frame(new_box, bg="#FAFAF7")
     story_history_row.pack(fill="x", pady=(0, 5))
     story_face_title_var = tk.StringVar(
-        value=(g.get("get_story_face_title") or (lambda: ""))()
+        value=str((face_store.get("story") or {}).get("title") or "")
     )
     g["story_face_title_var"] = story_face_title_var
     story_face_status_var = tk.StringVar(value="")
@@ -230,6 +282,97 @@ def install(g: dict, root: tk.Misc) -> tk.Misc:
         bg="#FFFFFF", fg="#111", relief="solid", bd=1, padx=7, pady=3,
     ).pack(side="left", padx=(6, 8))
     tk.Label(story_history_row, textvariable=story_face_status_var, bg="#FAFAF7", fg="#6B7280").pack(side="left")
+
+    def _choose_face_story():
+        import tkinter.filedialog as _fd
+        path = _fd.askopenfilename(title="เลือกไฟล์บทของหน้านิทาน",
+                                   filetypes=[("บท", "*.docx *.txt *.md"), ("All files", "*.*")])
+        if not path:
+            return
+        import snapgen_page_narrate as _narrate
+        try:
+            script = _narrate.read_script(path)
+        except Exception as exc:
+            _new_log(f"[บท] อ่านไฟล์ไม่ได้: {exc}")
+            return
+        face_store["story"] = {"path": path, "title": Path(path).stem, "hash": _narrate.script_hash(script)}
+        _save_face_store()
+        story_face_title_var.set(Path(path).stem)
+        state_text = "ต่อประวัตินิทานของเรื่องนี้" if _face_conversation().get("conversation_id") else "เรื่องใหม่ — จะเปิดประวัติใหม่"
+        story_face_status_var.set(state_text + " (แยกจากหน้าอื่น)")
+        _new_log(f"[บท] {Path(path).name} — กำลังเตรียม Context ของหน้านิทาน ...")
+
+        def worker():
+            try:
+                import snapgen_shared_context as _shared
+                shared = _shared.load(path)
+                if shared:
+                    context = shared["context"]
+                    root.after(0, lambda: _new_log("[บท] ใช้ Context ที่ทีมแตกไว้แล้ว ไม่ต้องให้ GPT วิเคราะห์ใหม่"))
+                else:
+                    context = _face_story_context_via_gpt(script)
+                    _shared.save(path, context, script)
+                face_context_path.write_text(json.dumps(context, ensure_ascii=False, indent=2), encoding="utf-8")
+                names = [c.get("name") for c in context.get("characters", []) if isinstance(c, dict) and c.get("name")]
+                places = [l.get("name") for l in context.get("locations", []) if isinstance(l, dict) and l.get("name")]
+                root.after(0, lambda: _new_log(f"[บท] ✓ ตัวละคร {len(names)}: {', '.join(names)} | สถานที่ {len(places)}"))
+                root.after(0, story_scene_refresh[0])
+            except Exception as exc:
+                root.after(0, lambda m=str(exc): _new_log(f"[บท] ❌ {m}"))
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _face_story_context_via_gpt(script):
+        """Same two-step method as Prompt-Ref, inside นิทาน's own history."""
+        import snapgen_page_narrate as _narrate
+
+        def chat(content):
+            own = _face_conversation()
+            body = {"model": "auto", "chatgpt_image_intercept": False, "temperature": 0.2,
+                    "messages": [{"role": "user", "content": content}]}
+            if own.get("conversation_id") and own.get("parent_message_id"):
+                body["metadata"] = {"conversation_id": own["conversation_id"], "parent_message_id": own["parent_message_id"]}
+                if own.get("account_alias"):
+                    body["chatgpt_account"] = own["account_alias"]
+            base_fn = globals().get("_chatgpt_api_base")
+            base = base_fn() if callable(base_fn) else "http://127.0.0.1:8000/v1"
+            request = urllib.request.Request(
+                base.rstrip("/") + "/chat/completions", data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
+                headers={"Authorization": "Bearer local-dev-key", "Content-Type": "application/json; charset=utf-8"},
+                method="POST")
+            lock = globals().get("_bridge_queue_lock") or threading.Lock()
+            with lock:
+                with urllib.request.urlopen(request, timeout=600) as response:
+                    result = json.loads(response.read().decode("utf-8", errors="replace"))
+            if result.get("error"):
+                raise RuntimeError(json.dumps(result["error"], ensure_ascii=False)[:400])
+            extract = globals().get("_extract_bridge_cursor")
+            cid, pid = extract(result) if callable(extract) else (result.get("conversation_id"), result.get("parent_message_id"))
+            if cid and pid:
+                own.update({"conversation_id": str(cid), "parent_message_id": str(pid)})
+                if result.get("chatgpt_account"):
+                    own["account_alias"] = str(result["chatgpt_account"])
+                _save_face_store()
+            message = ((result.get("choices") or [{}])[0].get("message") or {}).get("content") or ""
+            if isinstance(message, list):
+                message = "".join(str(p.get("text") or "") if isinstance(p, dict) else str(p) for p in message)
+            return str(message)
+
+        root.after(0, lambda: _new_log("[บท] GPT กำลังอ่านบทและหาหลักฐานตัวละคร ..."))
+        analysis = _narrate.parse_json_reply(chat(_narrate.analysis_request(script)))
+        root.after(0, lambda: _new_log("[บท] GPT กำลังสร้าง Context ตัวละครและสถานที่ ..."))
+        context = _narrate.parse_json_reply(chat(_narrate.context_from_analysis_request(analysis)))
+        if not isinstance(context.get("characters"), list) or not context["characters"]:
+            raise RuntimeError("GPT คืน Context ไม่ครบ")
+        try:
+            from snapgen_context_tools import normalize_context_master
+            context = normalize_context_master(BASE, context)
+        except Exception:
+            pass
+        return context
+
+    tk.Button(story_history_row, text="📄 เลือกบท", command=_choose_face_story, bg="#2563EB", fg="white",
+              activebackground="#1D4ED8", activeforeground="white", relief="flat", bd=0, padx=10, pady=3,
+              font=(SNAPGEN_UI_FONT, 9, "bold"), cursor="hand2").pack(side="right")
     new_row = tk.Frame(new_box, bg="#FAFAF7")
     new_row.pack(fill="x")
     tk.Label(new_row, text="ชื่อ:", bg="#FAFAF7", fg="#333").pack(side="left")
@@ -340,6 +483,7 @@ def install(g: dict, root: tk.Misc) -> tk.Misc:
     except Exception:
         saved_batch_payload = {}
     batch_source_state = {"text": str(saved_batch_payload.get("text") or "")}
+    globals()["_face_batch_state"] = batch_source_state
     batch_status_var = tk.StringVar(
         value="โหลดข้อมูลชุดล่าสุดแล้ว" if batch_source_state["text"] else "ยังไม่มีข้อมูลชุด"
     )
@@ -366,14 +510,14 @@ def install(g: dict, root: tk.Misc) -> tk.Misc:
         return "นิทาน 3D"
 
     def _ensure_story_face_history(force=False):
-        has_history = g.get("has_main_story_history") or g.get("has_story_face_history")
-        if not callable(has_history) or not has_history():
-            raise RuntimeError("ยังไม่มีประวัติเรื่องหลักจาก Prompt-Ref")
-        getter = g.get("get_story_face_title")
-        title = getter() if callable(getter) else ""
+        """นิทาน uses its own GPT history; the first request simply creates it."""
+        story = face_store.get("story") or {}
+        title = str(story.get("title") or "") or (
+            _story_dataset_title(batch_source_state.get("text")) if batch_source_state.get("text") else "ทั่วไป")
+        state_text = "ต่อประวัตินิทานของเรื่องนี้" if _face_conversation().get("conversation_id") else "จะเปิดประวัตินิทานใหม่ของเรื่องนี้"
         root.after(0, lambda value=title: (
             story_face_title_var.set(value),
-            story_face_status_var.set("ใช้ประวัติหลักจาก Prompt-Ref"),
+            story_face_status_var.set(state_text + " (แยกจากหน้าอื่น)"),
         ))
         return title
 
@@ -666,7 +810,7 @@ def install(g: dict, root: tk.Misc) -> tk.Misc:
                 output_dir = Path(export_story_face_dir) / "uv_repair"
                 output_dir.mkdir(parents=True, exist_ok=True)
                 payload = _build_story_face_payload(repair_prompt)
-                payload["_use_story_face_history"] = True
+                _face_payload_history(payload)
                 payload["aspect_ratio"] = "1:1"
                 payload["images"] = repair_images
                 lock = globals().get("_bridge_queue_lock")
@@ -803,9 +947,12 @@ def install(g: dict, root: tk.Misc) -> tk.Misc:
             ],
             "temperature": 0.2,
         }
-        context_fn = g.get("get_main_story_request_context")
-        if callable(context_fn):
-            payload_data.update(context_fn())
+        own = _face_conversation()
+        if own.get("conversation_id") and own.get("parent_message_id"):
+            payload_data["metadata"] = {"conversation_id": own["conversation_id"],
+                                        "parent_message_id": own["parent_message_id"]}
+            if own.get("account_alias"):
+                payload_data["chatgpt_account"] = own["account_alias"]
         payload = json.dumps(payload_data, ensure_ascii=False).encode("utf-8")
         base_fn = globals().get("_chatgpt_api_base")
         base = base_fn() if callable(base_fn) else "http://127.0.0.1:8000/v1"
@@ -816,9 +963,12 @@ def install(g: dict, root: tk.Misc) -> tk.Misc:
         )
         with urllib.request.urlopen(request, timeout=180) as response:
             result = json.loads(response.read().decode("utf-8"))
-        advance_fn = g.get("advance_main_story_history")
-        if callable(advance_fn):
-            advance_fn(result)
+        if result.get("conversation_id") and result.get("parent_message_id"):
+            own.update({"conversation_id": str(result["conversation_id"]),
+                        "parent_message_id": str(result["parent_message_id"])})
+            if result.get("chatgpt_account"):
+                own["account_alias"] = str(result["chatgpt_account"])
+            _save_face_store()
         content = str((((result.get("choices") or [{}])[0].get("message") or {}).get("content")) or "").replace("```json", "").replace("```", "").strip()
         start, end = content.find("{"), content.rfind("}")
         design = json.loads(content[start:end + 1] if start >= 0 and end > start else content)
@@ -1222,7 +1372,9 @@ def install(g: dict, root: tk.Misc) -> tk.Misc:
             if "**" in _n:
                 _c["_important"] = True
                 _c["name"] = _c["name"].replace("**","").strip()
-        if not context_chars and not batch_chars: _new_log("[Select] no chars"); return
+        if not context_chars and not batch_chars:
+            _new_log("[Select] ยังไม่มีรายชื่อ — กด 📄 เลือกบท หรือใส่ ข้อมูลชุด ก่อน")
+            return
         win = tk.Toplevel(root)
         win.title("Select character")
         win.configure(bg="#FFFFFF")
@@ -1542,7 +1694,7 @@ def install(g: dict, root: tk.Misc) -> tk.Misc:
                     final_prompt = _apply_clean_face_lock(final_prompt)
 
                     front_payload = _build_story_face_payload(final_prompt)
-                    front_payload["_use_story_face_history"] = True
+                    _face_payload_history(front_payload)
                     if identity_images:
                         front_payload["images"] = identity_images
                     front = g["_do_image_request"](
@@ -1555,7 +1707,7 @@ def install(g: dict, root: tk.Misc) -> tk.Misc:
                     side_prompt, side_images = _identity_reference_payload(final_prompt, front)
                     side_prompt = _apply_story_face_view(side_prompt, "side")
                     side_payload = _build_story_face_payload(side_prompt)
-                    side_payload["_use_story_face_history"] = True
+                    _face_payload_history(side_payload)
                     side_payload["images"] = side_images
                     side = g["_do_image_request"](
                         side_payload, is_edit=True, prompt=side_prompt,
@@ -1564,7 +1716,7 @@ def install(g: dict, root: tk.Misc) -> tk.Misc:
                     )
 
                     body_payload = _build_story_face_payload(body_prompt)
-                    body_payload["_use_story_face_history"] = True
+                    _face_payload_history(body_payload)
                     body = g["_do_image_request"](
                         body_payload, is_edit=False, prompt=body_prompt,
                         name_hint=f"{name}-body", raw_prompt=prompt,
@@ -1816,9 +1968,13 @@ def install(g: dict, root: tk.Misc) -> tk.Misc:
             "แยกข้อมูลชุดนี้เป็นงานสร้างใบหน้าทั้งหมด:\n\n"
             + source[:12000]
         )
-        analyze = g.get("analyze_story_face_dataset")
-        if not callable(analyze):
+        imgmod = g.get("_imgmod")
+        if imgmod is None:
             raise RuntimeError("ระบบประวัติแชทหน้า Face ยังไม่พร้อม")
+
+        def analyze(*args, **kwargs):
+            return imgmod.analyze_story_face_dataset(
+                *args, conversation_state=_face_conversation(), conversation_save_fn=_save_face_store, **kwargs)
         try:
             result = analyze(
                 _story_dataset_title(source),
@@ -2017,7 +2173,7 @@ def install(g: dict, root: tk.Misc) -> tk.Misc:
             batch_status_var.set("กำลังแยกรายชื่อด้วย GPT...")
             _new_log("[ข้อมูลชุด] กำลังแยกชื่อ ช่วงวัย บทบาท และชุด...")
         else:
-            _new_log("[auto-face] ไม่พบข้อมูลชุด — ใช้รายชื่อจาก Prompt Context")
+            _new_log("[auto-face] ไม่พบข้อมูลชุด — ใช้รายชื่อจาก Context ของหน้านิทาน")
 
         def worker():
             try:
@@ -2040,11 +2196,11 @@ def install(g: dict, root: tk.Misc) -> tk.Misc:
                                 batch_source,
                             ).strip() or batch_source[:1600]
                         return characters, overview, "ข้อมูลชุด"
-                    try:
-                        context_text = _load_ref_context()
-                    except Exception:
-                        context_text = ""
-                    return _extract_auto_face_characters(context_text), "", "Prompt Context"
+                    context_text = _load_face_context_text()
+                    characters = _extract_auto_face_characters(context_text)
+                    if not characters:
+                        raise RuntimeError("หน้านิทานยังไม่มีรายชื่อตัวละคร — กด 📄 เลือกบท หรือใส่ ข้อมูลชุด ก่อน")
+                    return characters, "", "Context นิทาน"
 
                 def run_one(idx, character, characters, overview, source_kind):
                     name = str(character.get("name", "")).strip()
@@ -2096,7 +2252,7 @@ def install(g: dict, root: tk.Misc) -> tk.Misc:
                     final_prompt = _apply_face_age_override(final_prompt, age_label)
                     final_prompt = _apply_clean_face_lock(final_prompt)
                     payload = _build_story_face_payload(final_prompt)
-                    payload["_use_story_face_history"] = True
+                    _face_payload_history(payload)
                     if identity_images:
                         payload["images"] = identity_images
                     hint = f"{name}-{variant}-face" if variant else f"{name}-face"

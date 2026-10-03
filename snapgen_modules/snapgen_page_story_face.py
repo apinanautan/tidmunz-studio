@@ -2925,6 +2925,7 @@ def install(g: dict, root: tk.Misc) -> tk.Misc:
         "generate": _mobile_story_face_generate,
     }
     g["story_face_ordered_characters"] = _story_face_ordered_characters
+    g["story_face_dataset_text"] = lambda: str(batch_source_state.get("text") or "")
     g["new_make_btn"] = new_make_btn
     g["new_auto_btn"] = new_auto_btn
     g["new_page"] = new_page

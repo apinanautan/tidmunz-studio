@@ -6,6 +6,7 @@ This module owns the widgets, state, and callbacks for this page only.
 from __future__ import annotations
 
 import json
+import re
 import threading
 import tkinter as tk
 from pathlib import Path
@@ -36,7 +37,49 @@ def _save_karaoke_romanizations(values, path=_KARAOKE_ROMANIZATION_PATH):
     temp.replace(target)
 
 
-def _karaoke_story_rows(characters):
+_DATASET_LINE = re.compile(r"^\s*(\d+(?:\.\d+)*)\.?\s*(?:\*\*)?\s*(.+)$")
+
+
+def _dataset_numbered_lines(text):
+    """[(number, line text)] for every numbered line of ข้อมูลชุด (1., 1.1., 2. …)."""
+    lines = []
+    for raw in str(text or "").splitlines():
+        match = _DATASET_LINE.match(raw)
+        if match:
+            lines.append((match.group(1), match.group(2)))
+    return lines
+
+
+def _compact(text):
+    return re.sub(r"[\s()+/*.,\-–—]+", "", str(text or "")).casefold()
+
+
+def _bigrams(text):
+    compact = _compact(text)
+    return {compact[i:i + 2] for i in range(len(compact) - 1)} or ({compact} if compact else set())
+
+
+def _dataset_number(name, variant, numbered_lines):
+    """The ข้อมูลชุด number whose line best describes this character."""
+    name_grams, variant_grams = _bigrams(name), _bigrams(variant)
+    best, best_score = "", 0.0
+    for number, line in numbered_lines:
+        grams = _bigrams(line)
+        score = len(name_grams & grams) / max(1, len(name_grams))
+        if _compact(name) and _compact(name) in _compact(line):
+            score += 1.0
+        if variant_grams:
+            score += 0.5 * len(variant_grams & grams) / len(variant_grams)
+        if score > best_score + 1e-9:
+            best, best_score = number, score
+    return best if best_score >= 0.5 else ""
+
+
+def _number_key(number):
+    return tuple(int(part) for part in number.split(".")) if number else (10 ** 6,)
+
+
+def _karaoke_story_rows(characters, dataset_text=""):
     """Normalize Story Face rows, keeping only the first occurrence of each name."""
     rows = []
     seen_names = set()
@@ -58,6 +101,15 @@ def _karaoke_story_rows(characters):
             "label": str(character.get("label") or name + (f" — {variant}" if variant else "")),
             "roman": str(character.get("roman") or "").strip(),
         })
+    numbered = _dataset_numbered_lines(dataset_text)
+    if numbered:
+        for row in rows:
+            number = _dataset_number(row["name"], row["variant"], numbered)
+            row["number"] = number
+        # Stable: rows without a number stay at the end in their old order.
+        rows.sort(key=lambda row: _number_key(row["number"]))
+        for row in rows:
+            row["order"] = row["number"] or "-"
     return rows
 
 
@@ -336,7 +388,7 @@ def install(g: dict, root: tk.Misc) -> tk.Misc:
         if selected_index is not None and selected_index < len(story_name_rows):
             story_names_tree.selection_set(str(selected_index))
         story_names_summary.set(
-            f"{len(story_name_rows)} รายการ · ลำดับเดียวกับหน้านิทาน"
+            f"{len(story_name_rows)} รายการ · # = เลขในข้อมูลชุด"
             if story_name_rows else
             "ยังไม่มีรายชื่อ — ไปหน้าหน้านิทานแล้วบันทึกข้อมูลชุดก่อน"
         )
@@ -348,7 +400,9 @@ def install(g: dict, root: tk.Misc) -> tk.Misc:
             for row in story_name_rows
         }
         try:
-            rows = _karaoke_story_rows(provider() if callable(provider) else [])
+            dataset_fn = g.get("story_face_dataset_text")
+            dataset_text = dataset_fn() if callable(dataset_fn) else ""
+            rows = _karaoke_story_rows(provider() if callable(provider) else [], dataset_text)
         except Exception as error:
             rows = []
             _karaoke_status(f"ดึงรายชื่อจากหน้านิทานไม่สำเร็จ: {error}")

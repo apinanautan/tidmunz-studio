@@ -35,9 +35,9 @@ try:
 except Exception:
     pass
 
-# Keep a console visible on every Windows PC.  If Explorer launches this file
-# through pythonw.exe, allocate a console explicitly so startup errors do not
-# disappear.  This also makes double-click problems diagnosable on a new PC.
+# Windowless launches (desktop exe / pythonw.exe) write console output to
+# snapgen_data/logs/console.log instead of opening a black console window.
+# Set SNAPGEN_CONSOLE=1 to get the old visible console for debugging.
 def _snapgen_ensure_console():
     if os.name != "nt":
         return
@@ -45,6 +45,17 @@ def _snapgen_ensure_console():
         import ctypes
         kernel32 = ctypes.windll.kernel32
         if not kernel32.GetConsoleWindow():
+            if os.environ.get("SNAPGEN_CONSOLE") != "1":
+                # Launched windowless (desktop exe / pythonw): keep the screen
+                # clean and send startup messages to a log file instead.
+                log_path = BASE_ROOT / "snapgen_data" / "logs" / "console.log"
+                log_path.parent.mkdir(parents=True, exist_ok=True)
+                if log_path.is_file() and log_path.stat().st_size > 2_000_000:
+                    log_path.replace(log_path.with_suffix(".old.log"))
+                stream = open(log_path, "a", encoding="utf-8", errors="replace", buffering=1)
+                stream.write(f"\n===== {time.strftime('%Y-%m-%d %H:%M:%S')} =====\n")
+                sys.stdout = sys.stderr = stream
+                return
             kernel32.AllocConsole()
             sys.stdout = open("CONOUT$", "w", encoding="utf-8", errors="replace", buffering=1)
             sys.stderr = open("CONOUT$", "w", encoding="utf-8", errors="replace", buffering=1)

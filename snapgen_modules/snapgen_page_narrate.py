@@ -43,6 +43,80 @@ CROSSFADE = 0.5
 PLAN_WINDOW = 180.0  # seconds of narration planned per GPT request
 IMAGE_COUNTS = ("35", "50", "80")  # ChatGPT allows ~120 images a day
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+# Heavy work (FFmpeg, Whisper) runs below normal priority so the PC stays usable.
+LOW_PRIORITY = NO_WINDOW | getattr(subprocess, "BELOW_NORMAL_PRIORITY_CLASS", 0)
+_ENCODER_CACHE: dict = {}
+
+# GPU encoders first (NVIDIA, AMD, Intel); CPU x264 limited to 2 threads last.
+_ENCODERS = (
+    ("NVIDIA GPU", ["-c:v", "h264_nvenc", "-preset", "p5", "-rc", "vbr", "-cq", "19", "-b:v", "0"]),
+    ("AMD GPU", ["-c:v", "h264_amf", "-quality", "balanced", "-rc", "cqp", "-qp_i", "18", "-qp_p", "20"]),
+    ("Intel GPU", ["-c:v", "h264_qsv", "-global_quality", "20"]),
+)
+_CPU_ENCODER = ("CPU (2 threads)", ["-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-threads", "2"])
+
+
+def video_encoder(ffmpeg: str) -> tuple:
+    """(label, args) for the fastest encoder that really works on this PC."""
+    if ffmpeg in _ENCODER_CACHE:
+        return _ENCODER_CACHE[ffmpeg]
+    chosen = _CPU_ENCODER
+    for label, args in _ENCODERS:
+        try:
+            probe = subprocess.run(
+                [ffmpeg, "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", "color=c=black:s=320x240:d=0.3",
+                 *args, "-pix_fmt", "yuv420p", "-f", "null", "-"],
+                capture_output=True, timeout=30, creationflags=NO_WINDOW)
+            if probe.returncode == 0:
+                chosen = (label, args)
+                break
+        except (OSError, subprocess.SubprocessError):
+            continue
+    _ENCODER_CACHE[ffmpeg] = chosen
+    return chosen
+
+
+_TRANSCRIBE_CHILD = r"""
+import json, sys
+sys.path.insert(0, sys.argv[1])
+def emit(item):
+    sys.stdout.write(json.dumps(item, ensure_ascii=False) + "\n"); sys.stdout.flush()
+import snapgen_voice_input as V
+model, backend = V._get_whisper_model(log_fn=lambda m: emit({"log": str(m)}))
+emit({"backend": backend})
+segments, _info = model.transcribe(sys.argv[2], language="th", vad_filter=True, beam_size=1, temperature=0.0,
+                                   initial_prompt=sys.argv[3] or None)
+for s in segments:
+    emit({"start": s.start, "end": s.end, "text": s.text})
+"""
+
+
+def transcribe_in_background(audio: str, initial_prompt: str = "", should_stop=lambda: False):
+    """Yield Whisper results from a separate below-normal-priority process."""
+    import sys
+    python = sys.executable
+    console_python = Path(python).with_name("python.exe")
+    if console_python.is_file():
+        python = str(console_python)  # pythonw has no usable stdout pipe on some PCs
+    env = dict(os.environ, PYTHONIOENCODING="utf-8")
+    proc = subprocess.Popen(
+        [python, "-B", "-c", _TRANSCRIBE_CHILD, str(Path(__file__).resolve().parent), str(audio), initial_prompt],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env, creationflags=LOW_PRIORITY)
+    try:
+        for raw in proc.stdout:
+            if should_stop():
+                proc.kill()
+                return
+            line = raw.decode("utf-8", errors="replace").strip()
+            if line.startswith("{"):
+                yield json.loads(line)
+        code = proc.wait()
+        if code != 0:
+            error = proc.stderr.read().decode("utf-8", errors="replace").strip().splitlines()
+            raise RuntimeError("Whisper ทำงานไม่สำเร็จ: " + (error[-1] if error else f"exit {code}"))
+    finally:
+        if proc.poll() is None:
+            proc.kill()
 # Scenes are planned before character images: the plan decides which
 # characters actually appear, so only those get a reference image.
 STAGES = (
@@ -1013,21 +1087,24 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
                     shutil.copy2(transcript, folder / "transcript.json")
                     log(f"ใช้ข้อความถอดเสียงที่ทำไว้แล้วจาก {candidate.parent.parent.name}/{candidate.parent.name}")
                     return
-        import snapgen_voice_input
         set_progress("transcribe", 0.02, "กำลังเปิด Whisper ...")
-        model, backend = snapgen_voice_input._get_whisper_model(log_fn=log)
         names = [c.get("name") for c in (project.get("context") or {}).get("characters", []) if c.get("name")]
-        segments_iter, _info = model.transcribe(
-            project["audio"], language="th", vad_filter=True, beam_size=1,
-            initial_prompt=("ชื่อในเรื่อง: " + ", ".join(names)) if names else None,
-        )
-        segments, duration = [], float(project.get("duration") or 1)
-        for seg in segments_iter:
-            check_stop()
-            text = seg.text.strip().replace("ํา", "ำ")  # ํา → ำ
+        segments, duration, backend = [], float(project.get("duration") or 1), ""
+        # Whisper runs in its own low-priority process: the GPU does the model,
+        # but audio decoding/features use the CPU and must not freeze the PC.
+        for item in transcribe_in_background(project["audio"], ("ชื่อในเรื่อง: " + ", ".join(names)) if names else "",
+                                             should_stop=lambda: state["stop"]):
+            if "log" in item:
+                log(item["log"])
+                continue
+            if "backend" in item:
+                backend = item["backend"]
+                continue
+            text = item["text"].strip().replace("ํา", "ำ")  # ํา → ำ
             if text:
-                segments.append({"start": round(seg.start, 2), "end": round(seg.end, 2), "text": text})
-            set_progress("transcribe", seg.end / duration, f"ฟังเสียง {fmt_time(seg.end)} / {fmt_time(duration)} ({backend})")
+                segments.append({"start": round(item["start"], 2), "end": round(item["end"], 2), "text": text})
+            set_progress("transcribe", item["end"] / duration, f"ฟังเสียง {fmt_time(item['end'])} / {fmt_time(duration)} ({backend})")
+        check_stop()
         if not segments:
             raise RuntimeError("Whisper ไม่ได้ยินเสียงพูดในไฟล์")
         try:
@@ -1201,19 +1278,23 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
         duration = float(project["duration"])
         durations = segment_durations([s["start"] for s in scenes], duration)
         lengths = [d + (CROSSFADE if i < len(durations) - 1 else 0) for i, d in enumerate(durations)]
-        encode = ["-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p", "-r", str(FPS)]
+        encoder_label, encoder_args = video_encoder(ffmpeg)
+        log(f"เข้ารหัสวิดีโอด้วย {encoder_label}")
+        encode = [*encoder_args, "-pix_fmt", "yuv420p", "-r", str(FPS)]
+        # Filters (zoom/pan, crossfade) run on the CPU: use at most half the
+        # cores so the rest of the PC stays responsive.
+        threads = str(max(2, (os.cpu_count() or 4) // 2))
+        limit = ["-filter_threads", threads, "-filter_complex_threads", threads]
 
         def run(args):
-            proc = subprocess.run([ffmpeg, "-y", "-hide_banner", "-loglevel", "error", *args],
+            proc = subprocess.run([ffmpeg, "-y", "-hide_banner", "-loglevel", "error", *limit, *args],
                                   capture_output=True, text=True, encoding="utf-8", errors="replace",
-                                  creationflags=NO_WINDOW)
+                                  creationflags=LOW_PRIORITY)
             if proc.returncode != 0:
                 raise RuntimeError("FFmpeg: " + (proc.stderr or "").strip()[-500:])
 
-        clips = []
-        for i, (scene, length) in enumerate(zip(scenes, lengths)):
+        def render_one(i, scene, length):
             check_stop()
-            set_progress("video", 0.75 * i / len(scenes), f"ทำภาพเคลื่อนไหว {i + 1}/{len(scenes)}")
             frames = max(1, round(length * FPS))
             clip = work / f"clip_{i:04d}.mp4"
             if video_mode:
@@ -1223,7 +1304,20 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
             else:
                 run(["-i", scene["image"], "-vf", zoompan_filter(scene.get("motion", "zoom_in"), frames, width, height),
                      "-frames:v", str(frames), *encode, str(clip)])
-            clips.append((clip, length))
+            return clip
+
+        # The zoom/pan filter uses one core per scene: render a few scenes at
+        # once (about a third of the cores, low priority) instead of one.
+        from concurrent.futures import ThreadPoolExecutor
+        workers = max(1, (os.cpu_count() or 4) // 3)
+        done_count = [0]
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            futures = [pool.submit(render_one, i, scene, length) for i, (scene, length) in enumerate(zip(scenes, lengths))]
+            for future in futures:
+                future.result()
+                done_count[0] += 1
+                set_progress("video", 0.75 * done_count[0] / len(scenes), f"ทำภาพเคลื่อนไหว {done_count[0]}/{len(scenes)}")
+        clips = [(work / f"clip_{i:04d}.mp4", length) for i, length in enumerate(lengths)]
 
         # Crossfade in groups of 20, then crossfade the groups together.
         def crossfade(items, out):
@@ -1252,11 +1346,11 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
             # Run from the render folder with relative paths: FFmpeg filter
             # syntax cannot take a Windows drive path ("C:") without escaping.
             proc = subprocess.run(
-                [ffmpeg, "-y", "-hide_banner", "-loglevel", "error", "-i", str(picture), *audio_args[:6],
+                [ffmpeg, "-y", "-hide_banner", "-loglevel", "error", *limit, "-i", str(picture), *audio_args[:6],
                  "-vf", "ass=subs.ass:fontsdir=fonts",
                  *encode, *audio_args[6:], str(final)],
                 cwd=str(work), capture_output=True, text=True, encoding="utf-8", errors="replace",
-                creationflags=NO_WINDOW)
+                creationflags=LOW_PRIORITY)
             if proc.returncode != 0:
                 raise RuntimeError("FFmpeg ซับไตเติล: " + (proc.stderr or "").strip()[-500:])
         else:

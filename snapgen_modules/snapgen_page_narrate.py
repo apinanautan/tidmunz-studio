@@ -60,6 +60,10 @@ class Stopped(Exception):
     pass
 
 
+class HistoryLost(RuntimeError):
+    """The story's GPT conversation no longer exists; never replaced silently."""
+
+
 # ── pure helpers (unit-tested) ────────────────────────────────────────────
 
 def safe_name(text: str) -> str:
@@ -418,6 +422,7 @@ def install(g: dict, root: tk.Misc) -> tk.Frame:
     tk.Label(table_tools, text="ฉาก (ดับเบิลคลิกเพื่อแก้พรอมต์)", bg=bg, fg="#334155").pack(side="left")
     make_styled_button(table_tools, "SECONDARY", "ต่อวิดีโอใหม่", command=lambda: start_pipeline(only="video")).pack(side="right")
     make_styled_button(table_tools, "SECONDARY", "สร้างรูปใหม่ช็อตที่เลือก", command=lambda: regenerate_selected()).pack(side="right", padx=6)
+    make_styled_button(table_tools, "DANGER", "เริ่มประวัติ GPT ใหม่", command=lambda: reset_history()).pack(side="right")
     table_frame = tk.Frame(box, bg=bg)
     table_frame.pack(fill="both", expand=True, padx=8, pady=4)
     columns = ("no", "time", "chars", "prompt", "status")
@@ -693,10 +698,35 @@ def install(g: dict, root: tk.Misc) -> tk.Frame:
                 last = exc
                 text = str(exc).lower()
                 log(f"❌ {label} ครั้งที่ {attempt}: {str(exc)[:200]}")
-                if "conversation" in text and ("not found" in text or "404" in text or "409" in text):
-                    state["project"]["conversation"] = {}  # history gone: continue in a fresh chat
+                if "conversation_not_found" in text or ("conversation" in text and ("not found" in text or "404" in text)):
+                    # One story = one GPT history. Never open a replacement
+                    # chat silently; the user decides with the explicit button.
+                    raise HistoryLost(
+                        "ประวัติ GPT ของเรื่องนี้หายไป (ถูกลบหรือเปลี่ยนบัญชี) — โปรแกรมไม่เปิดประวัติใหม่ให้เอง "
+                        "ถ้าต้องการทำต่อในประวัติใหม่ กดปุ่ม 'เริ่มประวัติ GPT ใหม่'") from exc
                 time.sleep(3 * attempt)
         raise RuntimeError(f"{label} ไม่สำเร็จ: {last}")
+
+    def ensure_story_in_history():
+        """Make sure this story's GPT history has the script and Context.
+
+        A Context reused from the team file was built elsewhere, so the first
+        request of this history would otherwise know nothing about the story.
+        """
+        project = state["project"]
+        if project.get("history_seeded") or (project.get("conversation") or {}).get("conversation_id"):
+            project["history_seeded"] = True
+            return
+        set_progress("plan", 0.0, "ส่งบทและ Context เข้าประวัติ GPT ของเรื่องนี้ (ครั้งเดียว) ...")
+        content = (
+            "บทและ SnapGen Context ของเรื่องนี้อยู่ด้านล่าง เก็บไว้ในประวัตินี้เพื่อใช้วางแผนฉากและสร้างรูปทุกครั้งต่อจากนี้ "
+            "ใช้ชื่อและหน้าตาตัวละครตาม Context ตรงตัว ตอบสั้นๆ ว่า OK เท่านั้น\n\nCONTEXT:\n"
+            + json.dumps(project.get("context") or {}, ensure_ascii=False)
+            + "\n\nFULL STORY:\n" + read_script(project["script"])
+        )
+        with_retries("ส่งบทเข้าประวัติ", lambda: chat(content))
+        project["history_seeded"] = True
+        save_project()
 
     # ── stages ──
     def stage_context():
@@ -716,6 +746,7 @@ def install(g: dict, root: tk.Misc) -> tk.Frame:
             script = read_script(project["script"])
             set_progress("context", 0.2, "GPT กำลังอ่านบทและหาหลักฐานตัวละคร ...")
             analysis = with_retries("วิเคราะห์บท", lambda: parse_json_reply(chat(analysis_request(script))))
+            project["history_seeded"] = True  # the full script is now in this story's history
             if not isinstance(analysis.get("characters"), list) or not analysis["characters"]:
                 raise RuntimeError("GPT วิเคราะห์บทไม่ครบ: ไม่มีรายชื่อตัวละคร")
             (folder / "story_analysis.json").write_text(json.dumps(analysis, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -800,6 +831,7 @@ def install(g: dict, root: tk.Misc) -> tk.Frame:
 
     def stage_characters():
         project = state["project"]
+        ensure_story_in_history()
         refs_dir = Path(state["folder"]) / "refs"
         needed = characters_needing_refs(project.get("context") or {}, project.get("scenes") or [])
         characters = [c for c, _count in needed]
@@ -821,6 +853,7 @@ def install(g: dict, root: tk.Misc) -> tk.Frame:
 
     def stage_plan():
         project, folder = state["project"], Path(state["folder"])
+        ensure_story_in_history()
         segments = json.loads((folder / "transcript.json").read_text(encoding="utf-8"))
         context = project.get("context") or {}
         names = [c.get("name") for c in context.get("characters", []) if c.get("name")]
@@ -878,6 +911,7 @@ def install(g: dict, root: tk.Misc) -> tk.Frame:
 
     def stage_images(indices=None):
         project = state["project"]
+        ensure_story_in_history()
         images_dir = Path(state["folder"]) / "images"
         images_dir.mkdir(exist_ok=True)
         refs = character_refs()
@@ -899,7 +933,7 @@ def install(g: dict, root: tk.Misc) -> tk.Frame:
                     scene_prompt(scene), ref_paths, images_dir, f"scene_{i + 1:03d}", project["aspect"]))
                 scene.pop("error", None)
                 failures_in_row = 0
-            except Stopped:
+            except (Stopped, HistoryLost):
                 raise
             except Exception as exc:
                 scene["error"] = str(exc)[:300]
@@ -1098,6 +1132,23 @@ def install(g: dict, root: tk.Misc) -> tk.Frame:
                 ui(lambda: start_btn.config(state="normal", text="▶ ทำต่อ"))
                 ui(refresh_all)
         threading.Thread(target=worker, daemon=True).start()
+
+    def reset_history():
+        """The only way this story gets a second GPT history: the user asks for it."""
+        project = state["project"]
+        if state["busy"] or not project:
+            return
+        if not messagebox.askyesno(
+                "เล่าภาพ — เริ่มประวัติ GPT ใหม่",
+                "ทุกขั้นของเรื่องนี้ใช้ประวัติ GPT เดียวกัน\n"
+                "เริ่มใหม่เฉพาะเมื่อประวัติเดิมหายหรือใช้งานไม่ได้เท่านั้น\n\n"
+                "แผนฉาก รูปตัวละคร และรูปที่ทำแล้วยังอยู่ครบ ประวัติใหม่จะได้รับบทและ Context ก่อนทำงานต่อ\n\nเริ่มประวัติใหม่ไหม?",
+                parent=page):
+            return
+        project["conversation"] = {}
+        project["history_seeded"] = False
+        save_project()
+        log("เริ่มประวัติ GPT ใหม่แล้ว — กดเริ่มเพื่อทำต่อ (จะส่งบทและ Context เข้าประวัติใหม่ก่อน)")
 
     def request_stop():
         if state["busy"]:

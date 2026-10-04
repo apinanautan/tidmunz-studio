@@ -1212,11 +1212,26 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
                 + "\nDraw a completely NEW scene picture as described above, with its own setting, background, "
                 "lighting, camera angle and action. Do NOT copy the references' standing pose, plain gray background, "
                 "framing or layout, and never output a character reference sheet or a person on a plain backdrop.")
+        import hashlib
+        old = {hashlib.md5(Path(s["image"]).read_bytes()).hexdigest()
+               for s in project.get("scenes") or [] if s.get("image") and os.path.isfile(s["image"])}
+        old.update(project.get("rejected_hashes") or [])
         out = imgmod.generate_image(
             prompt, output_dir=str(out_dir), name_hint=name, is_edit=bool(encoded),
             ref_images=encoded or None, aspect_ratio=aspect, save_sidecar=False,
             conversation_state=project.setdefault("conversation", {}), conversation_save_fn=save_project,
         )
+        if hashlib.md5(Path(out).read_bytes()).hexdigest() in old:
+            # The story chat handed back an old picture (GPT drew nothing new): ask once more in a fresh
+            # temporary chat so the scene really gets a new image.
+            log(f"{name}: ได้รูปเก่าซ้ำกลับมา — สร้างใหม่ในแชตชั่วคราว")
+            Path(out).unlink(missing_ok=True)
+            out = imgmod.generate_image(
+                prompt, output_dir=str(out_dir), name_hint=name, is_edit=bool(encoded),
+                ref_images=encoded or None, aspect_ratio=aspect, save_sidecar=False, temporary_chat=True)
+            if hashlib.md5(Path(out).read_bytes()).hexdigest() in old:
+                Path(out).unlink(missing_ok=True)
+                raise RuntimeError("GPT ส่งรูปเก่าซ้ำกลับมา ไม่ได้สร้างรูปใหม่")
         target = Path(out_dir) / f"{name}{Path(out).suffix or '.png'}"
         for old in Path(out_dir).glob(f"{name}.*"):
             if old.resolve() != Path(out).resolve():
@@ -1646,6 +1661,11 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
             for i in problems:
                 image = scenes[i].get("image")
                 if image and os.path.isfile(image):
+                    import hashlib
+                    rejected = project.setdefault("rejected_hashes", [])
+                    digest = hashlib.md5(Path(image).read_bytes()).hexdigest()
+                    if digest not in rejected:
+                        rejected.append(digest)
                     os.remove(image)
                 scenes[i]["image"] = None
                 scenes[i]["prompt"] = scenes[i].get("prompt", "") if "ภาพเดียวเต็มเฟรม" in scenes[i].get("prompt", "") else \

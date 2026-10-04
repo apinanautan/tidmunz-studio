@@ -2036,8 +2036,60 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
         else:
             run(["-i", str(picture), *audio_args[:6], "-c:v", "copy", *audio_args[6:], str(final)])
         shutil.rmtree(work, ignore_errors=True)
+        shutil.rmtree(folder / "_preview", ignore_errors=True)
         project["last_video"] = str(final)
         log(f"✓ วิดีโอเสร็จ: {final}")
+
+    def update_preview():
+        """Video mode, after each clip: clips made so far from shot 1 + their narration → a watchable MP4.
+
+        Each fitted clip is rendered once and kept; joining them is a stream
+        copy, so this takes seconds. Plain cuts here; the final video crossfades.
+        """
+        project, folder = state["project"], Path(state["folder"])
+        scenes = project["scenes"]
+        ready = 0
+        while ready < len(scenes) and scenes[ready].get("clip") and os.path.isfile(scenes[ready]["clip"]):
+            ready += 1
+        if not ready:
+            return
+        ffmpeg = ffmpeg_path()
+        width, height = SIZES.get(project.get("aspect"), SIZES["16:9"])
+        lengths = segment_durations([s["start"] for s in scenes], float(project["duration"]))
+        encode = [*video_encoder(ffmpeg)[1], "-pix_fmt", "yuv420p", "-r", str(FPS)]
+        work = folder / "_preview"
+        work.mkdir(exist_ok=True)
+
+        def run(args):
+            proc = subprocess.run([ffmpeg, "-y", "-hide_banner", "-loglevel", "error", *args], cwd=str(work),
+                                  capture_output=True, text=True, encoding="utf-8", errors="replace",
+                                  creationflags=LOW_PRIORITY)
+            if proc.returncode != 0:
+                raise RuntimeError("FFmpeg: " + (proc.stderr or "").strip()[-300:])
+
+        names = []
+        for i in range(ready):
+            source = scenes[i]["clip"]
+            part, stamp = work / f"part_{i:04d}.mp4", work / f"part_{i:04d}.key"
+            key = f"{source}|{os.path.getmtime(source)}|{lengths[i]}|{width}x{height}"
+            if not (part.is_file() and stamp.is_file() and stamp.read_text(encoding="utf-8") == key):
+                run(["-i", source, "-an", "-vf", clip_fit_filter(media_duration(source), lengths[i], width, height),
+                     "-frames:v", str(max(1, round(lengths[i] * FPS))), *encode, part.name])
+                stamp.write_text(key, encoding="utf-8")
+            names.append(part.name)
+        (work / "list.txt").write_text("".join(f"file '{n}'\n" for n in names), encoding="utf-8")
+        out = folder / f"ตัวอย่าง_ถึงช็อต_{ready:03d}.mp4"
+        run(["-f", "concat", "-safe", "0", "-i", "list.txt", "-i", project["audio"], "-t", f"{sum(lengths[:ready]):.3f}",
+             "-map", "0:v", "-map", "1:a", "-c:v", "copy", "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart",
+             str(out)])
+        for old in folder.glob("ตัวอย่าง_ถึงช็อต_*.mp4"):
+            if old != out:
+                try:
+                    old.unlink()
+                except OSError:
+                    pass  # open in a player: leave it
+        project["last_video"] = str(out)
+        log(f"▶ ตัวอย่างถึงช็อต {ready}/{len(scenes)} ({fmt_time(sum(lengths[:ready]))}) — กด 'เปิดวิดีโอ' ดูได้")
 
     def run_on_ui(fn):
         """Run fn on the Tk thread and return its result to this worker."""
@@ -2179,6 +2231,10 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
                 scene["clip"] = make_scene_clip(scene, i)
                 scene.pop("clip_error", None)
                 failures_in_row = 0
+                try:
+                    update_preview()
+                except Exception as exc:  # a preview must never stop the clips
+                    log(f"ทำตัวอย่างไม่ได้: {str(exc)[:200]}")
             except (Stopped, HistoryLost, RateLimited):
                 raise
             except Exception as exc:

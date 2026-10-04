@@ -34,7 +34,7 @@ import urllib.error
 import urllib.request
 import zipfile
 from pathlib import Path
-from tkinter import filedialog, messagebox, ttk
+from tkinter import filedialog, messagebox, simpledialog, ttk
 
 MOTIONS = ("zoom_in", "zoom_out", "pan_left", "pan_right")
 SIZES = {"16:9": (1920, 1080), "9:16": (1080, 1920)}
@@ -1035,6 +1035,9 @@ def video_plan_request(numbered: list, names: list, previous: str, era: str, hor
         "ใช้ภาพปฏิกิริยาและภาพแทรกรายละเอียดสลับ รักษาทิศทางจอ (ใครอยู่ซ้าย/ขวา ทิศการเคลื่อนที่) และเส้นสายตาให้ต่อเนื่อง. "
         "4) ช็อตต่อเนื่อง: ช็อตถัดไปต่อจากจุดที่คลิปก่อนจบ (การเคลื่อนไหว ตำแหน่ง แสง สภาพตัวละคร เช่น บาดแผล ความเปียก). "
         "5) คลิป AI ทำได้ดีเมื่อมีการกระทำหลักเดียวที่ชัด: ช็อตละ 1 การกระทำ ตัวละครหลักในเฟรมไม่เกิน 2 ตน "
+        "ตัวละครที่ไม่ใช่คน (เช่น พญานาค สัตว์ ผี) ต้องบอกรูปร่างให้ชัดทุก prompt และ video_prompt "
+        "(เช่น 'พญานาคเป็นงูยักษ์ ลำตัวยาวมีเกล็ด ไม่มีแขน ไม่มีขา ไม่มีมือ') และห้ามให้ทำท่าที่ต้องใช้มือ "
+        "(ถือดาบ ชี้นิ้ว กำหมัด) — ถ้าบทบอกว่าใช้อาวุธ ให้เล่าด้วยหาง ลำตัว เขี้ยว หรือพลังแทน เว้นแต่ Context ระบุว่ามีมือ. "
         "ฉากต่อสู้ให้แตกเป็นจังหวะเดียวต่อช็อต (ฟาด / หลบ / ปะทะ / ปฏิกิริยา) แทนการต่อสู้ยาวในช็อตเดียว. "
         "6) โทนสี แสง และสไตล์กล้องตาม look เดียวกันทุกช็อต. "
         "7) " + REALISM_NOTE + ". "
@@ -1294,6 +1297,8 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
     tk.Label(table_tools, text="ฉาก (ดับเบิลคลิกเพื่อแก้พรอมต์)", bg=bg, fg="#334155").pack(side="left")
     make_styled_button(table_tools, "SECONDARY", "ต่อวิดีโอใหม่", command=lambda: start_pipeline(only="video")).pack(side="right")
     make_styled_button(table_tools, "SECONDARY", "สร้างรูปใหม่ช็อตที่เลือก", command=lambda: regenerate_selected()).pack(side="right", padx=6)
+    make_styled_button(table_tools, "DANGER", "🛠 แก้ช็อตที่มีปัญหา" if video_mode else "🛠 แก้รูปที่มีปัญหา",
+                       command=lambda: fix_problem_selected()).pack(side="right", padx=6)
     make_styled_button(table_tools, "PRIMARY", "GPT ช่วยแก้ prompt", command=lambda: refine_selected()).pack(side="right", padx=6)
     make_styled_button(table_tools, "DANGER", "เริ่มประวัติ GPT ใหม่", command=lambda: reset_history()).pack(side="right")
     table_frame = tk.Frame(box, bg=bg)
@@ -2851,6 +2856,88 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
                 state["busy"] = False
                 ui(refresh_all)
                 log("สร้างรูปใหม่เสร็จ — กด 'ต่อวิดีโอใหม่' เพื่อทำวิดีโออีกรอบ")
+        threading.Thread(target=worker, daemon=True).start()
+
+    def fix_request(index: int, problem: str) -> str:
+        """Ask GPT (in this story's history) to rewrite one shot so a seen problem does not happen again."""
+        project = state["project"]
+        scene = project["scenes"][index]
+        context = project.get("context") or {}
+        details = {c.get("name"): character_description(c) for c in context.get("characters", [])}
+        who = "; ".join(f"{n}: {details.get(n, '')}" for n in scene.get("characters") or []) or "-"
+        notes = "; ".join(scene.get("fix_notes") or [])
+        return (
+            f"ช็อตที่ {index + 1} เจน{'วิดีโอ' if video_mode else 'รูป'}ออกมามีปัญหา: {problem}. "
+            + (f"ปัญหาที่เคยแก้ในช็อตนี้แล้ว (ห้ามกลับมาอีก): {notes}. " if notes else "")
+            + "เขียน prompt ใหม่ให้ปัญหานี้ไม่เกิดอีก โดยคงเหตุการณ์ อารมณ์ ขนาดภาพ มุมกล้อง และความต่อเนื่องกับช็อตก่อน/หลังไว้. "
+            "หลักการ: บอกรูปร่างที่ถูกต้องแบบชัดเจนในทางบวก (เช่น 'พญานาคเป็นงูยักษ์ ลำตัวยาวมีเกล็ด ไม่มีแขน ไม่มีขา ไม่มีมือ'); "
+            "ตัดหรือเปลี่ยนการกระทำที่ทำให้เกิดปัญหา (เช่น ถือดาบ → ฟาดหาง ฉกด้วยเขี้ยว หรือพลังพุ่งออกจากร่าง); "
+            "ปิดท้าย prompt และ video_prompt ด้วยสิ่งที่ห้ามมีในภาพ; ภาพสมจริงแบบภาพยนตร์ ไม่มีตัวหนังสือ. "
+            "redo_image = true ถ้าปัญหาอยู่ในภาพแรกของช็อตด้วย (ต้องวาดภาพเริ่มต้นใหม่) "
+            "false ถ้าภาพเริ่มต้นใช้ได้ ปัญหาเกิดตอนเคลื่อนไหวเท่านั้น. "
+            "ตอบ JSON เท่านั้น {\"prompt\":\"\",\"video_prompt\":\"\",\"redo_image\":false,\"change\":\"\"} "
+            "change = สรุปสั้นๆ ว่าแก้อะไร.\n\n"
+            f"คำบรรยายเสียงของช็อตนี้: {scene.get('line') or scene.get('text') or '-'}\n"
+            f"ตัวละครในช็อต: {who}\nprompt เดิม: {scene.get('prompt', '')}\n"
+            + (f"video_prompt เดิม: {scene.get('video_prompt', '')}" if video_mode else "")
+        )
+
+    def fix_problem_selected():
+        """Tell GPT what went wrong in the selected shots; it rewrites them and they are made again."""
+        project = state["project"]
+        selected = sorted(int(i) for i in table.selection())
+        if not project or not selected:
+            messagebox.showinfo("แก้ช็อต", "เลือกช็อตที่มีปัญหาในตารางก่อน (Ctrl+คลิก เลือกได้หลายช็อต)", parent=page)
+            return
+        if state["busy"]:
+            messagebox.showinfo("แก้ช็อต", "กำลังทำงานอยู่ — กดหยุด หรือรอให้เสร็จก่อน", parent=page)
+            return
+        problem = simpledialog.askstring(
+            "แก้ช็อตที่มีปัญหา",
+            f"ช็อต {', '.join(str(i + 1) for i in selected)} มีปัญหาอะไร?\n"
+            "(เช่น พญานาคมีมือโผล่ขึ้นมาตอนต่อสู้ / หน้าตัวละครเปลี่ยน / ภาพเป็นการ์ตูน)", parent=page)
+        if not problem or not problem.strip():
+            return
+        problem = problem.strip()
+        follow_active_account()
+        state["busy"], state["stop"] = True, False
+
+        def worker():
+            try:
+                ensure_story_in_history()
+                redraw = []
+                for i in selected:
+                    scene = project["scenes"][i]
+                    set_progress("images", 0, f"GPT กำลังเขียนช็อต {i + 1} ใหม่เพื่อแก้: {problem[:40]}")
+                    reply = with_retries(f"แก้ช็อต {i + 1}", lambda i=i: parse_json_reply(chat(fix_request(i, problem))))
+                    if not str(reply.get("prompt") or "").strip():
+                        raise RuntimeError(f"GPT ไม่ได้ส่ง prompt ใหม่ของช็อต {i + 1}")
+                    scene.setdefault("prompt_before_fix", scene.get("prompt", ""))
+                    scene["prompt"] = str(reply["prompt"]).strip()
+                    if video_mode and str(reply.get("video_prompt") or "").strip():
+                        scene["video_prompt"] = str(reply["video_prompt"]).strip()
+                    scene.setdefault("fix_notes", []).append(problem)
+                    log(f"🛠 ช็อต {i + 1}: {reply.get('change') or 'เขียน prompt ใหม่แล้ว'}")
+                    if not video_mode or str(reply.get("redo_image")).lower() == "true":
+                        redraw.append(i)
+                    for key in ("clip", "clip_normal", "clip_error"):
+                        scene.pop(key, None)
+                    save_project()
+                    ui(refresh_table)
+                if redraw:
+                    log(f"วาดภาพเริ่มต้นใหม่: ช็อต {', '.join(str(i + 1) for i in redraw)}")
+                    stage_images(redraw)
+                if video_mode:
+                    project["done"].pop("clips", None)
+                    stage_clips(selected)
+                log("✓ แก้ช็อตเสร็จ — กด 'ต่อวิดีโอใหม่' เพื่อรวมวิดีโออีกรอบ")
+            except Exception as exc:
+                log(f"❌ แก้ช็อตไม่สำเร็จ: {exc}")
+            finally:
+                project["done"].pop("video", None)
+                save_project()
+                state["busy"] = False
+                ui(refresh_all)
         threading.Thread(target=worker, daemon=True).start()
 
     def edit_scene_image(index, wish):

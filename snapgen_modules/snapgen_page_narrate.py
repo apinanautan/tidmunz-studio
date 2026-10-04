@@ -2054,7 +2054,11 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
     def regenerate_selected(only=None, ask=True):
         project = state["project"]
         selected = sorted(only if only is not None else (int(i) for i in table.selection()))
-        if state["busy"] or not project or not selected:
+        if not project or not selected:
+            messagebox.showinfo("เล่าภาพ", "เลือกฉากในตารางก่อน (คลิกแถว กด Ctrl เพื่อเลือกหลายฉาก)", parent=page)
+            return
+        if state["busy"]:
+            messagebox.showinfo("เล่าภาพ", "กำลังทำงานอยู่ — รอให้เสร็จ หรือกดหยุดก่อน แล้วค่อยสร้างรูปใหม่", parent=page)
             return
         if ask and not messagebox.askyesno("เล่าภาพ", f"สร้างรูปใหม่ {len(selected)} ฉาก (ใช้เครดิต {len(selected)} รูป)?", parent=page):
             return
@@ -2079,14 +2083,16 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
 
     def edit_prompt(_event=None):
         selection = table.selection()
-        if not selection or state["busy"]:
+        if not selection:
             return
         index = int(selection[0])
         scene = state["project"]["scenes"][index]
         win = tk.Toplevel(page)
         win.title(f"แก้ฉาก {int(selection[0]) + 1}")
-        win.geometry("760x360")
-        text = tk.Text(win, wrap="word")
+        win.geometry("760x380")
+        buttons = tk.Frame(win)
+        buttons.pack(side="bottom", anchor="e", padx=8, pady=(0, 8))
+        text = tk.Text(win, wrap="word", height=12)
         text.pack(fill="both", expand=True, padx=8, pady=8)
         text.insert("1.0", scene.get("prompt", ""))
 
@@ -2097,10 +2103,11 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
             win.destroy()
 
         def save_and_redraw():
+            if state["busy"]:
+                messagebox.showinfo("เล่าภาพ", "กำลังทำงานอยู่ — บันทึก prompt ไว้ก่อน แล้วกดเจนใหม่เมื่องานเสร็จ หรือกดหยุด", parent=win)
+                return
             save()
             regenerate_selected([index], ask=False)
-        buttons = tk.Frame(win)
-        buttons.pack(anchor="e", padx=8, pady=(0, 8))
         make_styled_button(buttons, "SECONDARY", "บันทึก", command=save).pack(side="left", padx=4)
         make_styled_button(buttons, "PRIMARY", "บันทึกแล้วเจนรูปใหม่", command=save_and_redraw).pack(side="left", padx=4)
 

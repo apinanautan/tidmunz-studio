@@ -269,7 +269,7 @@ def contact_sheet_data_url(scenes) -> str:
 
 
 IMAGE_CHECK_PROMPT = (
-    "ภาพนี้คือรูปฉากของวิดีโอเรื่องเล่าไทย แต่ละช่องมีเลขฉาก (SCENE n) ตรวจทุกช่องแล้วบอกฉากที่ใช้ไม่ได้: "
+    "ภาพนี้รวมรูปฉากทั้งหมด {total} ฉากของวิดีโอเรื่องเล่าไทยไว้ในรูปเดียว แต่ละช่องมีเลขฉาก (SCENE n) ตรวจครบทุกช่องแล้วบอกฉากที่ใช้ไม่ได้: "
     "1) เป็นภาพหลายช่อง/คอลลาจ/ตารางในรูปเดียว 2) ฉาก บ้านเรือน หรือเครื่องแต่งกายไม่ใช่แบบไทย (เช่น จีน ญี่ปุ่น ตะวันตก){abroad} "
     "3) มีตัวหนังสือ/ลายน้ำ 4) ภาพเสียหรือว่างเปล่า "
     'ตอบ JSON เท่านั้น {{"bad":[{{"scene":n,"reason":"สั้นๆ"}}]}} ถ้าดีหมดตอบ {{"bad":[]}}')
@@ -1517,7 +1517,7 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
         """One look by GPT at a numbered sheet of every scene (temporary chat, not the story history)."""
         story = (state["project"].get("context") or {}).get("story") or {}
         place = story.get("main_location") or ""
-        prompt = IMAGE_CHECK_PROMPT.format(abroad=f" — สถานที่หลักของเรื่อง: {place}" if place else "")
+        prompt = IMAGE_CHECK_PROMPT.format(total=sum(1 for s in scenes if s.get("image") and os.path.isfile(s["image"])), abroad=f" — สถานที่หลักของเรื่อง: {place}" if place else "")
         body = {"model": "auto", "temporary_chat": True, "chatgpt_image_intercept": False, "messages": [{
             "role": "user", "content": [{"type": "text", "text": prompt},
                                         {"type": "image_url", "image_url": {"url": contact_sheet_data_url(scenes)}}]}]}

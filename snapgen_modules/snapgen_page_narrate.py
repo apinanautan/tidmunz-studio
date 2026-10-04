@@ -1666,8 +1666,9 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
                     # The account this story's history lives on has to log in again; retrying cannot help.
                     alias = ((state["project"] or {}).get("conversation") or {}).get("account_alias") or "บัญชีที่ใช้อยู่"
                     raise RuntimeError(
-                        f"บัญชี ChatGPT ({alias}) ต้องล็อกอินใหม่ใน Bridge (401) — ประวัติของเรื่องนี้อยู่ใน {alias} "
-                        "ล็อกอินบัญชีนี้ใหม่แล้วกดทำต่อ หรือกด 'เริ่มประวัติ GPT ใหม่' เพื่อทำต่อในบัญชีที่ใช้ได้") from exc
+                        f"บัญชี ChatGPT ({alias}) ใช้ไม่ได้ (401 ต้องล็อกอินใหม่) — "
+                        "กด Use บัญชีที่ใช้ได้ใน Bridge แล้วกด ▶ ทำต่อ เรื่องจะย้ายไปบัญชีนั้นเอง "
+                        "(หรือล็อกอินบัญชีนี้ใหม่ถ้าอยากใช้ประวัติเดิม)") from exc
                 log(f"❌ {label} ครั้งที่ {attempt}: {str(exc)[:200]}")
                 if "GPT said:" in str(exc) or "safety policy" in text:
                     # GPT refused this prompt: asking the same thing again only burns time.
@@ -1680,6 +1681,31 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
                         "ถ้าต้องการทำต่อในประวัติใหม่ กดปุ่ม 'เริ่มประวัติ GPT ใหม่'") from exc
                 time.sleep(3 * attempt)
         raise RuntimeError(f"{label} ไม่สำเร็จ: {last}")
+
+    def active_bridge_account() -> str:
+        """The account chosen with Bridge Manager 'Use' (CHATGPT_ACCOUNT in the Bridge .env; name only)."""
+        bridge_dir = Path(str(runtime.get("BRIDGE_DIR") or g.get("BRIDGE_DIR") or Path.home() / "chatgpt-api"))
+        try:
+            for line in (bridge_dir / ".env").read_text(encoding="utf-8").splitlines():
+                if line.strip().startswith("CHATGPT_ACCOUNT="):
+                    return line.split("=", 1)[1].strip()
+        except OSError:
+            pass
+        return ""
+
+    def follow_active_account():
+        """Pressing Use on another account moves this story there: a ChatGPT chat lives in one account only,
+        so the story starts a new history in the chosen account (script and Context are sent first;
+        plan, pictures and clips are kept)."""
+        project = state["project"]
+        conversation = project.get("conversation") or {}
+        bound = str(conversation.get("account_alias") or "").strip()
+        active = active_bridge_account()
+        if bound and active and bound.casefold() != active.casefold():
+            project["conversation"] = {}
+            project["history_seeded"] = False
+            log(f"ใช้ {active} ตามที่กด Use (เดิมเรื่องนี้อยู่ใน {bound}) — เริ่มประวัติ GPT ของเรื่องใหม่ในบัญชีนี้ "
+                "ส่งบทและ Context ให้ก่อน แผน รูป และคลิปที่ทำแล้วยังอยู่ครบ")
 
     def ensure_story_in_history():
         """Make sure this story's GPT history has the script and Context.
@@ -2654,6 +2680,7 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
                         "subtitles": bool(subtitle_var.get()),
                         "style_mode": style_var.get() if style_var.get() in STYLES else "ปกติ"})
         project["done"].pop("video", None)
+        follow_active_account()
         save_project()
         state["busy"], state["stop"] = True, False
         start_btn.config(state="disabled")
@@ -2785,6 +2812,7 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
             return
         if ask and not messagebox.askyesno("เล่าภาพ", f"สร้างรูปใหม่ {len(selected)} ฉาก (ใช้เครดิต {len(selected)} รูป)?", parent=page):
             return
+        follow_active_account()
         state["busy"], state["stop"] = True, False
 
         def worker():

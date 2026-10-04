@@ -882,7 +882,7 @@ def video_shots(segments: list, target: float = 8.0, limit: float = SHOT_LIMIT) 
 
 def plan_video(segments: list, duration: float, names: list, era: str, ask, horror: bool = False,
                progress=None, out: list | None = None, batch: int = 20, script: str = "",
-               direction: dict | None = None, refs: list | None = None) -> list:
+               direction: dict | None = None, refs: list | None = None, aspect: str = "16:9") -> list:
     """Video mode plan: program-cut shots, GPT writes each one, every shot gets a clip choice.
 
     ``ask(prompt) -> dict`` talks to GPT.  Shots GPT skipped are asked again
@@ -896,7 +896,7 @@ def plan_video(segments: list, duration: float, names: list, era: str, ask, horr
     direction = direction if direction is not None else {}
     if not direction.get("sequences"):
         try:
-            direction.update(ask(director_request(shots, names, era, horror, refs)) or {})
+            direction.update(ask(director_request(shots, names, era + aspect_note(aspect), horror, refs)) or {})
         except Exception:
             pass  # still plannable shot by shot
     for first in range(0, len(shots), batch):
@@ -909,7 +909,7 @@ def plan_video(segments: list, duration: float, names: list, era: str, ask, horr
             wanted = [n for n in numbers if n not in items]
             if not wanted:
                 break
-            reply = ask(video_plan_request([(n, shots[n - 1]) for n in wanted], names, previous, era, horror,
+            reply = ask(video_plan_request([(n, shots[n - 1]) for n in wanted], names, previous, era + aspect_note(aspect), horror,
                                            direction_for(direction, wanted), refs))
             for item in reply.get("scenes") or []:
                 if not isinstance(item, dict) or not str(item.get("prompt") or "").strip():
@@ -947,6 +947,15 @@ def _shot_lines(numbered: list) -> str:
     return "\n".join(f"[{n}] {s['start']:.1f}–{s['end']:.1f} ({s['end'] - s['start']:.0f} วิ) "
                      + (f"บทพูดของ {s['dialogue']}: “{s['line']}”" if s.get("dialogue") else s["text"])
                      for n, s in numbered)
+
+
+def aspect_note(aspect: str) -> str:
+    """Picture shape for GPT's framing (appended to the era line)."""
+    if aspect == "9:16":
+        return (". สัดส่วนภาพ 9:16 แนวตั้ง (มือถือ): จัดองค์ประกอบแนวตั้ง ตัวละครหลักอยู่กลางเฟรม "
+                "ใช้ช็อตกลาง/ใกล้มากขึ้น ช็อตกว้างให้ใช้ความสูง (ท้องฟ้า ความลึก มุมเงย) แทนความกว้าง "
+                "สองตัวละครเผชิญหน้ากันให้ใช้ข้ามไหล่หรือหน้า-หลังแทนการยืนซ้าย-ขวา")
+    return ". สัดส่วนภาพ 16:9 แนวนอนแบบภาพยนตร์"
 
 
 def refs_note(refs) -> str:
@@ -1267,6 +1276,12 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
     make_styled_button(table_tools, "DANGER", "เริ่มประวัติ GPT ใหม่", command=lambda: reset_history()).pack(side="right")
     table_frame = tk.Frame(box, bg=bg)
     table_frame.pack(fill="both", expand=True, padx=8, pady=4)
+    # The picture preview takes its own fixed column first, so a long table never pushes it off screen.
+    preview_box = tk.Frame(table_frame, bg="#F1F5F9", width=320)
+    preview_box.pack(side="right", fill="y", padx=(8, 0))
+    preview_box.pack_propagate(False)
+    preview = tk.Label(preview_box, bg="#F1F5F9", text="เลือกฉากเพื่อดูรูป")
+    preview.pack(fill="both", expand=True)
     columns = ("no", "time", "chars", "prompt", "status")
     table = ttk.Treeview(table_frame, columns=columns, show="headings", height=10, selectmode="extended")
     table.tag_configure("bad", foreground="#DC2626")
@@ -1278,8 +1293,6 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
     table.configure(yscrollcommand=scroll.set)
     table.pack(side="left", fill="both", expand=True)
     scroll.pack(side="left", fill="y")
-    preview = tk.Label(table_frame, bg="#F1F5F9", width=40, text="เลือกฉากเพื่อดูรูป")
-    preview.pack(side="left", fill="y", padx=(8, 0))
 
     # ── small utilities ──
     def log(message):
@@ -1864,7 +1877,7 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
             plan_video(segments, float(project["duration"]), names, era, ask,
                        horror=project.get("style_mode") == "เรื่องผี", progress=progress, out=scenes_so_far,
                        script=read_script(project["script"]), direction=project.setdefault("direction", {}),
-                       refs=attachment_names())
+                       refs=attachment_names(), aspect=desired_aspect())
             if project["direction"]:
                 (folder / "director_plan.json").write_text(
                     json.dumps(project["direction"], ensure_ascii=False, indent=2), encoding="utf-8")
@@ -2520,13 +2533,24 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
             return
         aspect = desired_aspect()
         if project.get("scenes") and project.get("aspect") and project["aspect"] != aspect:
-            if not messagebox.askyesno("เล่าภาพ", "เปลี่ยนสัดส่วนภาพ ต้องสร้างรูปฉากใหม่ทั้งหมด ต่อไหม?", parent=page):
-                return
-            for scene in project["scenes"]:
-                scene.pop("image", None)
-                scene.pop("clip", None)
-            for key in ("images", "clips"):
-                project["done"].pop(key, None)
+            if video_mode:
+                # Shots are framed for the picture shape: plan again (text only), then new pictures and clips.
+                if not messagebox.askyesno(
+                        "ออโต้", f"เปลี่ยนสัดส่วนเป็น {aspect} — จะวางแผนช็อตใหม่ให้เหมาะกับภาพ{'แนวตั้ง' if aspect == '9:16' else 'แนวนอน'} "
+                        "แล้วสร้างรูปและคลิปใหม่ทั้งหมด (บทกับเสียงที่ถอดไว้ใช้ต่อได้) ต่อไหม?", parent=page):
+                    return
+                project["scenes"] = []
+                project.pop("direction", None)
+                for key in ("plan", "images", "clips", "video"):
+                    project["done"].pop(key, None)
+            else:
+                if not messagebox.askyesno("เล่าภาพ", "เปลี่ยนสัดส่วนภาพ ต้องสร้างรูปฉากใหม่ทั้งหมด ต่อไหม?", parent=page):
+                    return
+                for scene in project["scenes"]:
+                    scene.pop("image", None)
+                    scene.pop("clip", None)
+                for key in ("images", "clips"):
+                    project["done"].pop(key, None)
         new_style = style_var.get() if style_var.get() in STYLES else "ปกติ"
         if (project.get("scenes") and any(s.get("image") for s in project["scenes"])
                 and (project.get("style_mode") or "ปกติ") != new_style and only is None):
@@ -2778,7 +2802,8 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
         try:
             from PIL import Image, ImageTk
             pic = Image.open(image)
-            pic.thumbnail((300, 300))
+            # Fit the preview column (portrait pictures use its height).
+            pic.thumbnail((max(120, preview_box.winfo_width() - 8), max(120, preview_box.winfo_height() - 8)))
             photo = ImageTk.PhotoImage(pic)
             preview.config(image=photo, text="")
             preview.image = photo

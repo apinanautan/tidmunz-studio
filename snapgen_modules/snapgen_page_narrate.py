@@ -247,6 +247,29 @@ def local_image_problems(scenes, aspect) -> dict:
     return problems
 
 
+def save_storyboard(scenes, out_path, tile_width=480) -> str:
+    """All finished scene pictures in order on one image (square-ish grid: 35 scenes -> 6 x 6)."""
+    import math
+    from PIL import Image, ImageDraw
+    paths = [(i, s.get("image")) for i, s in enumerate(scenes) if s.get("image") and os.path.isfile(s["image"])]
+    if not paths:
+        return ""
+    with Image.open(paths[0][1]) as first:
+        tile_height = round(tile_width * first.height / first.width)
+    cols = math.ceil(math.sqrt(len(paths)))
+    rows = math.ceil(len(paths) / cols)
+    sheet = Image.new("RGB", (cols * tile_width, rows * tile_height), "black")
+    draw = ImageDraw.Draw(sheet)
+    for n, (i, path) in enumerate(paths):
+        x, y = (n % cols) * tile_width, (n // cols) * tile_height
+        with Image.open(path) as image:
+            sheet.paste(image.convert("RGB").resize((tile_width, tile_height)), (x, y))
+        draw.rectangle((x, y, x + 34, y + 18), fill="black")
+        draw.text((x + 4, y + 3), f"{i + 1:02d}", fill="white")
+    sheet.save(out_path, "JPEG", quality=90)
+    return str(out_path)
+
+
 def contact_sheet_data_url(scenes) -> str:
     """All scene pictures on one numbered sheet, as a JPEG data URL for one GPT check."""
     import io
@@ -1593,6 +1616,12 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
                 project["images_verified"] = True
                 save_project()
                 log("✓ ตรวจรูปแล้ว ใช้ได้ทุกฉาก")
+                try:
+                    board = save_storyboard(scenes, Path(state["folder"]) / "storyboard_ทุกฉาก.jpg")
+                    if board:
+                        log(f"บันทึกรูปรวมทุกฉาก: {Path(board).name}")
+                except Exception as exc:
+                    log(f"ทำรูปรวมทุกฉากไม่สำเร็จ: {str(exc)[:120]}")
                 return
             if round_no > rounds:
                 break

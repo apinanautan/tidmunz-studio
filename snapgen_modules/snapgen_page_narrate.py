@@ -41,7 +41,7 @@ SIZES = {"16:9": (1920, 1080), "9:16": (1080, 1920)}
 FPS = 25
 CROSSFADE = 0.5
 PLAN_WINDOW = 180.0  # seconds of narration planned per GPT request
-IMAGE_COUNTS = ("35", "50", "80")  # ChatGPT allows ~120 images a day
+IMAGE_COUNTS = ("36", "49", "64", "81")  # full storyboard grids (6x6 ... 9x9); ChatGPT allows ~120 images a day
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 # Heavy work (FFmpeg, Whisper) runs below normal priority so the PC stays usable.
 LOW_PRIORITY = NO_WINDOW | getattr(subprocess, "BELOW_NORMAL_PRIORITY_CLASS", 0)
@@ -779,7 +779,7 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
     script_var = tk.StringVar(value="ลากไฟล์บทมาวาง หรือกดเลือก (.docx / .txt)")
     audio_var = tk.StringVar(value="ลากไฟล์เสียงมาวาง หรือกดเลือก (.wav / .mp3 / .m4a)")
     aspect_var = tk.StringVar(value="16:9")
-    count_var = tk.StringVar(value="50")
+    count_var = tk.StringVar(value="36")
     subtitle_var = tk.BooleanVar(value=False)
     style_var = tk.StringVar(value="ปกติ")
     review_var = tk.BooleanVar(value=False)

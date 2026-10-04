@@ -21,6 +21,7 @@ files = [
     ROOT / "assets" / "video_forbidden_words.json",
     *sorted((ROOT / "snapgen_modules").glob("*.py")),
     *sorted((ROOT / "snapgen_modules" / "mobile").glob("*.*")),
+    *sorted((ROOT / "snapgen_modules" / "cc5").glob("*.py")),
 ]
 files = [p for p in files if p.is_file() and not p.name.startswith("test_")]
 

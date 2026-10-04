@@ -578,6 +578,7 @@ def split_long_scenes(scenes: list, duration: float, clip_seconds: float, max_fa
             if j:
                 note = f" (ช็อตต่อเนื่อง {j + 1}/{parts} ของฉากเดียวกัน มุมกล้องต่างจากช็อตก่อน)"
                 piece["prompt"] = scene["prompt"] + note
+                piece["transition"] = "dissolve"
                 piece["video_prompt"] = (scene.get("video_prompt") or "") + note
                 piece["motion"] = MOTIONS[(MOTIONS.index(scene.get("motion", MOTIONS[0])) + j) % len(MOTIONS)] \
                     if scene.get("motion") in MOTIONS else MOTIONS[j % len(MOTIONS)]
@@ -625,15 +626,37 @@ def zoompan_filter(motion: str, frames: int, width: int, height: int) -> str:
     )
 
 
-def xfade_graph(lengths: list, fade: float = CROSSFADE) -> tuple[str, float]:
-    """filter_complex chaining inputs 0..n-1 with crossfades; returns (graph, output length)."""
+# How one shot gives way to the next: (FFmpeg xfade effect, seconds).
+TRANSITIONS = {
+    "dissolve": ("fade", 0.8),        # soft overlap: the same scene continues
+    "fadeblack": ("fadeblack", 1.2),  # dip to black: new place, time of day, time jump
+    "cut": ("fade", 0.12),            # near-cut: hits and fast action
+}
+
+
+def transition_into(previous: dict | None, scene: dict) -> str:
+    """The transition into ``scene``: GPT's choice, else dip to black when the place changes."""
+    chosen = str(scene.get("transition") or "").strip().lower()
+    if chosen in TRANSITIONS:
+        return chosen
+    before, now = str((previous or {}).get("location") or "").strip(), str(scene.get("location") or "").strip()
+    return "fadeblack" if before and now and before != now else "dissolve"
+
+
+def xfade_graph(lengths: list, fade: float = CROSSFADE, kinds: list | None = None) -> tuple[str, float]:
+    """filter_complex chaining inputs 0..n-1 with transitions; returns (graph, output length).
+
+    ``kinds[i]`` is the transition into input i (``kinds[0]`` unused); each
+    input's length must already include the overlap with the next input.
+    """
     if len(lengths) == 1:
         return "[0:v]null[vout]", lengths[0]
     parts, label, elapsed = [], "[0:v]", lengths[0]
     for i in range(1, len(lengths)):
         out = "[vout]" if i == len(lengths) - 1 else f"[x{i}]"
-        offset = max(0.0, elapsed - fade)
-        parts.append(f"{label}[{i}:v]xfade=transition=fade:duration={fade}:offset={offset:.3f}{out}")
+        effect, seconds = TRANSITIONS.get((kinds or [])[i] if kinds and i < len(kinds) else "", ("fade", fade))
+        offset = max(0.0, elapsed - seconds)
+        parts.append(f"{label}[{i}:v]xfade=transition={effect}:duration={seconds}:offset={offset:.3f}{out}")
         label = out
         elapsed = offset + lengths[i]
     return ";".join(parts), elapsed
@@ -946,6 +969,8 @@ def plan_video(segments: list, duration: float, names: list, era: str, ask, horr
                 "slow": str(item.get("slow")).lower() == "true",
                 "cheap": str(item.get("cheap")).lower() == "true",
             }
+            if str(item.get("transition") or "").strip().lower() in TRANSITIONS:
+                scene["transition"] = str(item["transition"]).strip().lower()
             if shot.get("dialogue"):  # must stay in sync with the voice: real speed, full quality
                 scene.update(dialogue=shot["dialogue"], line=shot["line"], slow=False, cheap=False)
             scenes.append(scene)
@@ -1050,7 +1075,10 @@ def video_plan_request(numbered: list, names: list, previous: str, era: str, hor
         + (f"แผนผู้กำกับของช่วงนี้: {direction}. " if direction else "")
         + (f"ช็อตก่อนหน้าคือ: {previous}. " if previous else "")
         + "ตอบ JSON เท่านั้น: {\"scenes\":[{\"shot\":1,\"characters\":[],\"location\":\"\",\"prompt\":\"\","
-        "\"video_prompt\":\"\",\"slow\":false,\"cheap\":false}]} "
+        "\"video_prompt\":\"\",\"slow\":false,\"cheap\":false,\"transition\":\"dissolve\"}]} "
+        "transition = การเปลี่ยนภาพเข้าสู่ช็อตนี้ให้ต่อกันเนียนแบบหนัง: dissolve = ภาพจางซ้อนนุ่มๆ (ฉากเดิมต่อเนื่อง); "
+        "fadeblack = มืดลงแล้วค่อยสว่างเข้าช็อตนี้ (เปลี่ยนสถานที่ เช่น ใต้น้ำ→ป่า, เปลี่ยนเวลา เช่น กลางวัน→กลางคืน, ข้ามเวลา, ย้อนอดีต, เปิดซีเควนซ์ใหม่); "
+        "cut = ตัดเร็ว (จังหวะกระแทกในฉากต่อสู้หรือเหตุการณ์ฉับพลันเท่านั้น). "
         "shot = เลขช็อตในวงเล็บ. characters = ชื่อตัวละครที่ปรากฏในภาพ (ว่างได้ถ้าเป็นภาพสถานที่). "
         "prompt = ภาพแรกของคลิป ภาษาไทย: ขนาดภาพ มุมกล้อง เลนส์ ใครอยู่ตรงไหนของจอทำอะไร ที่ไหน เวลา แสง อารมณ์. "
         "video_prompt = สิ่งที่เกิดตลอดคลิปที่เริ่มจากภาพนั้น ภาษาไทย: การกระทำหลัก 1 อย่าง สีหน้า สิ่งรอบตัว "
@@ -2256,7 +2284,10 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
         work.mkdir()
         duration = float(project["duration"])
         durations = segment_durations([s["start"] for s in scenes], duration)
-        lengths = [d + (CROSSFADE if i < len(durations) - 1 else 0) for i, d in enumerate(durations)]
+        # Each shot runs on under the next one for as long as that transition lasts.
+        kinds = [transition_into(scenes[i - 1] if i else None, s) for i, s in enumerate(scenes)]
+        overlaps = [TRANSITIONS[kinds[i + 1]][1] for i in range(len(scenes) - 1)] + [0.0]
+        lengths = [d + overlaps[i] for i, d in enumerate(durations)]
         encoder_label, encoder_args = video_encoder(ffmpeg)
         log(f"เข้ารหัสวิดีโอด้วย {encoder_label}")
         encode = [*encoder_args, "-pix_fmt", "yuv420p", "-r", str(FPS)]
@@ -2301,18 +2332,20 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
         clips = [(work / f"clip_{i:04d}.mp4", length) for i, length in enumerate(lengths)]
 
         # Crossfade in groups of 20, then crossfade the groups together.
-        def crossfade(items, out):
-            graph, total = xfade_graph([length for _c, length in items])
+        def crossfade(items, out, item_kinds):
+            graph, total = xfade_graph([length for _c, length in items], kinds=item_kinds)
             args = []
             for clip, _length in items:
                 args += ["-i", str(clip)]
             run([*args, "-filter_complex", graph, "-map", "[vout]", *encode, str(out)])
             return out, total
 
-        set_progress("video", 0.8, "ต่อภาพแบบจางทับกัน ...")
-        groups = [crossfade(clips[k:k + 20], work / f"group_{k:04d}.mp4") for k in range(0, len(clips), 20)]
+        set_progress("video", 0.8, "ต่อภาพแบบจางซ้อน / มืดลงเปลี่ยนฉาก ...")
+        starts = list(range(0, len(clips), 20))
+        groups = [crossfade(clips[k:k + 20], work / f"group_{k:04d}.mp4", kinds[k:k + 20]) for k in starts]
         check_stop()
-        picture, _total = crossfade(groups, work / "picture.mp4") if len(groups) > 1 else groups[0]
+        picture, _total = (crossfade(groups, work / "picture.mp4", [kinds[k] for k in starts])
+                           if len(groups) > 1 else groups[0])
 
         set_progress("video", 0.92, "ใส่เสียงบรรยาย" + (" และซับไตเติล" if project.get("subtitles") else "") + " ...")
         final = folder / f"{safe_name(Path(project['script']).stem)}_{work_dir_name}_{time.strftime('%Y%m%d-%H%M')}.mp4"

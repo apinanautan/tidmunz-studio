@@ -976,6 +976,7 @@ def plan_video(segments: list, duration: float, names: list, era: str, ask, horr
             scenes.append(scene)
         if progress:
             progress(min(len(shots), first + batch), len(shots), group[0]["start"])
+    apply_continuity(scenes, direction.get("continuity"))  # one scene per shot here: numbers match
     split = split_long_scenes(scenes, duration, 0, limit_for=clip_limit)
     scenes[:] = split
     assign_clips(scenes, duration)
@@ -1006,6 +1007,54 @@ def refs_note(refs) -> str:
             "ห้ามเปลี่ยนคำ ห้ามย่อ (โปรแกรมแนบรูปตามชื่อนี้). ")
 
 
+CONTINUITY_RULES = (
+    "continuity = บันทึกความต่อเนื่องของหนัง (เหมือนฝ่ายคุมความต่อเนื่องในกองถ่าย): ไล่ทั้งเรื่องแล้วบันทึกทุกสภาพที่เปลี่ยนไป "
+    "ของตัวละครแต่ละตัว ที่ต้องเห็นต่อเนื่องในช็อตถัดๆ ไป เช่น บาดแผล (ตำแหน่งบนร่างกาย ขนาด) เลือด เกล็ด/เสื้อผ้าขาด "
+    "ความเปียก ฝุ่นโคลน ความอ่อนแรง ร่างที่แปลงไป ของที่ถืออยู่. from_shot = ช็อตที่สภาพนั้นเริ่มเกิด, "
+    "to_shot = ช็อตสุดท้ายที่ยังต้องเห็น (ถึงตอนจบเรื่องถ้าไม่หาย); ถ้าสภาพเปลี่ยนอีก (เช่น แผลหนักขึ้น แปลงร่าง) ให้เริ่มรายการใหม่. "
+    "character = ชื่อตัวละครตรงตามรายชื่อ. state = คำบรรยายภาพที่ต้องเห็นจริง สั้นและชัด (เช่น 'แผลฉีกยาวจากดาบที่ลำตัวด้านซ้าย "
+    "เกล็ดสีนิลแตก มีเลือดซึม เคลื่อนไหวอ่อนแรง'). ")
+
+
+def continuity_request(numbered: list, names: list) -> str:
+    """For a plan made before continuity was recorded: the continuity record only (text, one GPT request)."""
+    lines = "\n".join(f"[{n}] ตัวละคร: {', '.join(s.get('characters') or []) or '-'} | เสียง: "
+                      f"{s.get('line') or s.get('text') or ''} | ภาพ: {str(s.get('prompt') or '')[:160]}"
+                      for n, s in numbered)
+    return (
+        "ช็อตทั้งหมดของหนังเรื่องนี้อยู่ด้านล่าง (เลขช็อต ตัวละคร คำบรรยายเสียง และภาพที่วางไว้). "
+        f"ตัวละคร: {', '.join(names) or '-'}. "
+        "ตอบ JSON เท่านั้น: {\"continuity\":[{\"character\":\"\",\"from_shot\":1,\"to_shot\":1,\"state\":\"\"}]} "
+        + CONTINUITY_RULES + "\n\n" + lines
+    )
+
+
+def apply_continuity(scenes: list, entries, numbers: list | None = None) -> None:
+    """Write each scene's continuity state (who looks how in this shot) from the continuity record.
+
+    ``numbers[i]`` is scene i's shot number in the record (default i + 1). A
+    character's state applies only to scenes that show that character.
+    """
+    for i, scene in enumerate(scenes):
+        n = numbers[i] if numbers else i + 1
+        notes = []
+        for entry in entries or []:
+            if not isinstance(entry, dict) or not str(entry.get("state") or "").strip():
+                continue
+            try:
+                a, b = int(entry.get("from_shot")), int(entry.get("to_shot") or entry.get("from_shot"))
+            except (TypeError, ValueError):
+                continue
+            who = str(entry.get("character") or "").strip()
+            shown = scene.get("characters") or []
+            if a <= n <= b and (who in shown if who else True):
+                notes.append(f"{who}: {str(entry['state']).strip()}" if who else str(entry["state"]).strip())
+        if notes:
+            scene["continuity"] = "; ".join(dict.fromkeys(notes))
+        else:
+            scene.pop("continuity", None)
+
+
 def director_request(shots: list, names: list, era: str, horror: bool = False, refs: list | None = None) -> str:
     """Director pass: read the whole narration as a film and break it into sequences before any shot is written."""
     return (
@@ -1020,7 +1069,9 @@ def director_request(shots: list, names: list, era: str, horror: bool = False, r
         + f"ยุค/บรรยากาศ: {era}. ตัวละคร: {', '.join(names) or '-'}. " + refs_note(refs)
         + "ตอบ JSON เท่านั้น: {\"look\":{\"genre_tone\":\"\",\"palette\":\"\",\"lighting\":\"\",\"camera_style\":\"\"},"
         "\"sequences\":[{\"shots\":[1,5],\"name\":\"\",\"location\":\"\",\"time_of_day\":\"\",\"purpose\":\"\","
-        "\"emotion\":\"\",\"blocking\":\"\",\"visual_plan\":\"\",\"abstract_lines\":\"\"}]} "
+        "\"emotion\":\"\",\"blocking\":\"\",\"visual_plan\":\"\",\"abstract_lines\":\"\"}],"
+        "\"continuity\":[{\"character\":\"\",\"from_shot\":1,\"to_shot\":1,\"state\":\"\"}]} "
+        + CONTINUITY_RULES +
         "look = โทนหนังทั้งเรื่อง (แนว โทนสี แสง สไตล์กล้อง) ใช้คงที่ทุกช็อต. "
         "shots = ช็อตแรกและช็อตสุดท้ายของซีเควนซ์. blocking = ตำแหน่งและทิศทางของตัวละครในฉาก (ใครอยู่ซ้าย/ขวาจอ หันไปทางไหน). "
         "visual_plan = ลำดับภาพของซีเควนซ์แบบผู้กำกับ: เปิดด้วยช็อตกว้างสร้างสถานที่ → ขยับเข้ามาระดับกลาง → โคลสอัพอารมณ์ "
@@ -1996,6 +2047,8 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
             if project["direction"]:
                 (folder / "director_plan.json").write_text(
                     json.dumps(project["direction"], ensure_ascii=False, indent=2), encoding="utf-8")
+            # The director pass already recorded continuity; otherwise it is asked for before pictures.
+            project["continuity_done"] = bool(project["direction"].get("continuity"))
             project["scenes"] = scenes_so_far
             save_project()
             log(f"✓ วางแผน {len(scenes_so_far)} คลิป ({clip_summary(scenes_so_far)})")
@@ -2057,14 +2110,36 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
                          str(scene.get("text") or "")])
         ghosts = find_ghosts(text, state["project"].get("ghosts") or [])
         ghost_note = ("\nลักษณะผีตามความเชื่อไทย (ต้องวาดตามนี้ ห้ามเดาเอง): " + "; ".join(look for _n, look in ghosts)) if ghosts else ""
-        return (f"{scene['prompt']}{location}" + (f"\nตัวละครในภาพ — {who}" if who else "") + ghost_note
+        state_note = (f"\nความต่อเนื่องจากช็อตก่อน (ต้องเห็นในภาพนี้ชัดเจน แม้รูปอ้างอิงจะไม่มี): {scene['continuity']}"
+                      if scene.get("continuity") else "")
+        return (f"{scene['prompt']}{location}" + (f"\nตัวละครในภาพ — {who}" if who else "") + state_note + ghost_note
                 + f"\n{style_text()}")
+
+    def ensure_continuity():
+        """Plans made before the continuity record: ask GPT for it once (text only, story history)."""
+        project = state["project"]
+        scenes = project.get("scenes") or []
+        if not video_mode or not scenes or project.get("continuity_done"):
+            return
+        set_progress("plan", 1.0, "GPT กำลังทำบันทึกความต่อเนื่อง (บาดแผล เลือด ร่างที่เปลี่ยน) ของทั้งเรื่อง ...")
+        ensure_story_in_history()
+        names = [c.get("name") for c in (project.get("context") or {}).get("characters", []) if c.get("name")]
+        names += [n for n in attachment_names() if n not in names]
+        reply = with_retries("บันทึกความต่อเนื่อง", lambda: parse_json_reply(
+            chat(continuity_request(list(enumerate(scenes, 1)), names))))
+        apply_continuity(scenes, reply.get("continuity"))
+        project["continuity_done"] = True
+        save_project()
+        ui(refresh_table)
+        count = sum(1 for sc in scenes if sc.get("continuity"))
+        log(f"✓ บันทึกความต่อเนื่อง: {count} ช็อตมีสภาพที่ต้องต่อเนื่อง (เช่น บาดแผล) — ใส่ในคำสั่งรูปและคลิปให้อัตโนมัติ")
 
     def stage_images(indices=None):
         project = state["project"]
         check_script_matches_audio()
         project["images_verified"] = False
         ensure_story_in_history()
+        ensure_continuity()
         research_ghosts()  # stories analysed before this feature
         images_dir = Path(state["folder"]) / "images"
         images_dir.mkdir(exist_ok=True)
@@ -2483,6 +2558,8 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
         else:
             prompt += "\nไม่มีบทพูด ไม่มีตัวหนังสือในภาพ ตัวละครหน้าตาเหมือนในภาพเริ่มต้นตลอดคลิป"
         prompt += "\nภาพสมจริงแบบภาพยนตร์ไลฟ์แอ็กชัน ไม่ใช่การ์ตูนหรืออนิเมะ"
+        if scene.get("continuity"):  # wounds, blood, wet, transformed ... carried from earlier shots
+            prompt += f"\nความต่อเนื่อง (คงไว้ตลอดคลิป): {scene['continuity']}"
         if scene.get("forbid"):  # problems already seen in this shot (🛠 แก้ช็อตที่มีปัญหา)
             prompt += f"\nห้ามปรากฏเด็ดขาดตลอดทั้งคลิป: {scene['forbid']}"
 
@@ -2544,6 +2621,7 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
 
     def stage_clips(indices=None):
         project = state["project"]
+        ensure_continuity()
         scenes = project["scenes"]
         todo = indices if indices is not None else [
             i for i, sc in enumerate(scenes) if not (sc.get("clip") and os.path.isfile(sc["clip"]))]
@@ -2918,7 +2996,9 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
             "ตอบ JSON เท่านั้น {\"prompt\":\"\",\"video_prompt\":\"\",\"forbid\":\"\",\"change\":\"\"} "
             "prompt = ภาพแรกของช็อต (ใช้เมื่อวาดภาพใหม่), video_prompt = การเคลื่อนไหวตลอดคลิป, change = สรุปสั้นๆ ว่าแก้อะไร.\n\n"
             f"คำบรรยายเสียงของช็อตนี้: {scene.get('line') or scene.get('text') or '-'}\n"
-            f"ตัวละครในช็อต: {who}\nprompt เดิม: {scene.get('prompt', '')}\n"
+            f"ตัวละครในช็อต: {who}\n"
+            + (f"สภาพต่อเนื่องที่ต้องคงไว้ในช็อตนี้: {scene['continuity']}\n" if scene.get("continuity") else "")
+            + f"prompt เดิม: {scene.get('prompt', '')}\n"
             + (f"video_prompt เดิม: {scene.get('video_prompt', '')}" if video_mode else "")
         )
 
@@ -2945,6 +3025,7 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
         def worker():
             try:
                 ensure_story_in_history()
+                ensure_continuity()
                 redraw = []
                 for i in selected:
                     scene = project["scenes"][i]

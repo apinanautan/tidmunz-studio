@@ -434,6 +434,15 @@ def snap_starts(raw_starts: list, segment_starts: list, window_start: float) -> 
     return snapped
 
 
+def script_audio_match(segments: list, script: str) -> float:
+    """Share of the heard text's 3-letter pieces found in the script (same story ≈ 1.0, another story ≈ 0.3)."""
+    def pieces(text):
+        text = re.sub(r"[\s“”\"'.,!?…]+", "", text)
+        return {text[i:i + 3] for i in range(len(text) - 2)}
+    heard = pieces(" ".join(str(s.get("text") or "") for s in segments))
+    return len(heard & pieces(script)) / len(heard) if heard else 1.0
+
+
 def correct_with_script(segments: list, script: str) -> list:
     """Replace each Whisper sentence with the matching words from the script.
 
@@ -1875,8 +1884,22 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
             log(f"✓ รูปตัวละคร {name}")
         log(f"✓ รูปตัวละครครบ {len(characters)} ตัว ตามที่ปรากฏในฉาก (เปลี่ยนรูปได้ที่ {refs_dir})")
 
+    def check_script_matches_audio():
+        """Stop before GPT or picture credits when the script and the narration are different stories."""
+        project = state["project"]
+        transcript = Path(state["folder"]) / "transcript.json"
+        if not transcript.is_file():
+            return
+        score = script_audio_match(json.loads(transcript.read_text(encoding="utf-8")), read_script(project["script"]))
+        if score < 0.6:
+            raise RuntimeError(
+                f"ไฟล์บทกับไฟล์เสียงไม่ใช่เรื่องเดียวกัน (ตรงกันแค่ {score:.0%}) — "
+                f"บท: {Path(project['script']).name} / เสียง: {Path(project['audio']).name}. "
+                "เลือกไฟล์บทของเสียงนี้ใหม่ (จะได้โปรเจกต์ใหม่ของเรื่องนั้น) หรือเลือกเสียงของบทนี้")
+
     def stage_plan():
         project, folder = state["project"], Path(state["folder"])
+        check_script_matches_audio()
         ensure_story_in_history()
         segments = json.loads((folder / "transcript.json").read_text(encoding="utf-8"))
         context = project.get("context") or {}
@@ -1969,6 +1992,7 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
 
     def stage_images(indices=None):
         project = state["project"]
+        check_script_matches_audio()
         project["images_verified"] = False
         ensure_story_in_history()
         research_ghosts()  # stories analysed before this feature

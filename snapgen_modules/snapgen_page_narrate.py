@@ -841,7 +841,7 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
     start_btn = make_styled_button(run_row, "PRIMARY", "▶ เริ่มทำทั้งเรื่อง", command=lambda: start_pipeline())
     start_btn.pack(side="left")
     make_styled_button(run_row, "DANGER", "⏸ หยุด", command=lambda: request_stop()).pack(side="left", padx=6)
-    make_styled_button(run_row, "SECONDARY", "เปิดโฟลเดอร์", command=lambda: open_path(state["folder"])).pack(side="left", padx=6)
+    make_styled_button(run_row, "SECONDARY", "เปิดโปรเจกต์", command=lambda: choose_saved_project()).pack(side="left", padx=6)
     make_styled_button(run_row, "SUCCESS", "▶ เปิดวิดีโอ", command=lambda: open_path((state["project"] or {}).get("last_video"))).pack(side="left")
 
     progress_row = tk.Frame(box, bg=bg)
@@ -948,7 +948,6 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
             return
         folder = project_folder_for(export_root() / work_dir_name, script, text)
         folder.mkdir(parents=True, exist_ok=True)
-        state["folder"] = str(folder)
         try:
             project = json.loads((folder / "project.json").read_text(encoding="utf-8"))
         except (OSError, ValueError):
@@ -958,8 +957,19 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
             log("เปิดงานเดิมของเรื่องนี้ — ทำต่อในประวัติ GPT เดิม")
         project["script"] = script
         project["script_hash"] = script_hash(text)
+        show_project(folder, project)
+
+    def last_project_file() -> Path:
+        return export_root() / work_dir_name / "_last_project.txt"
+
+    def show_project(folder, project):
+        state["folder"] = str(folder)
         state["project"] = project
-        script_var.set(Path(script).name)
+        try:
+            last_project_file().write_text(str(folder), encoding="utf-8")
+        except OSError:
+            pass
+        script_var.set(Path(project.get("script") or Path(folder).name).name)
         if project.get("audio"):
             audio_var.set(f"{Path(project['audio']).name} · {fmt_time(project.get('duration'))}")
         aspect_var.set(project.get("aspect", aspect_var.get()))
@@ -969,6 +979,28 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
         save_project()
         refresh_all()
         refresh_clip_info()
+
+    def load_saved_project(folder, quiet=False) -> bool:
+        """Reopen a story's work folder (project.json) as it was, without needing the script file."""
+        folder = Path(folder)
+        try:
+            project = json.loads((folder / "project.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            if not quiet:
+                messagebox.showerror("เล่าภาพ", f"เปิดโปรเจกต์ไม่ได้ (ไม่มี project.json): {exc}", parent=page)
+            return False
+        show_project(folder, project)
+        log(f"เปิดโปรเจกต์เดิม: {folder.name} — ทำต่อ/แก้ฉากได้เลย")
+        return True
+
+    def choose_saved_project():
+        if state["busy"]:
+            return
+        base = export_root() / work_dir_name
+        base.mkdir(parents=True, exist_ok=True)
+        folder = filedialog.askdirectory(parent=page, title="เลือกโฟลเดอร์โปรเจกต์ที่ทำไว้", initialdir=str(base))
+        if folder:
+            load_saved_project(folder)
 
     def choose_script(path=None):
         if state["busy"]:
@@ -2040,4 +2072,11 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
     table.bind("<Double-1>", edit_prompt)
     table.bind("<<TreeviewSelect>>", show_preview)
     g["video_auto_open_project" if video_mode else "narrate_open_project"] = open_project
+    try:
+        # Come back to the story that was open last time (after an update/restart nothing is lost).
+        last = last_project_file().read_text(encoding="utf-8").strip()
+        if last and os.path.isfile(os.path.join(last, "project.json")):
+            page.after(300, lambda: load_saved_project(last, quiet=True))
+    except OSError:
+        pass
     return {"open_project": open_project, "refresh_clip_info": refresh_clip_info, "busy": lambda: state["busy"]}

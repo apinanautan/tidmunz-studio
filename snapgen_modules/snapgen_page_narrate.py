@@ -2485,8 +2485,18 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
         newest = max(new_files, key=lambda f: f.stat().st_mtime)  # post-processed version is written last
         clips_dir = Path(state["folder"]) / "clips"
         clips_dir.mkdir(exist_ok=True)
-        target = clips_dir / f"clip_{index + 1:03d}.mp4"
+        if not scene.get("clip_slow"):
+            target = clips_dir / f"clip_{index + 1:03d}.mp4"
+            shutil.copy2(newest, target)
+            return str(target)
+        # Slow 2x shot: keep both speeds for hand editing; the slow one goes in the video.
+        target = clips_dir / f"clip_{index + 1:03d}_สโลว์.mp4"
         shutil.copy2(newest, target)
+        oldest = min(new_files, key=lambda f: f.stat().st_mtime)  # the download, before Slow 2x
+        if oldest != newest:
+            normal = clips_dir / f"clip_{index + 1:03d}_ปกติ.mp4"
+            shutil.copy2(oldest, normal)
+            scene["clip_normal"] = str(normal)
         return str(target)
 
     def stage_clips(indices=None):
@@ -2780,7 +2790,7 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
                 for key in ("image", "bad", "error"):
                     scene.pop(key, None)
             if "clips" in redo or "images" in redo:
-                for key in ("clip", "clip_error", "clip_fallback"):
+                for key in ("clip", "clip_normal", "clip_error", "clip_fallback"):
                     scene.pop(key, None)
         if "images" in redo:
             project["images_verified"] = False

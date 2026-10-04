@@ -2184,7 +2184,8 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
             messagebox.showinfo("เล่าภาพ", "เลือกฉากในตารางก่อน (คลิกแถว กด Ctrl เพื่อเลือกหลายฉาก)", parent=page)
             return
         if state["busy"]:
-            messagebox.showinfo("เล่าภาพ", "กำลังทำงานอยู่ — รอให้เสร็จ หรือกดหยุดก่อน แล้วค่อยสร้างรูปใหม่", parent=page)
+            state.setdefault("redraw_queue", []).extend(selected)
+            log(f"รอคิว: ฉาก {', '.join(str(i + 1) for i in selected)} จะเจนรูปใหม่ทันทีที่งานปัจจุบันเสร็จ")
             return
         if ask and not messagebox.askyesno("เล่าภาพ", f"สร้างรูปใหม่ {len(selected)} ฉาก (ใช้เครดิต {len(selected)} รูป)?", parent=page):
             return
@@ -2274,18 +2275,20 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
             if not (scene.get("image") and os.path.isfile(scene["image"])):
                 messagebox.showinfo("เล่าภาพ", "ฉากนี้ยังไม่มีรูปเดิม — ใช้ 'บันทึกแล้วเจนรูปใหม่'", parent=win)
                 return
-            if state["busy"]:
-                messagebox.showinfo("เล่าภาพ", "กำลังทำงานอยู่ — รอให้เสร็จหรือกดหยุดก่อน", parent=win)
-                return
             save()
+            if state["busy"]:
+                messagebox.showinfo("เล่าภาพ", "บันทึก prompt แล้ว แต่ตอนนี้กำลังทำงานอยู่ — กดแก้จากรูปเดิมอีกครั้งเมื่องานเสร็จ", parent=win)
+                return
             edit_scene_image(index, wish)
         make_styled_button(buttons, "SECONDARY", "แก้จากรูปเดิม", command=fix_from_current).pack(side="left", padx=4)
 
         def save_and_redraw():
-            if state["busy"]:
-                messagebox.showinfo("เล่าภาพ", "กำลังทำงานอยู่ — บันทึก prompt ไว้ก่อน แล้วกดเจนใหม่เมื่องานเสร็จ หรือกดหยุด", parent=win)
-                return
             save()
+            if state["busy"]:
+                # Keep the user's edit and draw it as soon as the current job ends.
+                state.setdefault("redraw_queue", []).append(index)
+                log(f"บันทึก prompt ฉาก {index + 1} แล้ว — รอคิว จะเจนรูปใหม่ทันทีที่งานปัจจุบันเสร็จ")
+                return
             regenerate_selected([index], ask=False)
         make_styled_button(buttons, "SECONDARY", "บันทึก", command=save).pack(side="left", padx=4)
         make_styled_button(buttons, "PRIMARY", "บันทึกแล้วเจนรูปใหม่", command=save_and_redraw).pack(side="left", padx=4)
@@ -2311,6 +2314,14 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
             preview.image = photo
         except Exception as exc:
             preview.config(image="", text=f"เปิดรูปไม่ได้: {exc}")
+
+    def run_redraw_queue():
+        queue = state.get("redraw_queue") or []
+        if queue and not state["busy"] and state["project"]:
+            state["redraw_queue"] = []
+            regenerate_selected(sorted(set(queue)), ask=False)
+        page.after(2000, run_redraw_queue)
+    page.after(2000, run_redraw_queue)
 
     table.bind("<Double-1>", edit_prompt)
     table.bind("<<TreeviewSelect>>", show_preview)

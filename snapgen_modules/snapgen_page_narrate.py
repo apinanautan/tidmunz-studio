@@ -147,6 +147,76 @@ STYLES = {
     },
 }
 
+# Thai ghosts GPT often does not know. Looks follow common Thai folklore and
+# are phrased for film (no gore words) so image models do not refuse.
+THAI_GHOSTS = (
+    (("กระสือ", "krasue"), "ผีกระสือ: ศีรษะหญิงสูงวัยหน้าซีดลอยอยู่กลางอากาศตอนกลางคืน ไม่มีร่างกาย ผมยาวยุ่งสยาย ตาเรืองแสง "
+     "ใต้คอมีสายยาวโปร่งแสงสีแดงอมเขียวเรืองแสงห้อยระย้าลงมาแบบพร็อพเอฟเฟกต์ภาพยนตร์สยองขวัญ มีแสงสีเขียวเรืองรอบศีรษะ"),
+    (("กระหัง",), "ผีกระหัง: ชายร่างผอมลอยในความมืด ใช้กระด้งสองใบเป็นปีกที่แขน สากตำข้าวสอดไว้เป็นหาง ตาวาว"),
+    (("ปอบ",), "ผีปอบ: คนที่ถูกผีปอบสิง หน้าซีดเผือด ตาแดงก่ำ ผมยุ่งเหยิง ท่าทางหิวโหยแบบน่ากลัว ในหมู่บ้านอีสานยามค่ำ"),
+    (("เปรต",), "เปรต: ร่างสูงมากผอมเหลือแต่กระดูก ผิวคล้ำแห้ง ปากเล็กเท่ารูเข็ม คอยาว ยืนในวัดยามค่ำคืน"),
+    (("แม่นาก", "นางนาก", "ผีตายท้องกลม", "ตายทั้งกลม"), "ผีหญิงตายทั้งกลม: หญิงสาวชุดไทยโบราณ ผมยาวดำปิดหน้า ผิวซีดขาว "
+     "สายตาเศร้าและน่ากลัว แขนยาวผิดปกติได้"),
+    (("ตานี", "นางตานี"), "นางตานี: หญิงสาวสวยชุดไทยโบราณสีเขียวอ่อน ผิวซีด ปรากฏใต้ต้นกล้วยตานียามค่ำ มีแสงจันทร์"),
+    (("ตะเคียน", "นางตะเคียน"), "นางตะเคียน: หญิงสาวชุดไทยโบราณ ผมยาว สิงอยู่ที่ต้นตะเคียนใหญ่ที่ผูกผ้าสีหลายสี"),
+    (("ผีพราย", "พราย"), "ผีพราย: หญิงสาวผีน้ำ ผมยาวเปียกน้ำ ผิวซีดอมฟ้า โผล่จากน้ำหรือริมน้ำยามค่ำ"),
+    (("ผีโพง", "โพง"), "ผีโพง: ชายผอมแห้ง มีแสงเรืองสีเขียวออกจากจมูก เดินตามทุ่งนายามค่ำ"),
+    (("กองกอย",), "ผีกองกอย: ผีป่าตัวเล็กผอม เดินกระโดดขาเดียว ผมยุ่ง อยู่ในป่าลึก"),
+    (("ผีหัวขาด", "หัวขาด"), "ผีหัวขาด: ร่างชายในชุดทหารโบราณ ถือศีรษะของตัวเองไว้ในมือ ไม่มีศีรษะบนบ่า (เอฟเฟกต์ภาพยนตร์ ไม่เห็นบาดแผล)"),
+    (("ผีปู่โสม", "ปู่โสม"), "ผีปู่โสม: ชายชราผอม เคราขาวยาว เฝ้าไหสมบัติในถ้ำหรือใต้ดิน"),
+    (("ผีเสื้อสมุทร",), "ผีเสื้อสมุทร: ยักษินีร่างใหญ่ในทะเล ผิวเขียวคล้ำ เขี้ยวยาว ผมยาวรุงรัง"),
+)
+
+
+def find_ghosts(text: str, extra=()) -> list:
+    """[(name, look)] for every ghost named in text; extra = GPT research entries."""
+    text = str(text or "")
+    found, seen = [], set()
+    for aliases, look in THAI_GHOSTS:
+        if any(a in text for a in aliases) and aliases[0] not in seen:
+            seen.add(aliases[0])
+            found.append((aliases[0], look))
+    for entry in extra or ():
+        names = [entry.get("name", "")] + list(entry.get("aliases") or [])
+        if entry.get("look") and any(n and n in text for n in names) and names[0] not in seen:
+            seen.add(names[0])
+            found.append((names[0], entry["look"]))
+    return found
+
+
+GHOST_HINT = re.compile(r"ผี|วิญญาณ|ปีศาจ|อมนุษย์|กระสือ|กระหัง|ปอบ|เปรต|พราย|โพง|ตานี|ตะเคียน|ซอมบี้|ยักษ์")
+
+
+def ghost_research_request(script: str) -> str:
+    return (
+        "ในบทนี้มีผี วิญญาณ อมนุษย์ หรือสิ่งเหนือธรรมชาติตามความเชื่อไทยตัวไหนบ้าง (เฉพาะที่มีอยู่ในบทจริง)?\n"
+        "สำคัญ: ก่อนตอบ ให้ค้นข้อมูลจากอินเทอร์เน็ตเกี่ยวกับคติชน/ตำนานผีไทยของแต่ละตัว อย่าเดา "
+        "แล้วบรรยายรูปลักษณ์ภายนอกตามความเชื่อไทยให้ละเอียดพอสำหรับวาดภาพ (รูปร่าง หน้า ผม เสื้อผ้า แสง สถานที่ที่มักปรากฏ) "
+        "ผีไทยหลายตัวในตำนานมีเลือด ไส้ หรือบาดแผล — ให้คงความน่ากลัวไว้แต่แปลงเป็นคำเอฟเฟกต์/พร็อพภาพยนตร์ที่สร้างภาพได้ "
+        "เช่น ไส้ → สายโปร่งแสงสีแดงอมเขียวเรืองแสง, เลือด → คราบสีแดงเข้มแบบเมคอัพภาพยนตร์ ห้ามใช้คำว่า เลือด ไส้ อวัยวะ บาดแผล.\n"
+        "ตอบ JSON เท่านั้น: {\"ghosts\":[{\"name\":\"ชื่อที่ใช้ในบท\",\"aliases\":[\"ชื่ออื่น\"],\"look\":\"ลักษณะสำหรับวาด\",\"source\":\"แหล่งที่ค้น\"}]}"
+        " ถ้าไม่มีให้ตอบ {\"ghosts\":[]}\n\nบท:\n" + script[:12000]
+    )
+
+
+def looks_like_reference_sheet(path) -> bool:
+    """True when a scene image came back as a plain studio reference (flat gray border all round)."""
+    try:
+        from PIL import Image, ImageStat
+        image = Image.open(path).convert("RGB").resize((96, 96))
+    except Exception:
+        return False
+    w, h = image.size
+    # Top edge and the upper two thirds of both sides: a reference's body touches the bottom.
+    border = [image.getpixel((x, y)) for x in range(w) for y in (0, 1)] + \
+             [image.getpixel((x, y)) for y in range(h * 2 // 3) for x in (0, 1, w - 2, w - 1)]
+    lum = [sum(p) / 3 for p in border]
+    mean = sum(lum) / len(lum)
+    spread = (sum((v - mean) ** 2 for v in lum) / len(lum)) ** 0.5
+    sat = sum(max(p) - min(p) for p in border) / len(border)
+    # Measured: references spread <= 8.5, saturation <= 16.5; real scenes spread >= 20.
+    return spread < 11 and 60 <= mean <= 235 and sat < 22
+
 
 class Stopped(Exception):
     pass
@@ -1007,8 +1077,12 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
         project = state["project"]
         encoded = [base64.b64encode(Path(p).read_bytes()).decode("ascii") for p in refs]
         if refs:
-            prompt += "\n\nATTACHED REFERENCES (keep these exact faces, bodies and outfits):\n" + "\n".join(
-                f"Image {i}: {Path(p).stem}" for i, p in enumerate(refs, 1))
+            prompt += (
+                "\n\nATTACHED REFERENCES are ONLY for each character's identity (face, body, outfit):\n"
+                + "\n".join(f"Image {i}: {Path(p).stem}" for i, p in enumerate(refs, 1))
+                + "\nDraw a completely NEW scene picture as described above, with its own setting, background, "
+                "lighting, camera angle and action. Do NOT copy the references' standing pose, plain gray background, "
+                "framing or layout, and never output a character reference sheet or a person on a plain backdrop.")
         out = imgmod.generate_image(
             prompt, output_dir=str(out_dir), name_hint=name, is_edit=bool(encoded),
             ref_images=encoded or None, aspect_ratio=aspect, save_sidecar=False,
@@ -1120,6 +1194,37 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
                 tag = "กลุ่ม" if is_group_character(c) else {"main": "หลัก", "supporting": "รอง", "minor": "ประกอบ"}.get(c.get("importance"), "")
                 labels.append(f"{c['name']}" + (f" ({tag})" if tag else ""))
         log(f"✓ ตัวละคร {len(labels)}: {', '.join(labels)}")
+        research_ghosts()
+
+    def research_ghosts():
+        """Ghost stories: learn how each Thai ghost looks before any picture is drawn."""
+        project = state["project"]
+        if "ghosts" in project:
+            return
+        script = read_script(project["script"])
+        if not (GHOST_HINT.search(script) or project.get("style_mode") == "เรื่องผี"):
+            project["ghosts"] = []
+            return
+        set_progress("context", 0.9, "GPT กำลังค้นข้อมูลผีในเรื่องก่อนสร้างรูป ...")
+        try:
+            reply = with_retries("ค้นข้อมูลผี", lambda: parse_json_reply(chat(ghost_research_request(script))))
+            ghosts = [g_ for g_ in reply.get("ghosts") or [] if isinstance(g_, dict) and g_.get("name") and g_.get("look")]
+        except (Stopped, HistoryLost, RateLimited):
+            raise
+        except Exception as exc:
+            log(f"ค้นข้อมูลผีไม่สำเร็จ ใช้ข้อมูลผีไทยในโปรแกรมแทน: {exc}")
+            ghosts = []
+        try:  # GPT may still write gore words; the image model refuses those
+            from snapgen_page_story_face import soften_injury_text
+            for g_ in ghosts:
+                g_["look"] = soften_injury_text(g_["look"]).replace("ไส้", "สายโปร่งแสงเรืองแสง").replace("อวัยวะ", "สายโปร่งแสง")
+        except Exception:
+            pass
+        project["ghosts"] = ghosts
+        known = [name for name, _look in find_ghosts(script)]
+        names = sorted({g_["name"] for g_ in ghosts} | set(known))
+        log("✓ ผีในเรื่อง: " + (", ".join(names) if names else "ไม่พบ"))
+        save_project()
 
     def stage_transcribe():
         project, folder = state["project"], Path(state["folder"])
@@ -1208,6 +1313,9 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
             set_progress("characters", (n - 1) / max(1, len(todo)), f"ทำรูปตัวละคร {n}/{len(todo)}: {name}")
             prompt = (
                 f"ภาพอ้างอิงตัวละคร '{name}': {character_description(character)}. "
+                + "".join(f"ลักษณะผีตามความเชื่อไทย (ต้องวาดตามนี้): {look}. "
+                          for _n, look in find_ghosts(name, project.get("ghosts") or []))
+                + 
                 "ภาพเต็มตัวยืนตรง หันหน้าเข้ากล้อง เห็นหน้าชัด พื้นหลังสีเทาเรียบ แสงสม่ำเสมอ ไม่มีวัตถุอื่น "
                 + style_text()
             )
@@ -1283,11 +1391,17 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
         details = {c.get("name"): character_description(c) for c in context.get("characters", [])}
         who = "; ".join(f"{n}: {details.get(n, '')}" for n in scene.get("characters") or [])
         location = f" สถานที่: {scene['location']}." if scene.get("location") else ""
-        return f"{scene['prompt']}{location}" + (f"\nตัวละครในภาพ — {who}" if who else "") + f"\n{style_text()}"
+        text = " ".join([scene.get("prompt", ""), " ".join(scene.get("characters") or []), scene.get("location", ""),
+                         str(scene.get("text") or "")])
+        ghosts = find_ghosts(text, state["project"].get("ghosts") or [])
+        ghost_note = ("\nลักษณะผีตามความเชื่อไทย (ต้องวาดตามนี้ ห้ามเดาเอง): " + "; ".join(look for _n, look in ghosts)) if ghosts else ""
+        return (f"{scene['prompt']}{location}" + (f"\nตัวละครในภาพ — {who}" if who else "") + ghost_note
+                + f"\n{style_text()}")
 
     def stage_images(indices=None):
         project = state["project"]
         ensure_story_in_history()
+        research_ghosts()  # stories analysed before this feature
         images_dir = Path(state["folder"]) / "images"
         images_dir.mkdir(exist_ok=True)
         refs = character_refs()
@@ -1310,6 +1424,13 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
             try:
                 scene["image"] = with_retries(f"ฉาก {i + 1}", lambda: make_image(
                     scene_prompt(scene), ref_paths, images_dir, f"scene_{i + 1:03d}", project["aspect"]))
+                if ref_paths and looks_like_reference_sheet(scene["image"]):
+                    # The picture came back as a copy of a reference (plain backdrop): draw the scene again
+                    # without attachments so every shot is a real scene picture.
+                    log(f"ฉาก {i + 1} ออกมาเหมือนรูปอ้างอิง (พื้นหลังเรียบ) — สร้างฉากใหม่")
+                    scene["image"] = with_retries(f"ฉาก {i + 1}", lambda: make_image(
+                        scene_prompt(scene) + "\nภาพฉากจริงที่มีฉากหลังและบรรยากาศตามเรื่อง ห้ามพื้นหลังสีเรียบ",
+                        [], images_dir, f"scene_{i + 1:03d}", project["aspect"]))
                 scene.pop("error", None)
                 failures_in_row = 0
             except (Stopped, HistoryLost, RateLimited):

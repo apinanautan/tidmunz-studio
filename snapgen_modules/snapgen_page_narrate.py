@@ -218,6 +218,63 @@ def looks_like_reference_sheet(path) -> bool:
     return spread < 11 and 60 <= mean <= 235 and sat < 22
 
 
+def local_image_problems(scenes, aspect) -> dict:
+    """Scene pictures that are surely broken: wrong shape (a leftover collage) or a copy of another scene."""
+    import hashlib
+    try:
+        from PIL import Image
+    except Exception:
+        return {}
+    w, h = SIZES.get(aspect, SIZES["16:9"])
+    want = w / h
+    problems, seen = {}, {}
+    for i, scene in enumerate(scenes):
+        path = scene.get("image")
+        if not (path and os.path.isfile(path)):
+            continue
+        try:
+            with Image.open(path) as image:
+                ratio = image.width / image.height
+        except Exception:
+            problems[i] = "เปิดรูปไม่ได้"
+            continue
+        digest = hashlib.md5(Path(path).read_bytes()).hexdigest()
+        if abs(ratio - want) / want > 0.12:
+            problems[i] = "สัดส่วนรูปผิด (น่าจะเป็นภาพหลายช่อง/รูปค้างจากฉากอื่น)"
+        elif digest in seen:
+            problems[i] = f"รูปซ้ำกับฉาก {seen[digest] + 1}"
+        seen.setdefault(digest, i)
+    return problems
+
+
+def contact_sheet_data_url(scenes) -> str:
+    """All scene pictures on one numbered sheet, as a JPEG data URL for one GPT check."""
+    import io
+    from PIL import Image, ImageDraw
+    paths = [(i, s.get("image")) for i, s in enumerate(scenes) if s.get("image") and os.path.isfile(s["image"])]
+    cols, tw, th = 7, 300, 169
+    rows = max(1, (len(paths) + cols - 1) // cols)
+    sheet = Image.new("RGB", (cols * tw, rows * (th + 22)), "white")
+    draw = ImageDraw.Draw(sheet)
+    for n, (i, path) in enumerate(paths):
+        x, y = (n % cols) * tw, (n // cols) * (th + 22)
+        with Image.open(path) as image:
+            thumb = image.convert("RGB")
+            thumb.thumbnail((tw, th))
+        sheet.paste(thumb, (x, y + 22))
+        draw.text((x + 4, y + 4), f"SCENE {i + 1}", fill="red")
+    buffer = io.BytesIO()
+    sheet.save(buffer, "JPEG", quality=75)
+    return "data:image/jpeg;base64," + base64.b64encode(buffer.getvalue()).decode("ascii")
+
+
+IMAGE_CHECK_PROMPT = (
+    "ภาพนี้คือรูปฉากของวิดีโอเรื่องเล่าไทย แต่ละช่องมีเลขฉาก (SCENE n) ตรวจทุกช่องแล้วบอกฉากที่ใช้ไม่ได้: "
+    "1) เป็นภาพหลายช่อง/คอลลาจ/ตารางในรูปเดียว 2) ฉาก บ้านเรือน หรือเครื่องแต่งกายไม่ใช่แบบไทย (เช่น จีน ญี่ปุ่น ตะวันตก){abroad} "
+    "3) มีตัวหนังสือ/ลายน้ำ 4) ภาพเสียหรือว่างเปล่า "
+    'ตอบ JSON เท่านั้น {{"bad":[{{"scene":n,"reason":"สั้นๆ"}}]}} ถ้าดีหมดตอบ {{"bad":[]}}')
+
+
 class Stopped(Exception):
     pass
 
@@ -815,6 +872,7 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
     table_frame.pack(fill="both", expand=True, padx=8, pady=4)
     columns = ("no", "time", "chars", "prompt", "status")
     table = ttk.Treeview(table_frame, columns=columns, show="headings", height=10, selectmode="extended")
+    table.tag_configure("bad", foreground="#DC2626")
     for key, title, width in (("no", "#", 44), ("time", "เวลา", 64), ("chars", "ตัวละคร", 170),
                               ("prompt", "ภาพ", 560), ("status", "รูป", 80)):
         table.heading(key, text=title)
@@ -983,10 +1041,12 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
         for i, scene in enumerate((state["project"] or {}).get("scenes", [])):
             image = scene.get("image")
             status = "✓" if image and os.path.isfile(image) else ("ผิดพลาด" if scene.get("error") else "—")
+            if scene.get("bad"):
+                status = "ต้องเจนใหม่: " + scene["bad"]
             if video_mode:
                 clip = scene.get("clip")
                 status = f"รูป{status} คลิป" + ("✓" if clip and os.path.isfile(clip) else ("✗" if scene.get("clip_error") else "—"))
-            table.insert("", "end", iid=str(i), values=(
+            table.insert("", "end", iid=str(i), tags=("bad",) if scene.get("bad") else (), values=(
                 i + 1, fmt_time(scene.get("start")), ", ".join(scene.get("characters") or []),
                 scene.get("prompt", "").replace("\n", " "), status))
 
@@ -1297,7 +1357,9 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
         if mood:
             # The chosen story style overrides the Context's general look.
             style = mood
-        return f"สไตล์: {style}. ยุค/บรรยากาศ: {era}." if era else f"สไตล์: {style}."
+        thai = (" ฉาก บ้านเรือน วัด ร้านค้า เครื่องแต่งกาย และผู้คนเป็นแบบไทยของประเทศไทย "
+                "ห้ามออกเป็นแบบจีน ญี่ปุ่น เกาหลี หรือตะวันตก เว้นแต่บทระบุว่าอยู่ต่างประเทศ.")
+        return (f"สไตล์: {style}. ยุค/บรรยากาศ: {era}." if era else f"สไตล์: {style}.") + thai
 
     def stage_characters():
         project = state["project"]
@@ -1400,6 +1462,7 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
 
     def stage_images(indices=None):
         project = state["project"]
+        project["images_verified"] = False
         ensure_story_in_history()
         research_ghosts()  # stories analysed before this feature
         images_dir = Path(state["folder"]) / "images"
@@ -1447,8 +1510,76 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
         if missing:
             raise RuntimeError(f"ยังขาดรูปฉาก {', '.join(map(str, missing[:15]))} — กดเริ่มอีกครั้งเพื่อลองใหม่")
         log(f"✓ รูปครบ {len(scenes)} ฉาก")
+        if indices is None:
+            verify_images()
+
+    def gpt_image_problems(scenes):
+        """One look by GPT at a numbered sheet of every scene (temporary chat, not the story history)."""
+        story = (state["project"].get("context") or {}).get("story") or {}
+        place = story.get("main_location") or ""
+        prompt = IMAGE_CHECK_PROMPT.format(abroad=f" — สถานที่หลักของเรื่อง: {place}" if place else "")
+        body = {"model": "auto", "temporary_chat": True, "chatgpt_image_intercept": False, "messages": [{
+            "role": "user", "content": [{"type": "text", "text": prompt},
+                                        {"type": "image_url", "image_url": {"url": contact_sheet_data_url(scenes)}}]}]}
+        request = urllib.request.Request(
+            g["_chatgpt_api_base"]() + "/chat/completions", data=json.dumps(body).encode("utf-8"),
+            headers={"Authorization": "Bearer local-dev-key", "Content-Type": "application/json"}, method="POST")
+        with g.get("_bridge_queue_lock") or threading.Lock():
+            with urllib.request.urlopen(request, timeout=600) as response:
+                data = json.loads(response.read().decode("utf-8", errors="replace"))
+        reply = ((data.get("choices") or [{}])[0].get("message") or {}).get("content") or ""
+        found = {}
+        for item in (parse_json_reply(str(reply)) or {}).get("bad") or []:
+            try:
+                n = int(item.get("scene")) - 1
+            except (TypeError, ValueError, AttributeError):
+                continue
+            if 0 <= n < len(scenes):
+                found[n] = str(item.get("reason") or "GPT ตรวจว่าใช้ไม่ได้")[:80]
+        return found
+
+    def verify_images(rounds=3):
+        """Before the video: find broken scene pictures, mark them red and draw them again until they pass."""
+        project = state["project"]
+        scenes = project["scenes"]
+        for round_no in range(1, rounds + 2):
+            check_stop()
+            set_progress("images", 1.0, f"ตรวจรูปทุกฉากก่อนตัดต่อ (รอบ {round_no})")
+            problems = local_image_problems(scenes, project["aspect"])
+            try:
+                for i, reason in gpt_image_problems(scenes).items():
+                    problems.setdefault(i, reason)
+            except Exception as exc:
+                log(f"GPT ตรวจรูปไม่สำเร็จ ({str(exc)[:120]}) — ใช้ผลตรวจในเครื่องอย่างเดียว")
+            for i, scene in enumerate(scenes):
+                scene.pop("bad", None)
+                if i in problems:
+                    scene["bad"] = problems[i]
+            save_project()
+            ui(refresh_table)
+            if not problems:
+                project["images_verified"] = True
+                save_project()
+                log("✓ ตรวจรูปแล้ว ใช้ได้ทุกฉาก")
+                return
+            if round_no > rounds:
+                break
+            log("รูปที่ต้องเจนใหม่: " + ", ".join(f"ฉาก {i + 1} ({r})" for i, r in sorted(problems.items())))
+            for i in problems:
+                image = scenes[i].get("image")
+                if image and os.path.isfile(image):
+                    os.remove(image)
+                scenes[i]["image"] = None
+                scenes[i]["prompt"] = scenes[i].get("prompt", "") if "ภาพเดียวเต็มเฟรม" in scenes[i].get("prompt", "") else \
+                    scenes[i].get("prompt", "") + " (ภาพเดียวเต็มเฟรม ไม่แบ่งช่อง ฉากแบบไทย)"
+            stage_images(sorted(problems))
+        left = [i + 1 for i, s in enumerate(scenes) if s.get("bad")]
+        raise RuntimeError(f"รูปฉาก {', '.join(map(str, left))} ยังใช้ไม่ได้หลังเจนใหม่ {rounds} รอบ — "
+                           "เลือกฉากแล้วกดสร้างรูปใหม่ หรือกดเริ่มอีกครั้ง")
 
     def stage_video():
+        if not state["project"].get("images_verified"):
+            verify_images()
         project, folder = state["project"], Path(state["folder"])
         ffmpeg = ffmpeg_path()
         width, height = SIZES.get(project["aspect"], SIZES["16:9"])

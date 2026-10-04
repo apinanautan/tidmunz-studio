@@ -1162,8 +1162,8 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
     bg = box.cget("bg")
 
     state = {"project": None, "folder": None, "busy": False, "stop": False, "lock": threading.RLock()}
-    script_var = tk.StringVar(value="ลากไฟล์บทมาวาง หรือกดเลือก (.docx / .txt)")
-    audio_var = tk.StringVar(value="ลากไฟล์เสียงมาวาง หรือกดเลือก (.wav / .mp3 / .m4a)")
+    script_var = tk.StringVar(value="ลากไฟล์มาวาง หรือกดเลือก (.docx / .txt)")
+    audio_var = tk.StringVar(value="ลากไฟล์มาวาง หรือกดเลือก (.wav / .mp3 / .m4a)")
     aspect_var = tk.StringVar(value="16:9")
     count_var = tk.StringVar(value="36")
     subtitle_var = tk.BooleanVar(value=False)
@@ -1227,14 +1227,16 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
 
     # ── input row ──
     inputs = tk.Frame(box, bg=bg)
-    inputs.pack(fill="x", padx=8, pady=(6, 2))
+    inputs.pack(fill="x", padx=8, pady=(4, 0))
 
     def file_card(parent, title, var, command):
+        # One slim line (title · file · button): the plan table needs the room more.
         card = tk.Frame(parent, bg="#FFFFFF", highlightthickness=1, highlightbackground="#CBD5E1")
         card.pack(side="left", fill="x", expand=True, padx=(0, 8))
-        tk.Label(card, text=title, bg="#FFFFFF", fg="#0F172A", font=("TkDefaultFont", 10, "bold")).pack(anchor="w", padx=10, pady=(8, 0))
-        tk.Label(card, textvariable=var, bg="#FFFFFF", fg="#475569", anchor="w", wraplength=420, justify="left").pack(fill="x", padx=10)
-        make_styled_button(card, "SECONDARY", "เลือกไฟล์", command=command).pack(anchor="w", padx=10, pady=(4, 8))
+        tk.Label(card, text=title, bg="#FFFFFF", fg="#0F172A", font=("TkDefaultFont", 9, "bold")).pack(side="left", padx=(8, 4), pady=3)
+        tk.Button(card, text="เลือก…", command=command, relief="flat", bg="#E2E8F0", fg="#0F172A",
+                  cursor="hand2", padx=8).pack(side="right", padx=4, pady=3)
+        tk.Label(card, textvariable=var, bg="#FFFFFF", fg="#475569", anchor="w").pack(side="left", fill="x", expand=True)
         return card
 
     options = tk.Frame(box, bg=bg)
@@ -1472,8 +1474,8 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
         else:
             log(f"เสียงยาว {fmt_time(duration)} → {count_var.get()} รูป เปลี่ยนภาพเฉลี่ยทุก {duration / int(count_var.get()):.0f} วินาที")
 
-    file_card(inputs, "📄 ไฟล์บท", script_var, choose_script)
-    file_card(inputs, "🎙 ไฟล์เสียงบรรยาย", audio_var, choose_audio)
+    file_card(inputs, "📄 บท", script_var, choose_script)
+    file_card(inputs, "🎙 เสียง", audio_var, choose_audio)
 
     def enable_drop(widget, handler):
         try:
@@ -1660,6 +1662,12 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
                     friendly = runtime.get("_snapgen_friendly_bridge_error") or g.get("_snapgen_friendly_bridge_error")
                     message = friendly(str(exc)) if callable(friendly) else str(exc)
                     raise RateLimited(message) from exc
+                if "401" in str(exc) and ("ChatGPT" in str(exc) or "Provider status" in str(exc)):
+                    # The account this story's history lives on has to log in again; retrying cannot help.
+                    alias = ((state["project"] or {}).get("conversation") or {}).get("account_alias") or "บัญชีที่ใช้อยู่"
+                    raise RuntimeError(
+                        f"บัญชี ChatGPT ({alias}) ต้องล็อกอินใหม่ใน Bridge (401) — ประวัติของเรื่องนี้อยู่ใน {alias} "
+                        "ล็อกอินบัญชีนี้ใหม่แล้วกดทำต่อ หรือกด 'เริ่มประวัติ GPT ใหม่' เพื่อทำต่อในบัญชีที่ใช้ได้") from exc
                 log(f"❌ {label} ครั้งที่ {attempt}: {str(exc)[:200]}")
                 if "GPT said:" in str(exc) or "safety policy" in text:
                     # GPT refused this prompt: asking the same thing again only burns time.

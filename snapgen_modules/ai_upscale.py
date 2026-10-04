@@ -21,8 +21,7 @@ def _waifu2x_install_complete(folder): return True
 def ensure_waifu2x_tool(log=None): return "ffmpeg"
 
 def _probe_video(ffmpeg, path):
-    r = subprocess.run([ffmpeg, "-hide_banner", "-i", str(path)], capture_output=True, text=True, timeout=30, encoding="utf-8", errors="replace",
-                       creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    r = subprocess.run([ffmpeg, "-hide_banner", "-i", str(path)], capture_output=True, text=True, timeout=30, encoding="utf-8", errors="replace")
     vt = (r.stderr or "") + (r.stdout or "")
     vl = next((l for l in vt.splitlines() if "Video:" in l), "")
     m = re.search(r"[^\d](\d{2,5})x(\d{2,5})[^\d]", vl)
@@ -66,8 +65,7 @@ def upscale_video_ai(input_video, output_video=None, target_height=720, log=None
         else:
             cmd += ["-c:v", _enc, "-b:v", "8M"]
         cmd += ["-pix_fmt", "yuv420p", "-movflags", "+faststart", str(out)]
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=1800, encoding="utf-8", errors="replace",
-                       creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=1800, encoding="utf-8", errors="replace")
         if r.returncode: raise RuntimeError(r.stderr[-500:] if r.stderr else "ffmpeg error")
         if _video_ok(out):
             say(f"[upscale] Resize+sharpen done: {out.name}")

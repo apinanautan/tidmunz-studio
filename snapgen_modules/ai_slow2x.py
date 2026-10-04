@@ -3,20 +3,6 @@
 import os, re, shutil, subprocess, sys, tempfile, threading, time, zipfile
 from pathlib import Path
 
-# RIFE and FFmpeg are console programs: without this flag Windows flashes a
-# black console window for every Slow 2x clip.
-NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-
-
-def _run(*args, **kwargs):
-    kwargs.setdefault("creationflags", NO_WINDOW)
-    return subprocess.run(*args, **kwargs)
-
-
-def _popen(*args, **kwargs):
-    kwargs.setdefault("creationflags", NO_WINDOW)
-    return subprocess.Popen(*args, **kwargs)
-
 RIFE_RELEASE_URL = "https://github.com/nihui/rife-ncnn-vulkan/releases/download/20221029/rife-ncnn-vulkan-20221029-windows.zip"
 _tool_install_lock = threading.Lock()
 
@@ -97,7 +83,7 @@ def ensure_ffmpeg_tool(log=None):
         try:
             import imageio_ffmpeg
         except Exception:
-            result = _run(
+            result = subprocess.run(
                 [sys.executable, "-m", "pip", "install", "--disable-pip-version-check", "imageio-ffmpeg"],
                 capture_output=True, text=True, timeout=600, encoding="utf-8", errors="replace",
             )
@@ -186,7 +172,7 @@ def ensure_rife_tool(log=None):
 
 def _probe_video(ffmpeg, path):
     """Read source FPS and audio presence from FFmpeg without ffprobe."""
-    r = _run([ffmpeg, "-hide_banner", "-i", str(path)], capture_output=True, text=True, timeout=30, encoding="utf-8", errors="replace")
+    r = subprocess.run([ffmpeg, "-hide_banner", "-i", str(path)], capture_output=True, text=True, timeout=30, encoding="utf-8", errors="replace")
     text = (r.stderr or "") + "\n" + (r.stdout or "")
     video_line = next((line for line in text.splitlines() if "Video:" in line), "")
     match = re.search(r"(?:,|\s)(\d+(?:\.\d+)?)\s+fps(?:,|\s)", video_line)
@@ -254,7 +240,7 @@ def make_ai_slow2x(input_video, output_video=None, factor=2, log=None, **_kwargs
             out_dir = tmp_dir / "out"
             in_dir.mkdir()
             out_dir.mkdir()
-            extracted = _run([
+            extracted = subprocess.run([
                 ffmpeg, "-y", "-i", str(inp), "-vsync", "0", str(in_dir / "%08d.png")
             ], capture_output=True, text=True, timeout=900, encoding="utf-8", errors="replace")
             if extracted.returncode:
@@ -282,7 +268,7 @@ def make_ai_slow2x(input_video, output_video=None, factor=2, log=None, **_kwargs
             rife_command = [
                 rife, "-i", str(in_dir), "-o", str(out_dir), "-f", "%08d.png"
             ]
-            _proc = _popen(rife_command, cwd=str(Path(rife).parent), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            _proc = subprocess.Popen(rife_command, cwd=str(Path(rife).parent), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             while _proc.poll() is None:
                 _poll_progress()
                 time.sleep(3)
@@ -295,7 +281,7 @@ def make_ai_slow2x(input_video, output_video=None, factor=2, log=None, **_kwargs
                 shutil.rmtree(out_dir, ignore_errors=True)
                 out_dir.mkdir()
                 _last_pct = -1
-                _proc2 = _popen(
+                _proc2 = subprocess.Popen(
                     [*rife_command, "-g", "-1"],
                     cwd=str(Path(rife).parent), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                 )
@@ -318,7 +304,7 @@ def make_ai_slow2x(input_video, output_video=None, factor=2, log=None, **_kwargs
                     _slow_cmd += ["-c:v", "libx264", "-preset", "medium", "-crf", "18",
                                   "-pix_fmt", "yuv420p", "-movflags", "+faststart", str(out)]
                     say("[slow2x] FFmpeg minterpolate running...")
-                    _r = _run(_slow_cmd, capture_output=True, text=True, timeout=1800, encoding="utf-8", errors="replace")
+                    _r = subprocess.run(_slow_cmd, capture_output=True, text=True, timeout=1800, encoding="utf-8", errors="replace")
                     if _r.returncode:
                         err = (_r.stderr or "")[-400:].strip()
                         raise RuntimeError("FFmpeg minterpolate failed: " + (err or "unknown"))
@@ -344,7 +330,7 @@ def make_ai_slow2x(input_video, output_video=None, factor=2, log=None, **_kwargs
                 "-c:v", "libx264", "-preset", "medium", "-crf", "18",
                 "-pix_fmt", "yuv420p", "-movflags", "+faststart", str(out),
             ]
-            r = _run(encode, capture_output=True, text=True, timeout=1800, encoding="utf-8", errors="replace")
+            r = subprocess.run(encode, capture_output=True, text=True, timeout=1800, encoding="utf-8", errors="replace")
             if r.returncode:
                 raise RuntimeError((r.stderr or r.stdout or "ffmpeg encode failed")[-1200:])
             if _video_ok(out):

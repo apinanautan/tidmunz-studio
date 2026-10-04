@@ -507,8 +507,9 @@ def pick_clip(length: float, slow_ok: bool, cheap_ok: bool = False) -> tuple:
     return options[-1]
 
 
-def clip_limit(_scene: dict) -> float:
-    return SHOT_LIMIT
+def clip_limit(scene: dict) -> float:
+    """Longest shot one clip covers: 12 s, or 20 s (grok 10 s + Slow 2x) for slow shots."""
+    return 20.0 if scene.get("slow") else SHOT_LIMIT
 
 
 def assign_clips(scenes: list, duration: float) -> None:
@@ -742,24 +743,112 @@ def plan_request(window: list, count: int, names: list, previous: str, era: str,
         + PACING_NOTE + (HORROR_NOTE if horror else "") +
         f"ยุค/บรรยากาศ: {era}. ตัวละครที่ใช้ได้ (ใช้ชื่อตรงตัวเท่านั้น): {', '.join(names) or '-'}. "
         + (f"ภาพก่อนหน้าคือ: {previous}. " if previous else "")
-        + ("แต่ละช็อตจะเป็นคลิปวิดีโอ AI หนึ่งคลิป ให้ช็อตยาวประมาณ 6–11 วินาทีของเสียง (เฉลี่ยราว 8–10) "
-           "ตัดช็อตใหม่ตรงจุดที่ขึ้นประโยค เหตุการณ์ หรือสถานที่ใหม่ ห้ามยาวเกิน 12 วินาที "
-           "และอย่าซอยสั้นเกินจำเป็น (คลิปยิ่งน้อยยิ่งประหยัดเครดิต). "
-           "slow = true เมื่อช็อตนั้นเหมาะกับภาพสโลว์โมชัน 2 เท่า (บรรยากาศ วิว ฉากเงียบ เศร้า ลึกลับ การเคลื่อนไหวช้าๆ); "
-           "false เมื่อมีแอ็กชันเร็ว ต่อสู้ วิ่ง หรือท่าทางที่ต้องดูเป็นธรรมชาติ. "
-           "cheap = true เมื่อเป็นช็อตง่ายที่ไม่สำคัญ ใช้โมเดลราคาถูกได้ (วิว สถานที่ สิ่งของ ท้องฟ้า คนไกลๆ ขยับน้อย); "
-           "false เมื่อเป็นช็อตสำคัญ เห็นหน้าตัวละครชัด มีการกระทำหรืออารมณ์ที่ต้องการคุณภาพ. "
-           if clip_seconds else "")
-        + "ตอบ JSON เท่านั้น: {\"scenes\":[{\"start\":0.0,\"characters\":[],\"location\":\"\",\"prompt\":\"\",\"motion\":\"\",\"highlight\":false"
-        + (",\"video_prompt\":\"\",\"slow\":false,\"cheap\":false" if clip_seconds else "") + "}]} "
+        + "ตอบ JSON เท่านั้น: {\"scenes\":[{\"start\":0.0,\"characters\":[],\"location\":\"\",\"prompt\":\"\",\"motion\":\"\",\"highlight\":false}]} "
         "start = เวลาเริ่มของประโยคที่ภาพนี้เริ่ม (ต้องเป็นตัวเลขในวงเล็บด้านล่าง). "
         "characters = ชื่อตัวละครที่ปรากฏในภาพนี้ (ว่างได้ถ้าเป็นภาพสถานที่). "
         "prompt = คำบรรยายภาพนิ่งภาษาไทย: ใครทำอะไร ที่ไหน เวลา แสง มุมกล้อง อารมณ์ ไม่มีตัวหนังสือในภาพ. "
         f"motion = หนึ่งใน {', '.join(MOTIONS)}. "
-        + ("video_prompt = คำสั่งการเคลื่อนไหวของคลิปภาษาไทยที่เริ่มจากภาพนิ่งนี้: "
-           "ใครขยับอย่างไร สีหน้า การเคลื่อนไหวของสิ่งรอบตัว และกล้องเคลื่อนอย่างไร ไม่มีบทพูด ไม่มีตัวหนังสือ. "
-           if clip_seconds else "")
         + "\n\n" + lines
+    )
+
+
+def video_shots(segments: list, target: float = 8.0, limit: float = SHOT_LIMIT) -> list:
+    """Video mode: cut the narration into shots of whole sentences, about 6–11 s each.
+
+    Sentences are joined until the shot reaches ``target`` s, never past
+    ``limit`` s; a single sentence longer than ``limit`` stays one shot (it is
+    split into continuing shots later).  Shot boundaries are always sentence
+    starts, so every clip begins where the narration starts something new.
+    """
+    shots = []
+    for seg in segments:
+        if shots:
+            shot = shots[-1]
+            joined = seg["end"] - shot["start"]
+            if shot["end"] - shot["start"] < target and joined <= limit:
+                shot["end"] = seg["end"]
+                shot["text"] += " " + seg["text"]
+                continue
+        shots.append({"start": 0.0 if not shots else seg["start"], "end": seg["end"], "text": seg["text"]})
+    # A short last shot joins the one before it when that still fits.
+    if len(shots) > 1 and shots[-1]["end"] - shots[-1]["start"] < 4 and shots[-1]["end"] - shots[-2]["start"] <= limit:
+        last = shots.pop()
+        shots[-1]["end"], shots[-1]["text"] = last["end"], shots[-1]["text"] + " " + last["text"]
+    return shots
+
+
+def plan_video(segments: list, duration: float, names: list, era: str, ask, horror: bool = False,
+               progress=None, out: list | None = None, batch: int = 20) -> list:
+    """Video mode plan: program-cut shots, GPT writes each one, every shot gets a clip choice.
+
+    ``ask(prompt) -> dict`` talks to GPT.  Shots GPT skipped are asked again
+    once; any still missing reuse the narration text so nothing is left blank.
+    """
+    shots = video_shots(segments)
+    scenes = out if out is not None else []
+    for first in range(0, len(shots), batch):
+        group = shots[first:first + batch]
+        previous = scenes[-1]["prompt"][:200] if scenes else ""
+        numbers = list(range(first + 1, first + len(group) + 1))
+        items = {}
+        for _attempt in range(2):
+            wanted = [n for n in numbers if n not in items]
+            if not wanted:
+                break
+            reply = ask(video_plan_request([(n, shots[n - 1]) for n in wanted], names, previous, era, horror))
+            for item in reply.get("scenes") or []:
+                if not isinstance(item, dict) or not str(item.get("prompt") or "").strip():
+                    continue
+                try:
+                    number = int(item.get("shot"))
+                except (TypeError, ValueError):
+                    continue
+                if number in wanted:
+                    items.setdefault(number, item)
+        for n, shot in zip(numbers, group):
+            item = items.get(n) or {"prompt": shot["text"], "video_prompt": shot["text"]}
+            scenes.append({
+                "start": shot["start"], "text": shot["text"],
+                "characters": [c for c in (item.get("characters") or []) if c in names],
+                "location": str(item.get("location") or ""),
+                "prompt": str(item.get("prompt") or "").strip(),
+                "video_prompt": str(item.get("video_prompt") or "").strip(),
+                "motion": MOTIONS[len(scenes) % len(MOTIONS)],
+                "slow": str(item.get("slow")).lower() == "true",
+                "cheap": str(item.get("cheap")).lower() == "true",
+            })
+        if progress:
+            progress(min(len(shots), first + batch), len(shots), group[0]["start"])
+    split = split_long_scenes(scenes, duration, 0, limit_for=clip_limit)
+    scenes[:] = split
+    assign_clips(scenes, duration)
+    return scenes
+
+
+def video_plan_request(numbered: list, names: list, previous: str, era: str, horror: bool = False) -> str:
+    """Ask GPT to write one AI video clip per given (number, shot) — the cuts are already fixed."""
+    lines = "\n".join(f"[{n}] {s['start']:.1f}–{s['end']:.1f} ({s['end'] - s['start']:.0f} วิ) {s['text']}"
+                      for n, s in numbered)
+    return (
+        f"วางแผนคลิปวิดีโอ AI ประกอบเสียงบรรยาย {len(numbered)} ช็อต "
+        "(แบ่งช็อตตามประโยคไว้แล้วด้านล่าง: เลขช็อต เวลา ความยาว และคำบรรยายของช็อตนั้น). "
+        "เขียนให้ครบทุกช็อต ช็อตละ 1 รายการ ห้ามรวม ห้ามข้าม. แต่ละช็อตต้องเห็นเหตุการณ์ของคำบรรยายช็อตนั้นเอง "
+        "ห้ามใช้ภาพซ้ำกับช็อตก่อน ช็อตติดกันต้องต่างมุมกล้องหรือขนาดภาพ แต่ตัวละคร สถานที่ และแสงต่อเนื่องกัน. "
+        "ห้ามวาดคนเล่าเรื่อง ผู้บรรยาย ไมโครโฟน หรือห้องอัดเสียง; บทพูดของตัวละครให้เป็นภาพตัวละครนั้นแสดงอารมณ์ตามคำพูด. "
+        + (HORROR_NOTE if horror else "")
+        + f"ยุค/บรรยากาศ: {era}. ตัวละครที่ใช้ได้ (ใช้ชื่อตรงตัวเท่านั้น): {', '.join(names) or '-'}. "
+        + (f"ช็อตก่อนหน้าคือ: {previous}. " if previous else "")
+        + "ตอบ JSON เท่านั้น: {\"scenes\":[{\"shot\":1,\"characters\":[],\"location\":\"\",\"prompt\":\"\","
+        "\"video_prompt\":\"\",\"slow\":false,\"cheap\":false}]} "
+        "shot = เลขช็อตในวงเล็บ. characters = ชื่อตัวละครที่ปรากฏในภาพ (ว่างได้ถ้าเป็นภาพสถานที่). "
+        "prompt = ภาพแรกของคลิป ภาษาไทย: ใครทำอะไร ที่ไหน เวลา แสง มุมกล้อง อารมณ์ ไม่มีตัวหนังสือในภาพ. "
+        "video_prompt = การเคลื่อนไหวตลอดคลิปที่เริ่มจากภาพนั้น ภาษาไทย: ใครขยับอย่างไร สีหน้า สิ่งรอบตัว "
+        "และกล้องเคลื่อนอย่างไร ให้เต็มความยาวช็อต ไม่มีบทพูด ไม่มีตัวหนังสือ. "
+        "slow = true เมื่อเหมาะกับภาพสโลว์โมชัน 2 เท่า (บรรยากาศ วิว ฉากเงียบ เศร้า ลึกลับ การเคลื่อนไหวช้าๆ); "
+        "false เมื่อมีแอ็กชันเร็ว ต่อสู้ วิ่ง หรือท่าทางที่ต้องดูเป็นธรรมชาติ. "
+        "cheap = true เฉพาะช็อตง่ายที่ไม่สำคัญ (วิว ทะเล ท้องฟ้า สถานที่ สิ่งของ ขยับน้อย ไม่เห็นหน้าตัวละครชัด) "
+        "ใช้โมเดลราคาถูกได้; false เมื่อเห็นตัวละครชัด มีการกระทำหรืออารมณ์สำคัญ."
+        "\n\n" + lines
     )
 
 
@@ -1562,6 +1651,24 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
         context = project.get("context") or {}
         names = [c.get("name") for c in context.get("characters", []) if c.get("name")]
         era = (context.get("story") or {}).get("era") or ""
+        if video_mode:
+            # Shots are cut at sentence starts by the program; GPT writes each one.
+            def ask(prompt):
+                check_stop()
+                return with_retries("วางแผนคลิป", lambda: parse_json_reply(chat(prompt)))
+
+            def progress(done, total, start):
+                set_progress("plan", done / total, f"วางแผนคลิป {done}/{total} ({fmt_time(start)})")
+                project["scenes"] = scenes_so_far
+                save_project()
+                ui(refresh_table)
+            scenes_so_far = []
+            plan_video(segments, float(project["duration"]), names, era, ask,
+                       horror=project.get("style_mode") == "เรื่องผี", progress=progress, out=scenes_so_far)
+            project["scenes"] = scenes_so_far
+            save_project()
+            log(f"✓ วางแผน {len(scenes_so_far)} คลิป ({clip_summary(scenes_so_far)})")
+            return
         windows = plan_windows(segments)
         planned = project.setdefault("planned_windows", 0)
         scenes = project["scenes"] if planned else []
@@ -1597,8 +1704,6 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
                     "video_prompt": str(item.get("video_prompt") or "").strip(),
                     "motion": item.get("motion") if item.get("motion") in MOTIONS else MOTIONS[len(scenes) % 4],
                     "highlight": bool(item.get("highlight")),
-                    "slow": str(item.get("slow")).lower() == "true",
-                    "cheap": str(item.get("cheap")).lower() == "true",
                 })
             project["scenes"] = scenes
             project["planned_windows"] = w + 1
@@ -1610,17 +1715,7 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
             scenes = limit_scenes(scenes, target, float(project["duration"]))
             project["scenes"] = scenes
             save_project()
-        if video_mode:
-            before = len(scenes)
-            scenes = split_long_scenes(scenes, float(project["duration"]), 0, limit_for=clip_limit)
-            assign_clips(scenes, float(project["duration"]))
-            project["scenes"] = scenes
-            save_project()
-            if len(scenes) > before:
-                log(f"แบ่งช็อตที่ยาวเกินคลิปเพิ่ม {len(scenes) - before} ช็อต (ไม่ให้ภาพค้างนาน)")
-            log(f"✓ วางแผน {len(scenes)} คลิป ({clip_summary(scenes)})")
-        else:
-            log(f"✓ วางแผน {len(scenes)} ฉาก (ไม่เกิน {target} รูป)")
+        log(f"✓ วางแผน {len(scenes)} ฉาก (ไม่เกิน {target} รูป)")
 
     def scene_prompt(scene):
         context = state["project"].get("context") or {}

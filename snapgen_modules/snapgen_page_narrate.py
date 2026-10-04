@@ -483,17 +483,74 @@ def limit_scenes(scenes: list, target: int, duration: float) -> list:
     return scenes
 
 
-def split_long_scenes(scenes: list, duration: float, clip_seconds: float, max_factor: float = 1.6) -> list:
+VIDEO_AUTO_MODEL = "grok-lower"
+VIDEO_CHEAP_MODEL = "vela-ai-video"
+GROK_CLIP_SECONDS = (6, 10, 15)  # lengths grok-lower accepts; AI Slow 2x doubles a clip
+VELA_CLIP_SECONDS = 5  # vela-ai-video only makes 5 s
+VIDEO_AUTO_AVG_SECONDS = 8  # average shot length used to size the plan
+SHOT_LIMIT = 12.0  # longer shots are split into continuing shots
+CLIP_STRETCH = 1.15  # a clip may be slowed this much unnoticed to fill its shot
+
+
+def pick_clip(length: float, slow_ok: bool, cheap_ok: bool = False) -> tuple:
+    """Cheapest (model, seconds, slow) whose finished clip covers ``length`` s of narration.
+
+    vela (cheap, 5 s) first when the shot allows it, then grok-lower by
+    requested seconds, plain before Slow 2x.
+    """
+    slows = (False, True) if slow_ok else (False,)
+    options = [(VIDEO_CHEAP_MODEL, VELA_CLIP_SECONDS, slow) for slow in slows] if cheap_ok else []
+    options += [(VIDEO_AUTO_MODEL, s, slow) for s in GROK_CLIP_SECONDS for slow in slows]
+    for model, seconds, slow in options:
+        if seconds * (2 if slow else 1) * CLIP_STRETCH >= length - CROSSFADE:
+            return model, seconds, slow
+    return options[-1]
+
+
+def clip_limit(_scene: dict) -> float:
+    return SHOT_LIMIT
+
+
+def assign_clips(scenes: list, duration: float) -> None:
+    """Store each shot's model, clip length and Slow 2x choice from its narration length."""
+    for scene, length in zip(scenes, segment_durations([s["start"] for s in scenes], duration)):
+        if scene.get("clip_fallback"):  # vela already failed here: stay on grok-lower
+            scene["cheap"] = False
+        scene["shot_seconds"] = length
+        scene["clip_model"], scene["clip_seconds"], scene["clip_slow"] = pick_clip(
+            length, bool(scene.get("slow")), bool(scene.get("cheap")))
+
+
+def clip_label(scene: dict) -> str:
+    model = "vela" if scene.get("clip_model") == VIDEO_CHEAP_MODEL else "grok"
+    return f"{model} {scene.get('clip_seconds', '?')}วิ" + (" สโลว์×2" if scene.get("clip_slow") else "")
+
+
+def clip_summary(scenes: list) -> str:
+    """'grok 10วิ = 4 คลิป, vela 5วิ สโลว์×2 = 3 คลิป' count of planned clips."""
+    counts = {}
+    for scene in scenes:
+        counts[clip_label(scene)] = counts.get(clip_label(scene), 0) + 1
+    return ", ".join(f"{label} = {n} คลิป" for label, n in sorted(counts.items(), key=lambda kv: kv[0]))
+
+
+def split_long_scenes(scenes: list, duration: float, clip_seconds: float, max_factor: float = 1.6,
+                      limit_for=None) -> list:
     """Video mode: a shot longer than ~1.6 clips becomes continuing sub-shots.
 
     A narration sentence can run 20 s while a clip lasts 6 s; one clip would
-    otherwise be slowed and then frozen for most of that time.
+    otherwise be slowed and then frozen for most of that time. ``limit_for``
+    gives a per-shot maximum instead (grok-lower: 15 s, 30 s with Slow 2x).
     """
     out = []
     durs = segment_durations([s["start"] for s in scenes], duration)
     for scene, length in zip(scenes, durs):
         parts = 1
-        if clip_seconds > 0 and length > clip_seconds * max_factor:
+        if limit_for is not None:
+            limit = limit_for(scene)
+            if length > limit:
+                parts = int(-(-length // limit))
+        elif clip_seconds > 0 and length > clip_seconds * max_factor:
             parts = int(-(-length // clip_seconds))
         for j in range(parts):
             piece = dict(scene, start=round(scene["start"] + j * length / parts, 2))
@@ -685,15 +742,21 @@ def plan_request(window: list, count: int, names: list, previous: str, era: str,
         + PACING_NOTE + (HORROR_NOTE if horror else "") +
         f"ยุค/บรรยากาศ: {era}. ตัวละครที่ใช้ได้ (ใช้ชื่อตรงตัวเท่านั้น): {', '.join(names) or '-'}. "
         + (f"ภาพก่อนหน้าคือ: {previous}. " if previous else "")
-        + (f"แต่ละช็อตจะเป็นคลิปวิดีโอยาว {clip_seconds:g} วินาที ช็อตหนึ่งไม่ควรยาวเกิน {clip_seconds * 1.5:g} วินาทีของเสียง. "
+        + ("แต่ละช็อตจะเป็นคลิปวิดีโอ AI หนึ่งคลิป ให้ช็อตยาวประมาณ 6–11 วินาทีของเสียง (เฉลี่ยราว 8–10) "
+           "ตัดช็อตใหม่ตรงจุดที่ขึ้นประโยค เหตุการณ์ หรือสถานที่ใหม่ ห้ามยาวเกิน 12 วินาที "
+           "และอย่าซอยสั้นเกินจำเป็น (คลิปยิ่งน้อยยิ่งประหยัดเครดิต). "
+           "slow = true เมื่อช็อตนั้นเหมาะกับภาพสโลว์โมชัน 2 เท่า (บรรยากาศ วิว ฉากเงียบ เศร้า ลึกลับ การเคลื่อนไหวช้าๆ); "
+           "false เมื่อมีแอ็กชันเร็ว ต่อสู้ วิ่ง หรือท่าทางที่ต้องดูเป็นธรรมชาติ. "
+           "cheap = true เมื่อเป็นช็อตง่ายที่ไม่สำคัญ ใช้โมเดลราคาถูกได้ (วิว สถานที่ สิ่งของ ท้องฟ้า คนไกลๆ ขยับน้อย); "
+           "false เมื่อเป็นช็อตสำคัญ เห็นหน้าตัวละครชัด มีการกระทำหรืออารมณ์ที่ต้องการคุณภาพ. "
            if clip_seconds else "")
         + "ตอบ JSON เท่านั้น: {\"scenes\":[{\"start\":0.0,\"characters\":[],\"location\":\"\",\"prompt\":\"\",\"motion\":\"\",\"highlight\":false"
-        + (",\"video_prompt\":\"\"" if clip_seconds else "") + "}]} "
+        + (",\"video_prompt\":\"\",\"slow\":false,\"cheap\":false" if clip_seconds else "") + "}]} "
         "start = เวลาเริ่มของประโยคที่ภาพนี้เริ่ม (ต้องเป็นตัวเลขในวงเล็บด้านล่าง). "
         "characters = ชื่อตัวละครที่ปรากฏในภาพนี้ (ว่างได้ถ้าเป็นภาพสถานที่). "
         "prompt = คำบรรยายภาพนิ่งภาษาไทย: ใครทำอะไร ที่ไหน เวลา แสง มุมกล้อง อารมณ์ ไม่มีตัวหนังสือในภาพ. "
         f"motion = หนึ่งใน {', '.join(MOTIONS)}. "
-        + (f"video_prompt = คำสั่งการเคลื่อนไหวของคลิป {clip_seconds:g} วินาทีภาษาไทยที่เริ่มจากภาพนิ่งนี้: "
+        + ("video_prompt = คำสั่งการเคลื่อนไหวของคลิปภาษาไทยที่เริ่มจากภาพนิ่งนี้: "
            "ใครขยับอย่างไร สีหน้า การเคลื่อนไหวของสิ่งรอบตัว และกล้องเคลื่อนอย่างไร ไม่มีบทพูด ไม่มีตัวหนังสือ. "
            if clip_seconds else "")
         + "\n\n" + lines
@@ -844,7 +907,7 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
         if not video_mode:
             return int(count_var.get())
         duration = float((state["project"] or {}).get("duration") or 0)
-        return max(1, int(-(-duration // slot_settings()[1]))) if duration else 0
+        return max(1, int(-(-duration // VIDEO_AUTO_AVG_SECONDS))) if duration else 0
 
     def desired_aspect() -> str:
         return slot_settings()[2] if video_mode else aspect_var.get()
@@ -852,12 +915,12 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
     def refresh_clip_info():
         if not video_mode:
             return
-        model, seconds, aspect = slot_settings()
+        _model, _seconds, aspect = slot_settings()
         count = desired_count()
         folder = attachment_folder()
         clip_info_var.set(f"ไฟล์แนบ: {Path(folder).name if folder else 'ยังไม่ได้เลือก (เลือกที่หน้ารูป AI)'} · "
-                          f"โมเดล {model or '-'} · คลิปละ {seconds:g} วินาที · {aspect}"
-                          + (f" → ประมาณ {count} คลิป" if count else " (เปลี่ยนได้ที่ ⚙ ของ Slot ก่อนกดออโต้)"))
+                          f"GPT เลือกต่อช็อต: grok-lower 6/10 วิ หรือ vela 5 วิ (+สโลว์ 2x) · {aspect}"
+                          + (f" → ประมาณ {count} คลิป" if count else ""))
 
     # ── input row ──
     inputs = tk.Frame(box, bg=bg)
@@ -927,7 +990,7 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
     table = ttk.Treeview(table_frame, columns=columns, show="headings", height=10, selectmode="extended")
     table.tag_configure("bad", foreground="#DC2626")
     for key, title, width in (("no", "#", 44), ("time", "เวลา", 64), ("chars", "ตัวละคร", 170),
-                              ("prompt", "ภาพ", 560), ("status", "รูป", 80)):
+                              ("prompt", "ภาพ", 560), ("status", "รูป", 170 if video_mode else 80)):
         table.heading(key, text=title)
         table.column(key, width=width, stretch=key == "prompt")
     scroll = ttk.Scrollbar(table_frame, orient="vertical", command=table.yview)
@@ -1132,7 +1195,8 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
                 status = "ต้องเจนใหม่: " + scene["bad"]
             if video_mode:
                 clip = scene.get("clip")
-                status = f"รูป{status} คลิป" + ("✓" if clip and os.path.isfile(clip) else ("✗" if scene.get("clip_error") else "—"))
+                status = (f"รูป{status} คลิป{clip_label(scene)}"
+                          + ("✓" if clip and os.path.isfile(clip) else ("✗" if scene.get("clip_error") else "—")))
             table.insert("", "end", iid=str(i), tags=("bad",) if scene.get("bad") or scene.get("error") else (), values=(
                 i + 1, fmt_time(scene.get("start")), ", ".join(scene.get("characters") or []),
                 scene.get("prompt", "").replace("\n", " "), status))
@@ -1533,6 +1597,8 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
                     "video_prompt": str(item.get("video_prompt") or "").strip(),
                     "motion": item.get("motion") if item.get("motion") in MOTIONS else MOTIONS[len(scenes) % 4],
                     "highlight": bool(item.get("highlight")),
+                    "slow": str(item.get("slow")).lower() == "true",
+                    "cheap": str(item.get("cheap")).lower() == "true",
                 })
             project["scenes"] = scenes
             project["planned_windows"] = w + 1
@@ -1546,12 +1612,13 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
             save_project()
         if video_mode:
             before = len(scenes)
-            scenes = split_long_scenes(scenes, float(project["duration"]), float(project.get("clip_seconds") or 8))
+            scenes = split_long_scenes(scenes, float(project["duration"]), 0, limit_for=clip_limit)
+            assign_clips(scenes, float(project["duration"]))
             project["scenes"] = scenes
             save_project()
             if len(scenes) > before:
                 log(f"แบ่งช็อตที่ยาวเกินคลิปเพิ่ม {len(scenes) - before} ช็อต (ไม่ให้ภาพค้างนาน)")
-            log(f"✓ วางแผน {len(scenes)} คลิป")
+            log(f"✓ วางแผน {len(scenes)} คลิป ({clip_summary(scenes)})")
         else:
             log(f"✓ วางแผน {len(scenes)} ฉาก (ไม่เกิน {target} รูป)")
 
@@ -1918,6 +1985,11 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
         def submit():
             state["show_error_backup"] = runtime.get("show_error")
             runtime["show_error"] = lambda title, msg="", *a, **k: errors.append(f"{title}: {msg}")
+            # This shot's own model / length / Slow 2x (chosen at planning time).
+            cfg = runtime["slot_cfg_vars"][slot_index]
+            cfg["model"].set(scene.get("clip_model") or VIDEO_AUTO_MODEL)
+            cfg["duration"].set(str(scene.get("clip_seconds") or GROK_CLIP_SECONDS[0]))
+            runtime["_ai_slow2x_override"] = bool(scene.get("clip_slow"))
             runtime["slot_images"][slot_index].set(scene["image"])
             box = runtime["slot_prompts"][slot_index]
             box.delete("1.0", tk.END)
@@ -1926,6 +1998,7 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
             return bool(runtime["slot_busy"][slot_index])
 
         def restore():
+            runtime["_ai_slow2x_override"] = None  # back to the Slow 2x checkbox
             if "show_error_backup" in state:
                 runtime["show_error"] = state.pop("show_error_backup")
         try:
@@ -1959,6 +2032,41 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
         scenes = project["scenes"]
         todo = indices if indices is not None else [
             i for i, sc in enumerate(scenes) if not (sc.get("clip") and os.path.isfile(sc["clip"]))]
+        assign_clips(scenes, float(project["duration"]))
+        cfg = runtime["slot_cfg_vars"][slot_index]
+        saved_slot = run_on_ui(lambda: (cfg["model"].get(), cfg["duration"].get()))
+        try:
+            run_clips(project, scenes, todo)
+        finally:
+            def put_back():
+                cfg["model"].set(saved_slot[0])
+                cfg["duration"].set(saved_slot[1])
+                save_slots = runtime.get("save_slot_configs")
+                if callable(save_slots):
+                    save_slots()
+            run_on_ui(put_back)
+        missing = [i + 1 for i, sc in enumerate(scenes) if not (sc.get("clip") and os.path.isfile(sc["clip"]))]
+        if missing:
+            raise RuntimeError(f"ยังขาดคลิปฉาก {', '.join(map(str, missing[:15]))} — กดเริ่มอีกครั้งเพื่อลองใหม่")
+        log(f"✓ คลิปครบ {len(scenes)} ฉาก")
+
+    def make_scene_clip(scene, i):
+        """vela first when the plan says cheap; if vela can't make it, the same shot goes to grok-lower."""
+        try:
+            return with_retries(f"คลิปฉาก {i + 1}", lambda: make_clip(scene, i),
+                                attempts=1 if scene.get("clip_model") == VIDEO_CHEAP_MODEL else 2)
+        except (Stopped, HistoryLost, RateLimited):
+            raise
+        except Exception as exc:
+            if scene.get("clip_model") != VIDEO_CHEAP_MODEL:
+                raise
+            scene["clip_fallback"] = True
+            scene["clip_model"], scene["clip_seconds"], scene["clip_slow"] = pick_clip(
+                float(scene.get("shot_seconds") or VIDEO_AUTO_AVG_SECONDS), bool(scene.get("slow")))
+            log(f"ฉาก {i + 1}: vela เจนไม่ได้ ({error_reason(str(exc))}) → ใช้ {clip_label(scene)}")
+            return with_retries(f"คลิปฉาก {i + 1}", lambda: make_clip(scene, i), attempts=2)
+
+    def run_clips(project, scenes, todo):
         started, failures_in_row = time.time(), 0
         for n, i in enumerate(todo, 1):
             check_stop()
@@ -1970,10 +2078,10 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
                 remaining = (time.time() - started) / (n - 1) * (len(todo) - n + 1)
                 eta = f" · เหลือประมาณ {int(remaining // 60)} นาที"
             state["clip_fraction"] = (n - 1) / max(1, len(todo))
-            state["clip_label"] = f"สร้างคลิป {n}/{len(todo)} (ฉากที่ {i + 1}) ด้วย {project.get('video_model')}{eta}"
+            state["clip_label"] = f"สร้างคลิป {n}/{len(todo)} (ฉากที่ {i + 1}) ด้วย {clip_label(scene)}{eta}"
             set_progress("clips", state["clip_fraction"], state["clip_label"])
             try:
-                scene["clip"] = with_retries(f"คลิปฉาก {i + 1}", lambda: make_clip(scene, i), attempts=2)
+                scene["clip"] = make_scene_clip(scene, i)
                 scene.pop("clip_error", None)
                 failures_in_row = 0
             except (Stopped, HistoryLost, RateLimited):
@@ -1986,10 +2094,6 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
                     raise RuntimeError("สร้างคลิปล้มเหลว 3 ฉากติดกัน (เครดิตวิดีโอหมดหรือโมเดลมีปัญหา) — แก้แล้วกดเริ่มเพื่อทำต่อ")
             save_project()
             ui(refresh_table)
-        missing = [i + 1 for i, sc in enumerate(scenes) if not (sc.get("clip") and os.path.isfile(sc["clip"]))]
-        if missing:
-            raise RuntimeError(f"ยังขาดคลิปฉาก {', '.join(map(str, missing[:15]))} — กดเริ่มอีกครั้งเพื่อลองใหม่")
-        log(f"✓ คลิปครบ {len(scenes)} ฉาก")
 
     STAGE_FUNCS = {"context": stage_context, "transcribe": stage_transcribe, "characters": stage_characters,
                    "plan": stage_plan, "images": stage_images, "clips": stage_clips, "video": stage_video}
@@ -2014,14 +2118,15 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
             scenes = project.get("scenes") or []
             matched = sorted({Path(p).stem for sc in scenes for p in attachments_for(sc)})
             missing = sum(1 for sc in scenes if not (sc.get("image") and os.path.isfile(sc["image"])))
-            clips = sum(1 for sc in scenes if not (sc.get("clip") and os.path.isfile(sc["clip"])))
-            if missing + clips == 0:
+            todo = [sc for sc in scenes if not (sc.get("clip") and os.path.isfile(sc["clip"]))]
+            if missing + len(todo) == 0:
                 return True
+            assign_clips(scenes, float(project["duration"]))
             return ask_on_ui(
                 "ออโต้ — ยืนยันใช้เครดิต",
                 f"วางแผนเสร็จแล้ว\n\nไฟล์แนบที่จะใช้ ({len(matched)}): {', '.join(matched[:15]) or '-'}\n"
-                f"รูปฉาก {missing} รูป + คลิปวิดีโอ {clips} คลิป ด้วย {project.get('video_model')} "
-                f"คลิปละ {project.get('clip_seconds'):g} วินาที\n\nเริ่มเลยไหม?")
+                f"รูปฉาก {missing} รูป + คลิปวิดีโอ {len(todo)} คลิป (vela = ตัวถูก ถ้าเจนไม่ได้จะเปลี่ยนเป็น grok-lower เอง)\n"
+                f"   {clip_summary(todo)}\n   (สโลว์×2 = ทำ AI Slow 2x หลังได้คลิป)\n\nเริ่มเลยไหม?")
         new_refs = [(c, n) for c, n in characters_needing_refs(project.get("context") or {}, project.get("scenes") or [])
                     if c["name"] not in existing]
         missing = sum(1 for s in project.get("scenes") or [] if not (s.get("image") and os.path.isfile(s["image"])))
@@ -2076,16 +2181,13 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
             for key in ("images", "clips"):
                 project["done"].pop(key, None)
         if video_mode:
-            model, seconds, _aspect = slot_settings()
             if not attachment_folder():
                 messagebox.showinfo("ออโต้", "เลือกโฟลเดอร์ไฟล์แนบ (รูปตัวละคร/สถานที่) ที่หน้ารูป AI ก่อน — "
                                     "ออโต้ใช้ไฟล์แนบชุดเดียวกับ flow สร้างวิดีโอ", parent=page)
                 return
-            if not model:
-                messagebox.showinfo("ออโต้", f"ตั้งโมเดลวิดีโอใน Slot {slot_index + 1} ก่อน", parent=page)
-                return
-            changed_clip = project.get("done", {}).get("plan") and float(project.get("clip_seconds") or seconds) != seconds
-            project.update({"clip_seconds": seconds, "video_model": model})
+            # Plans made for one fixed clip length (before grok-lower 6/10/15 + Slow 2x) need re-planning.
+            changed_clip = project.get("done", {}).get("plan") and project.get("video_model") != VIDEO_AUTO_MODEL
+            project.update({"clip_seconds": VIDEO_AUTO_AVG_SECONDS, "video_model": VIDEO_AUTO_MODEL})
         else:
             changed_clip = False
         wanted = desired_count()

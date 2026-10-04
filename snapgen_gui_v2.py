@@ -7174,6 +7174,10 @@ _ai_slow2x_var_ref = [None]
 
 def _ai_slow2x_enabled():
     """Return UI-captured state; worker thread must not call Tk directly."""
+    # Slot ออโต้ decides Slow 2x per shot while its clip is generating.
+    override = g.get("_ai_slow2x_override")
+    if override is not None:
+        return bool(override)
     return bool(_ai_slow2x_state[0])
 
 mute_downloaded_video_var = g.get("mute_downloaded_video_var")

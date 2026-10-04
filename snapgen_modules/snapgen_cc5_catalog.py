@@ -143,9 +143,9 @@ def load_catalog(catalog_path, legacy_hair_pool=None, scan_hair_inventory=False)
                         "name_th": str(hair.get("name") or path.stem),
                         "gender": gender, "age": "|".join(ages) or "ทุกวัย",
                         "groups": [str(group) for group in groups],
-                        "review_status": "curated", "review_source": "legacy_hair_pool",
-                        "folk_fit": 2,
-                        "note": "นำเข้าจากรายการทรงผมที่คัดไว้เดิม",
+                        "review_status": "needs_classification", "review_source": "legacy_hair_pool",
+                        "folk_fit": None,
+                        "note": "นำเข้าจากรายการเดิมแล้ว รอตรวจภาพและคัดความเหมาะสม",
                     }
                     for key, value in metadata.items():
                         if entry.get(key) != value:

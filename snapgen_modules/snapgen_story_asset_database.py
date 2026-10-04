@@ -56,7 +56,19 @@ def _matches_age(value, wanted):
 def _is_classified(item):
     if item.get("kind") == "hair":
         return item.get("review_status") == "curated" and bool(item.get("groups"))
-    return bool(item.get("name_th") and item.get("part") and item.get("gender") and item.get("age"))
+    return bool(
+        item.get("review_status") == "curated"
+        and item.get("name_th") and item.get("part")
+        and item.get("gender") and item.get("age")
+    )
+
+
+def _review_label(item):
+    return {
+        "curated": "ผ่านคัด",
+        "rejected": "คัดออก",
+        "needs_classification": "รอตรวจ",
+    }.get(item.get("review_status"), "รอตรวจ")
 
 
 def install(g: dict, parent: tk.Misc):
@@ -279,7 +291,7 @@ def install(g: dict, parent: tk.Misc):
             table.insert("", "end", iid=item_id, text=label, values=(
                 _category(item), item.get("gender") or "—", item.get("age") or "—",
                 item.get("folk_fit") if item.get("folk_fit") is not None else "—",
-                "จัดข้อมูลแล้ว" if _is_classified(item) else "ยังไม่จัดหมวด",
+                _review_label(item),
                 item.get("file") or Path(item.get("path") or "").name,
             ))
             filtered_ids.append(item_id)
@@ -311,18 +323,19 @@ def install(g: dict, parent: tk.Misc):
             show_record(selected[0])
 
     def pick_random():
-        candidates = filtered_ids
-        if category_var.get() == "ทรงผม":
-            candidates = [item_id for item_id in filtered_ids if records[item_id].get("review_status") == "curated"]
+        candidates = [
+            item_id for item_id in filtered_ids
+            if records[item_id].get("review_status") == "curated"
+        ]
         if not candidates:
-            status_var.set("ไม่มีรายการที่ตรงกับตัวกรอง")
+            status_var.set("ยังไม่มีรายการที่ผ่านการคัดในผลที่กรอง")
             return
         item_id = random.choice(candidates)
         table.selection_set(item_id)
         table.focus(item_id)
         table.see(item_id)
         show_record(item_id)
-        status_var.set("สุ่มจากทรงผมที่จัดหมวดแล้ว" if category_var.get() == "ทรงผม" else "สุ่มรายการจากผลที่กรองแล้ว")
+        status_var.set("สุ่มจากรายการที่ผ่านการคัดแล้ว")
 
     for widget in (category_box, gender_box, age_box):
         widget.bind("<<ComboboxSelected>>", schedule_refresh)

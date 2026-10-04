@@ -924,7 +924,7 @@ def plan_video(segments: list, duration: float, names: list, era: str, ask, horr
             item = items.get(n) or {"prompt": shot["text"], "video_prompt": shot["text"]}
             scene = {
                 "start": shot["start"], "text": shot["text"],
-                "characters": [c for c in (item.get("characters") or []) if c in names],
+                "characters": [c for c in (item.get("characters") or []) if c in names or c in (refs or [])],
                 "location": str(item.get("location") or ""),
                 "prompt": str(item.get("prompt") or "").strip(),
                 "video_prompt": str(item.get("video_prompt") or "").strip(),
@@ -1285,7 +1285,8 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
     columns = ("no", "time", "chars", "prompt", "status")
     table = ttk.Treeview(table_frame, columns=columns, show="headings", height=10, selectmode="extended")
     table.tag_configure("bad", foreground="#DC2626")
-    for key, title, width in (("no", "#", 44), ("time", "เวลา", 64), ("chars", "ตัวละคร", 170),
+    for key, title, width in (("no", "#", 44), ("time", "เวลา", 64),
+                              ("chars", "ไฟล์แนบที่ใช้ (ตัวละคร/สถานที่)" if video_mode else "ตัวละคร", 220 if video_mode else 170),
                               ("prompt", "ภาพ", 560), ("status", "รูป", 170 if video_mode else 80)):
         table.heading(key, text=title)
         table.column(key, width=width, stretch=key == "prompt")
@@ -1491,8 +1492,15 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
                 clip = scene.get("clip")
                 status = (f"รูป{status} คลิป{clip_label(scene)}"
                           + ("✓" if clip and os.path.isfile(clip) else ("✗" if scene.get("clip_error") else "—")))
+            who = ", ".join(scene.get("characters") or [])
+            if video_mode:
+                # What the picture of this shot is drawn with: the Image page attachments matched by name.
+                try:
+                    who = ", ".join(Path(p).stem for p in attachments_for(scene)) or "— ไม่มีไฟล์แนบ"
+                except Exception:
+                    pass
             table.insert("", "end", iid=str(i), tags=("bad",) if scene.get("bad") or scene.get("error") else (), values=(
-                i + 1, fmt_time(scene.get("start")), ", ".join(scene.get("characters") or []),
+                i + 1, fmt_time(scene.get("start")), who,
                 scene.get("prompt", "").replace("\n", " "), status))
 
     def refresh_stages(active=None):

@@ -2081,6 +2081,40 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
                 log("สร้างรูปใหม่เสร็จ — กด 'ต่อวิดีโอใหม่' เพื่อทำวิดีโออีกรอบ")
         threading.Thread(target=worker, daemon=True).start()
 
+    def edit_scene_image(index, wish):
+        """Small change on the existing picture: send it back to GPT with the wish, keep everything else."""
+        project = state["project"]
+        scene = project["scenes"][index]
+        state["busy"], state["stop"] = True, False
+
+        def worker():
+            try:
+                imgmod = runtime.get("_imgmod") or g.get("_imgmod")
+                current = scene["image"]
+                prompt = (f"แก้ไขรูปที่แนบมาเฉพาะจุดนี้: {wish}\n"
+                          "คงองค์ประกอบ ตัวละคร มุมกล้อง แสง และสไตล์เดิมทั้งหมด เปลี่ยนเฉพาะสิ่งที่สั่ง ภาพเดียวเต็มเฟรม ไม่มีตัวหนังสือ")
+                out = with_retries(f"แก้ฉาก {index + 1}", lambda: imgmod.generate_image(
+                    prompt, output_dir=str(Path(current).parent), name_hint=f"scene_{index + 1:03d}_edit", is_edit=True,
+                    ref_images=[base64.b64encode(Path(current).read_bytes()).decode("ascii")],
+                    aspect_ratio=project["aspect"], save_sidecar=False,
+                    conversation_state=project.setdefault("conversation", {}), conversation_save_fn=save_project))
+                target = Path(current).with_suffix(Path(out).suffix or ".png")
+                Path(current).unlink(missing_ok=True)
+                shutil.move(str(out), str(target))
+                scene["image"] = str(target)
+                scene.pop("bad", None)
+                scene["prompt"] = scene.get("prompt", "") + f" (แก้: {wish})"
+                project["images_verified"] = False
+                log(f"✓ แก้ฉาก {index + 1}: {wish}")
+            except Exception as exc:
+                log(f"❌ แก้ฉาก {index + 1} ไม่สำเร็จ: {exc}")
+            finally:
+                project["done"].pop("video", None)
+                save_project()
+                state["busy"] = False
+                ui(refresh_all)
+        threading.Thread(target=worker, daemon=True).start()
+
     def edit_prompt(_event=None):
         selection = table.selection()
         if not selection:
@@ -2089,7 +2123,7 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
         scene = state["project"]["scenes"][index]
         win = tk.Toplevel(page)
         win.title(f"แก้ฉาก {int(selection[0]) + 1}")
-        win.geometry("760x380")
+        win.geometry("980x380")
         buttons = tk.Frame(win)
         buttons.pack(side="bottom", anchor="e", padx=8, pady=(0, 8))
         text = tk.Text(win, wrap="word", height=12)
@@ -2101,6 +2135,25 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
             save_project()
             refresh_table()
             win.destroy()
+
+        tk.Label(buttons, text="แก้นิดเดียวจากรูปเดิม (เช่น เปลี่ยนศาลเป็นศาลเจ้าจีน):").pack(side="left", padx=(0, 4))
+        fix_entry = tk.Entry(buttons, width=34)
+        fix_entry.pack(side="left", padx=4)
+
+        def fix_from_current():
+            wish = fix_entry.get().strip()
+            if not wish:
+                messagebox.showinfo("เล่าภาพ", "พิมพ์สิ่งที่อยากแก้ในช่องก่อน", parent=win)
+                return
+            if not (scene.get("image") and os.path.isfile(scene["image"])):
+                messagebox.showinfo("เล่าภาพ", "ฉากนี้ยังไม่มีรูปเดิม — ใช้ 'บันทึกแล้วเจนรูปใหม่'", parent=win)
+                return
+            if state["busy"]:
+                messagebox.showinfo("เล่าภาพ", "กำลังทำงานอยู่ — รอให้เสร็จหรือกดหยุดก่อน", parent=win)
+                return
+            save()
+            edit_scene_image(index, wish)
+        make_styled_button(buttons, "SECONDARY", "แก้จากรูปเดิม", command=fix_from_current).pack(side="left", padx=4)
 
         def save_and_redraw():
             if state["busy"]:

@@ -85,9 +85,10 @@ import snapgen_voice_input as V
 model, backend = V._get_whisper_model(log_fn=lambda m: emit({"log": str(m)}))
 emit({"backend": backend})
 segments, _info = model.transcribe(sys.argv[2], language="th", vad_filter=True, beam_size=1, temperature=0.0,
-                                   initial_prompt=sys.argv[3] or None)
+                                   initial_prompt=sys.argv[3] or None, word_timestamps=True)
 for s in segments:
-    emit({"start": s.start, "end": s.end, "text": s.text})
+    words = [[round(w.start, 2), round(w.end, 2), w.word] for w in (s.words or [])]
+    emit({"start": s.start, "end": s.end, "text": s.text, "words": words})
 """
 
 
@@ -492,7 +493,7 @@ SHOT_LIMIT = 12.0  # longer shots are split into continuing shots
 CLIP_STRETCH = 1.15  # a clip may be slowed this much unnoticed to fill its shot
 
 
-def pick_clip(length: float, slow_ok: bool, cheap_ok: bool = False) -> tuple:
+def pick_clip(length: float, slow_ok: bool, cheap_ok: bool = False, stretch: float = CLIP_STRETCH) -> tuple:
     """Cheapest (model, seconds, slow) whose finished clip covers ``length`` s of narration.
 
     vela (cheap, 5 s) first when the shot allows it, then grok-lower by
@@ -502,7 +503,7 @@ def pick_clip(length: float, slow_ok: bool, cheap_ok: bool = False) -> tuple:
     options = [(VIDEO_CHEAP_MODEL, VELA_CLIP_SECONDS, slow) for slow in slows] if cheap_ok else []
     options += [(VIDEO_AUTO_MODEL, s, slow) for s in GROK_CLIP_SECONDS for slow in slows]
     for model, seconds, slow in options:
-        if seconds * (2 if slow else 1) * CLIP_STRETCH >= length - CROSSFADE:
+        if seconds * (2 if slow else 1) * stretch >= length - CROSSFADE:
             return model, seconds, slow
     return options[-1]
 
@@ -518,8 +519,10 @@ def assign_clips(scenes: list, duration: float) -> None:
         if scene.get("clip_fallback"):  # vela already failed here: stay on grok-lower
             scene["cheap"] = False
         scene["shot_seconds"] = length
+        spoken = bool(scene.get("dialogue"))  # dialogue: real speed, clip only trimmed, never slowed
         scene["clip_model"], scene["clip_seconds"], scene["clip_slow"] = pick_clip(
-            length, bool(scene.get("slow")), bool(scene.get("cheap")))
+            length, bool(scene.get("slow")) and not spoken, bool(scene.get("cheap")) and not spoken,
+            1.0 if spoken else CLIP_STRETCH)
 
 
 def clip_label(scene: dict) -> str:
@@ -752,6 +755,97 @@ def plan_request(window: list, count: int, names: list, previous: str, era: str,
     )
 
 
+DIALOGUE_RE = re.compile(r"(?m)^[ \t]*([^\n:：“”\"]{1,40}?)[ \t]*[:：][ \t]*[“\"](.+?)[”\"]", re.S)
+_NOT_MATCHED = re.compile(r"[\s“”\"'‘’.,!?…]")
+
+
+def script_dialogues(script: str) -> list:
+    """[(speaker, line)] for every `ชื่อ : “ … ”` line of the script, in order."""
+    return [(m.group(1).strip(), re.sub(r"\s+", " ", m.group(2)).strip()) for m in DIALOGUE_RE.finditer(script)]
+
+
+def _char_time(seg: dict, k: int, n: int) -> float:
+    """Time of character k of n in a sentence: from Whisper word times when kept, else even spread."""
+    start, end = float(seg["start"]), float(seg["end"])
+    words = [w for w in seg.get("words") or [] if len(w) >= 3 and _NOT_MATCHED.sub("", str(w[2]))]
+    if words:
+        sizes = [len(_NOT_MATCHED.sub("", str(w[2]))) for w in words]
+        target = k / max(1, n) * sum(sizes)
+        for (w_start, w_end, _w), size in zip(words, sizes):
+            if target < size:  # a letter right after a word belongs to the next word
+                return float(w_start) + (float(w_end) - float(w_start)) * target / size
+            target -= size
+        return float(words[-1][1])
+    return start + (end - start) * k / max(1, n)
+
+
+def _locate(full: str, want: str, cursor: int):
+    """(start, end) of ``want`` in ``full`` at/after cursor — exact, else a ≥60 % fuzzy match."""
+    if not want:
+        return None
+    found = full.find(want, cursor)
+    if found >= 0:
+        return found, found + len(want)
+    from difflib import SequenceMatcher
+    window = full[cursor:cursor + len(want) * 3 + 200]
+    blocks = [b for b in SequenceMatcher(None, window, want, autojunk=False).get_matching_blocks() if b.size >= 2]
+    matched = sum(b.size for b in blocks)
+    # Narrators sometimes read only the start of a line: accept a clearly heard beginning too.
+    if blocks and (matched / len(want) >= 0.6 or (blocks[0].b <= 3 and matched >= 12 and matched / len(want) >= 0.4)):
+        return cursor + blocks[0].a, cursor + blocks[-1].a + blocks[-1].size
+    return None
+
+
+def split_dialogue(segments: list, script: str) -> list:
+    """Make every spoken line of the script its own sentence with its own start/end time.
+
+    Whisper sentences mix dialogue with the narration around it ("…ปล่อยข้าไปเถิด ” แต่คำอ้อนวอน…").
+    Lines are found in the transcript text in script order; their times come
+    from Whisper's word times (or an even spread when a transcript has none).
+    Dialogue pieces get ``dialogue`` (speaker) and ``line``.
+    """
+    lines = script_dialogues(script)
+    if not lines or not segments:
+        return [dict(s) for s in segments]
+    chars, times, owner = [], [], []
+    for i, seg in enumerate(segments):
+        text = str(seg["text"]) + " "
+        letters = len(_NOT_MATCHED.sub("", text))
+        k = 0  # letters before this character (spaces and quotes take no time)
+        for ch in text:
+            chars.append(ch)
+            times.append(_char_time(seg, k, letters))
+            owner.append(i)
+            k += 0 if _NOT_MATCHED.match(ch) else 1
+    keep = [p for p, ch in enumerate(chars) if not _NOT_MATCHED.match(ch)]
+    full = "".join(chars[p] for p in keep)
+    label = [None] * len(chars)
+    cursor = 0
+    for number, (speaker, line) in enumerate(lines):
+        span = _locate(full, _NOT_MATCHED.sub("", line), cursor)
+        if not span:
+            continue
+        cursor = span[1]
+        for p in range(keep[span[0]], keep[span[1] - 1] + 1):
+            label[p] = number
+    out = []
+    for p, ch in enumerate(chars):
+        key = ("d", label[p]) if label[p] is not None else ("s", owner[p])
+        if not out or out[-1]["_key"] != key:
+            if out and _NOT_MATCHED.match(ch):
+                out[-1]["text"] += ch  # spaces/quotes stay with the piece before; the next starts at a letter
+                continue
+            piece = {"_key": key, "start": round(times[p], 2), "text": ""}
+            if label[p] is not None:
+                piece["dialogue"], piece["line"] = lines[label[p]]
+            out.append(piece)
+        out[-1]["text"] += ch
+    for a, b in zip(out, out[1:] + [None]):
+        a["end"] = b["start"] if b else float(segments[-1]["end"])
+        a["text"] = re.sub(r"\s+", " ", a.pop("_key") and a["text"]).strip(" “”\"")
+    return [p for p in out if p["text"].strip() and p["end"] > p["start"]]
+
+
 def video_shots(segments: list, target: float = 8.0, limit: float = SHOT_LIMIT) -> list:
     """Video mode: cut the narration into shots of whole sentences, about 6–11 s each.
 
@@ -765,26 +859,33 @@ def video_shots(segments: list, target: float = 8.0, limit: float = SHOT_LIMIT) 
         if shots:
             shot = shots[-1]
             joined = seg["end"] - shot["start"]
-            if shot["end"] - shot["start"] < target and joined <= limit:
+            # A spoken line is always a shot of its own, cut exactly at its words.
+            alone = shot.get("dialogue") or seg.get("dialogue")
+            if not alone and shot["end"] - shot["start"] < target and joined <= limit:
                 shot["end"] = seg["end"]
                 shot["text"] += " " + seg["text"]
                 continue
-        shots.append({"start": 0.0 if not shots else seg["start"], "end": seg["end"], "text": seg["text"]})
+        shot = {"start": 0.0 if not shots else seg["start"], "end": seg["end"], "text": seg["text"]}
+        if seg.get("dialogue"):
+            shot["dialogue"], shot["line"] = seg["dialogue"], seg.get("line") or seg["text"]
+        shots.append(shot)
     # A short last shot joins the one before it when that still fits.
-    if len(shots) > 1 and shots[-1]["end"] - shots[-1]["start"] < 4 and shots[-1]["end"] - shots[-2]["start"] <= limit:
+    if (len(shots) > 1 and not shots[-1].get("dialogue") and not shots[-2].get("dialogue")
+            and shots[-1]["end"] - shots[-1]["start"] < 4 and shots[-1]["end"] - shots[-2]["start"] <= limit):
         last = shots.pop()
         shots[-1]["end"], shots[-1]["text"] = last["end"], shots[-1]["text"] + " " + last["text"]
     return shots
 
 
 def plan_video(segments: list, duration: float, names: list, era: str, ask, horror: bool = False,
-               progress=None, out: list | None = None, batch: int = 20) -> list:
+               progress=None, out: list | None = None, batch: int = 20, script: str = "") -> list:
     """Video mode plan: program-cut shots, GPT writes each one, every shot gets a clip choice.
 
     ``ask(prompt) -> dict`` talks to GPT.  Shots GPT skipped are asked again
     once; any still missing reuse the narration text so nothing is left blank.
+    Spoken lines of ``script`` become their own shots (no slow motion).
     """
-    shots = video_shots(segments)
+    shots = video_shots(split_dialogue(segments, script) if script else segments)
     scenes = out if out is not None else []
     for first in range(0, len(shots), batch):
         group = shots[first:first + batch]
@@ -807,7 +908,7 @@ def plan_video(segments: list, duration: float, names: list, era: str, ask, horr
                     items.setdefault(number, item)
         for n, shot in zip(numbers, group):
             item = items.get(n) or {"prompt": shot["text"], "video_prompt": shot["text"]}
-            scenes.append({
+            scene = {
                 "start": shot["start"], "text": shot["text"],
                 "characters": [c for c in (item.get("characters") or []) if c in names],
                 "location": str(item.get("location") or ""),
@@ -816,7 +917,10 @@ def plan_video(segments: list, duration: float, names: list, era: str, ask, horr
                 "motion": MOTIONS[len(scenes) % len(MOTIONS)],
                 "slow": str(item.get("slow")).lower() == "true",
                 "cheap": str(item.get("cheap")).lower() == "true",
-            })
+            }
+            if shot.get("dialogue"):  # must stay in sync with the voice: real speed, full quality
+                scene.update(dialogue=shot["dialogue"], line=shot["line"], slow=False, cheap=False)
+            scenes.append(scene)
         if progress:
             progress(min(len(shots), first + batch), len(shots), group[0]["start"])
     split = split_long_scenes(scenes, duration, 0, limit_for=clip_limit)
@@ -827,14 +931,17 @@ def plan_video(segments: list, duration: float, names: list, era: str, ask, horr
 
 def video_plan_request(numbered: list, names: list, previous: str, era: str, horror: bool = False) -> str:
     """Ask GPT to write one AI video clip per given (number, shot) — the cuts are already fixed."""
-    lines = "\n".join(f"[{n}] {s['start']:.1f}–{s['end']:.1f} ({s['end'] - s['start']:.0f} วิ) {s['text']}"
+    lines = "\n".join(f"[{n}] {s['start']:.1f}–{s['end']:.1f} ({s['end'] - s['start']:.0f} วิ) "
+                      + (f"บทพูดของ {s['dialogue']}: “{s['line']}”" if s.get("dialogue") else s["text"])
                       for n, s in numbered)
     return (
         f"วางแผนคลิปวิดีโอ AI ประกอบเสียงบรรยาย {len(numbered)} ช็อต "
         "(แบ่งช็อตตามประโยคไว้แล้วด้านล่าง: เลขช็อต เวลา ความยาว และคำบรรยายของช็อตนั้น). "
         "เขียนให้ครบทุกช็อต ช็อตละ 1 รายการ ห้ามรวม ห้ามข้าม. แต่ละช็อตต้องเห็นเหตุการณ์ของคำบรรยายช็อตนั้นเอง "
         "ห้ามใช้ภาพซ้ำกับช็อตก่อน ช็อตติดกันต้องต่างมุมกล้องหรือขนาดภาพ แต่ตัวละคร สถานที่ และแสงต่อเนื่องกัน. "
-        "ห้ามวาดคนเล่าเรื่อง ผู้บรรยาย ไมโครโฟน หรือห้องอัดเสียง; บทพูดของตัวละครให้เป็นภาพตัวละครนั้นแสดงอารมณ์ตามคำพูด. "
+        "ห้ามวาดคนเล่าเรื่อง ผู้บรรยาย ไมโครโฟน หรือห้องอัดเสียง. "
+        "ช็อต 'บทพูดของ X' = ภาพใกล้ระดับอก/ใบหน้าของ X กำลังพูดประโยคนั้น เห็นปากชัด สีหน้าและท่าทางตรงกับคำพูด "
+        "(video_prompt ให้ X ขยับปากพูดตลอดคลิปด้วยความเร็วปกติ) ช็อตนี้ slow=false cheap=false เสมอ. "
         + (HORROR_NOTE if horror else "")
         + f"ยุค/บรรยากาศ: {era}. ตัวละครที่ใช้ได้ (ใช้ชื่อตรงตัวเท่านั้น): {', '.join(names) or '-'}. "
         + (f"ช็อตก่อนหน้าคือ: {previous}. " if previous else "")
@@ -1558,6 +1665,8 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
                 except (OSError, ValueError):
                     continue
                 transcript = candidate.parent / "transcript.json"
+                if video_mode and transcript.is_file() and '"words"' not in transcript.read_text(encoding="utf-8")[:20000]:
+                    continue  # older transcript without word times: dialogue cuts need them
                 if (data.get("done", {}).get("transcribe") and transcript.is_file()
                         and os.path.normcase(os.path.abspath(str(data.get("audio") or ""))) == same_audio):
                     shutil.copy2(transcript, folder / "transcript.json")
@@ -1578,7 +1687,8 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
                 continue
             text = item["text"].strip().replace("ํา", "ำ")  # ํา → ำ
             if text:
-                segments.append({"start": round(item["start"], 2), "end": round(item["end"], 2), "text": text})
+                segments.append({"start": round(item["start"], 2), "end": round(item["end"], 2), "text": text,
+                                 "words": item.get("words") or []})  # word times place dialogue cuts
             set_progress("transcribe", item["end"] / duration, f"ฟังเสียง {fmt_time(item['end'])} / {fmt_time(duration)} ({backend})")
         check_stop()
         if not segments:
@@ -1662,9 +1772,12 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
                 project["scenes"] = scenes_so_far
                 save_project()
                 ui(refresh_table)
+            if script_dialogues(read_script(project["script"])) and not any(s.get("words") for s in segments):
+                log("⚠ ข้อความถอดเสียงนี้ไม่มีเวลาของแต่ละคำ จุดตัดบทพูดอาจคลาดได้ราว 1 วินาที")
             scenes_so_far = []
             plan_video(segments, float(project["duration"]), names, era, ask,
-                       horror=project.get("style_mode") == "เรื่องผี", progress=progress, out=scenes_so_far)
+                       horror=project.get("style_mode") == "เรื่องผี", progress=progress, out=scenes_so_far,
+                       script=read_script(project["script"]))
             project["scenes"] = scenes_so_far
             save_project()
             log(f"✓ วางแผน {len(scenes_so_far)} คลิป ({clip_summary(scenes_so_far)})")
@@ -2127,7 +2240,11 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
         started = time.time()
         errors = []
         prompt = (scene.get("video_prompt") or scene["prompt"]).strip()
-        prompt += "\nไม่มีบทพูด ไม่มีตัวหนังสือในภาพ ตัวละครหน้าตาเหมือนในภาพเริ่มต้นตลอดคลิป"
+        if scene.get("dialogue"):
+            prompt += (f"\n{scene['dialogue']} พูดว่า “{scene.get('line', '')}” ขยับปากพูดด้วยความเร็วปกติตลอดคลิป "
+                       "ไม่มีตัวหนังสือในภาพ ตัวละครหน้าตาเหมือนในภาพเริ่มต้นตลอดคลิป")
+        else:
+            prompt += "\nไม่มีบทพูด ไม่มีตัวหนังสือในภาพ ตัวละครหน้าตาเหมือนในภาพเริ่มต้นตลอดคลิป"
 
         def submit():
             state["show_error_backup"] = runtime.get("show_error")
@@ -2351,6 +2468,15 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
             project["scenes"] = []
             for key in ("plan", "images", "clips", "video"):
                 project["done"].pop(key, None)
+        if video_mode and not project.get("done", {}).get("plan") and project.get("done", {}).get("transcribe"):
+            # Dialogue shots are cut at word times; older transcripts have none: listen again (local, free).
+            transcript = Path(state["folder"]) / "transcript.json"
+            try:
+                has_words = any(s.get("words") for s in json.loads(transcript.read_text(encoding="utf-8")))
+            except (OSError, ValueError):
+                has_words = False
+            if not has_words and script_dialogues(read_script(project["script"])):
+                project["done"].pop("transcribe", None)
         project["image_count"] = wanted
         project.update({"aspect": aspect,
                         "subtitles": bool(subtitle_var.get()),

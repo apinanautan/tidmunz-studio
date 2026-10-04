@@ -2408,6 +2408,19 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
         value = runtime.get("EXPORT_VIDEO") or g.get("EXPORT_VIDEO")
         return Path(str(value)) if value else export_root() / "video"
 
+    def set_slot_config(cfg, model, duration, aspect):
+        """Set the Slot's model, length and picture shape (Tk thread).
+
+        Changing the model makes the Slot queue an idle reset of its shape to
+        'อัตโนมัติ'; run that first so it cannot overwrite the shape set here
+        (grok-lower rejects 'อัตโนมัติ' as an aspect ratio).
+        """
+        if str(cfg["model"].get() or "").strip() != model:
+            cfg["model"].set(model)
+            page.update_idletasks()
+        cfg["duration"].set(duration)
+        cfg["aspect"].set(aspect)
+
     def make_clip(scene, index):
         """Generate one clip by driving the Slot exactly like pressing its Generate button."""
         busy = runtime["slot_busy"]
@@ -2435,9 +2448,9 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
             runtime["show_error"] = lambda title, msg="", *a, **k: errors.append(f"{title}: {msg}")
             # This shot's own model / length / Slow 2x (chosen at planning time).
             cfg = runtime["slot_cfg_vars"][slot_index]
-            cfg["model"].set(scene.get("clip_model") or VIDEO_AUTO_MODEL)
-            cfg["duration"].set(str(scene.get("clip_seconds") or GROK_CLIP_SECONDS[0]))
-            cfg["aspect"].set(state["project"].get("aspect") or "16:9")
+            set_slot_config(cfg, scene.get("clip_model") or VIDEO_AUTO_MODEL,
+                            str(scene.get("clip_seconds") or GROK_CLIP_SECONDS[0]),
+                            state["project"].get("aspect") or "16:9")
             runtime["_ai_slow2x_override"] = bool(scene.get("clip_slow"))
             runtime["slot_images"][slot_index].set(scene["image"])
             box = runtime["slot_prompts"][slot_index]
@@ -2488,9 +2501,7 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
             run_clips(project, scenes, todo)
         finally:
             def put_back():
-                cfg["model"].set(saved_slot[0])
-                cfg["duration"].set(saved_slot[1])
-                cfg["aspect"].set(saved_slot[2])
+                set_slot_config(cfg, *saved_slot)
                 save_slots = runtime.get("save_slot_configs")
                 if callable(save_slots):
                     save_slots()

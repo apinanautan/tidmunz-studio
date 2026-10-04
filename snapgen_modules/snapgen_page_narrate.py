@@ -1068,6 +1068,14 @@ def install(g: dict, root: tk.Misc) -> tk.Frame:
     return page
 
 
+def _ancestors(widget) -> list:
+    out = []
+    while widget is not None:
+        out.append(widget)
+        widget = widget.master
+    return out
+
+
 def install_video_auto(g: dict, root: tk.Misc, slot_index: int = 1):
     """Slot 2 'ออโต้': swap the Slot for the automatic panel and back."""
     runtime = g.get("_runtime_g") or g
@@ -1075,40 +1083,29 @@ def install_video_auto(g: dict, root: tk.Misc, slot_index: int = 1):
     if len(prompts) <= slot_index:
         return None
     slot_frame = prompts[slot_index].master.master.master  # Text -> content -> body -> Slot frame
-    container = slot_frame.master
-    grid = {k: v for k, v in slot_frame.grid_info().items() if k in ("row", "column", "rowspan", "columnspan", "sticky", "padx", "pady")}
+    # The panel covers the area holding every Slot (their closest common parent): a full page.
+    shared = set.intersection(*({id(w) for w in _ancestors(p.master.master.master.master)} for p in prompts))
+    container = next(w for w in _ancestors(slot_frame.master) if id(w) in shared)
     panel = tk.Frame(container, bg="#F8FAFC", highlightthickness=2, highlightbackground="#60A5FA")
     header = tk.Frame(panel, bg="#DBEAFE")
     header.pack(fill="x")
-    tk.Label(header, text=f"🤖 Slot {slot_index + 1} ออโต้ — บท + เสียง → วิดีโอทั้งเรื่อง (ใช้โมเดลและความยาวคลิปตามที่ตั้งใน Slot {slot_index + 1})",
+    tk.Label(header, text=f"🤖 Slot {slot_index + 1} ออโต้ — บท + เสียง → วิดีโอทั้งเรื่อง (GPT เลือกโมเดล/ความยาวต่อช็อต ใช้สัดส่วนภาพจาก ⚙ ของ Slot {slot_index + 1})",
              bg="#DBEAFE", fg="#1E3A8A", font=("TkDefaultFont", 10, "bold")).pack(side="left", padx=10, pady=6)
     body = tk.Frame(panel, bg="#F8FAFC")
     body.pack(fill="both", expand=True)
     controls = _build(g, root, panel, body, mode="video", slot_index=slot_index)
 
-    row = int(grid.get("row", slot_index) or 0)
-    other_rows = [r for r in range(2) if r != row]
-    saved_rows = {r: container.grid_rowconfigure(r) for r in [row, *other_rows]}
-
     def show_auto():
-        if not grid:
-            return
-        slot_frame.grid_remove()
-        panel.grid(**grid)
-        # The automatic panel needs room for its scene table: give it 3/4.
-        container.grid_rowconfigure(row, weight=3, uniform="")
-        for r in other_rows:
-            container.grid_rowconfigure(r, weight=1, uniform="")
+        # Full page: the panel covers every Slot so the plan table, progress and log all fit.
+        panel.place(x=0, y=0, relwidth=1, relheight=1)
+        panel.lift()
         controls["refresh_clip_info"]()
 
     def show_slot():
         if controls["busy"]():
             messagebox.showinfo("ออโต้", "กำลังทำงานอยู่ — กดหยุดก่อนกลับเป็น Slot ปกติ", parent=panel)
             return
-        panel.grid_remove()
-        slot_frame.grid()
-        for r, cfg in saved_rows.items():
-            container.grid_rowconfigure(r, weight=cfg.get("weight", 1), uniform=cfg.get("uniform", ""))
+        panel.place_forget()
 
     tk.Button(header, text=f"↩ กลับเป็น Slot {slot_index + 1} ปกติ", command=show_slot, relief="flat",
               bg="#FFFFFF", fg="#1E3A8A", cursor="hand2").pack(side="right", padx=8, pady=4)

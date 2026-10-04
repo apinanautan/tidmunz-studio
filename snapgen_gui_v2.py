@@ -1093,6 +1093,11 @@ try:
     # Override pyc's function so all existing callers use our module
     g["_do_image_request"] = _new_do_image_request
     g["_imgmod"] = _imgmod
+    try:
+        import snapgen_bridge_activity
+        snapgen_bridge_activity.install(g, _imgmod)
+    except Exception as _activity_exc:
+        print(f"[SnapGen] bridge activity light: {_activity_exc}")
 
     def _invalidate_downstream_story_histories():
         """Clear page labels after the only story cursor is explicitly reset."""
@@ -15650,6 +15655,8 @@ def _install_image_bridge_status():
         print(f"[SnapGen] global voice mic failed: {_voice_error}")
 
     def set_light(color, text):
+        if g.get("_bridge_busy"):
+            return  # a picture is being made: keep the orange "working" light
         try:
             light.itemconfig(dot, fill=color)
             status_var.set(text)

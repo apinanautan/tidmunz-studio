@@ -18454,6 +18454,14 @@ if root:
         g["mobile_web_url"] = _snapgen_mobile_web.install(g, root, BASE_ROOT, globals(), log_fn=print)
     except Exception as _mobile_web_error:
         print(f"[SnapGen] Mobile Web startup failed: {_mobile_web_error}", flush=True)
+    def _startup_auto_update():
+        """Opening the program checks GitHub once and installs a newer version by itself (startup only)."""
+        if (BASE_ROOT / ".git").exists() or os.environ.get("SNAPGEN_NO_AUTO_UPDATE"):
+            return  # a developer checkout must never overwrite itself
+        _manual_update_authorized[0] = True
+        _check_github_update(root, g.get("snap_status_var"), interactive=False)
+
+    root.after(2500, _startup_auto_update)
     print("[SnapGen] พร้อมใช้งาน ✓")
     root.mainloop()
 

@@ -247,6 +247,19 @@ def local_image_problems(scenes, aspect) -> dict:
     return problems
 
 
+def error_reason(error: str) -> str:
+    """Short Thai label + GPT's own words for why a scene picture was not made."""
+    text = str(error or "")
+    for marker in ("GPT said:", "blocked by safety policy:"):
+        if marker in text:
+            return "ผิดกฎ/GPT ไม่ยอมวาด — " + text.split(marker, 1)[1].strip()[:200]
+    if "rate limit" in text.lower() or "ถึงลิมิต" in text:
+        return "โควตารูปหมด"
+    if "รูปเก่าซ้ำ" in text:
+        return "GPT ไม่วาดรูปใหม่ (ส่งรูปเก่ากลับมา) — ลองกด GPT ช่วยแก้ prompt"
+    return text[:160]
+
+
 def save_storyboard(scenes, out_path, tile_width=480) -> str:
     """All finished scene pictures in order on one image (square-ish grid: 35 scenes -> 6 x 6)."""
     import math
@@ -1110,13 +1123,15 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
         table.delete(*table.get_children())
         for i, scene in enumerate((state["project"] or {}).get("scenes", [])):
             image = scene.get("image")
-            status = "✓" if image and os.path.isfile(image) else ("ผิดพลาด" if scene.get("error") else "—")
+            status = "✓" if image and os.path.isfile(image) else "—"
+            if scene.get("error"):
+                status = "เจนไม่ได้: " + error_reason(scene["error"])
             if scene.get("bad"):
                 status = "ต้องเจนใหม่: " + scene["bad"]
             if video_mode:
                 clip = scene.get("clip")
                 status = f"รูป{status} คลิป" + ("✓" if clip and os.path.isfile(clip) else ("✗" if scene.get("clip_error") else "—"))
-            table.insert("", "end", iid=str(i), tags=("bad",) if scene.get("bad") else (), values=(
+            table.insert("", "end", iid=str(i), tags=("bad",) if scene.get("bad") or scene.get("error") else (), values=(
                 i + 1, fmt_time(scene.get("start")), ", ".join(scene.get("characters") or []),
                 scene.get("prompt", "").replace("\n", " "), status))
 
@@ -1258,6 +1273,9 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
                     message = friendly(str(exc)) if callable(friendly) else str(exc)
                     raise RateLimited(message) from exc
                 log(f"❌ {label} ครั้งที่ {attempt}: {str(exc)[:200]}")
+                if "GPT said:" in str(exc) or "safety policy" in text:
+                    # GPT refused this prompt: asking the same thing again only burns time.
+                    raise
                 if "conversation_not_found" in text or ("conversation" in text and ("not found" in text or "404" in text)):
                     # One story = one GPT history. Never open a replacement
                     # chat silently; the user decides with the explicit button.
@@ -2275,6 +2293,9 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
         if not selection or int(selection[0]) >= len(scenes):
             return
         image = scenes[int(selection[0])].get("image")
+        if scenes[int(selection[0])].get("error"):
+            preview.config(image="", text="เจนไม่ได้:\n" + error_reason(scenes[int(selection[0])]["error"]), wraplength=280)
+            return
         if not image or not os.path.isfile(image):
             preview.config(image="", text=scenes[int(selection[0])].get("error") or "ยังไม่มีรูป", wraplength=280)
             return

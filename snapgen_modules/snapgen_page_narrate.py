@@ -904,6 +904,7 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
     tk.Label(table_tools, text="ฉาก (ดับเบิลคลิกเพื่อแก้พรอมต์)", bg=bg, fg="#334155").pack(side="left")
     make_styled_button(table_tools, "SECONDARY", "ต่อวิดีโอใหม่", command=lambda: start_pipeline(only="video")).pack(side="right")
     make_styled_button(table_tools, "SECONDARY", "สร้างรูปใหม่ช็อตที่เลือก", command=lambda: regenerate_selected()).pack(side="right", padx=6)
+    make_styled_button(table_tools, "PRIMARY", "GPT ช่วยแก้ prompt", command=lambda: refine_selected()).pack(side="right", padx=6)
     make_styled_button(table_tools, "DANGER", "เริ่มประวัติ GPT ใหม่", command=lambda: reset_history()).pack(side="right")
     table_frame = tk.Frame(box, bg=bg)
     table_frame.pack(fill="both", expand=True, padx=8, pady=4)
@@ -1586,6 +1587,23 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
             except (Stopped, HistoryLost, RateLimited):
                 raise
             except Exception as exc:
+                if not scene.get("prompt_before_refine"):
+                    # Usually a refused prompt (e.g. a child in danger): let GPT soften it once and try again.
+                    try:
+                        log(f"ฉาก {i + 1} เจนไม่ได้ — ให้ GPT แก้ prompt ให้เจนได้แล้วลองใหม่")
+                        refine_scene_prompt(i)
+                        scene["image"] = make_image(scene_prompt(scene), ref_paths, images_dir, f"scene_{i + 1:03d}",
+                                                    project["aspect"])
+                        scene.pop("error", None)
+                        scene.pop("bad", None)
+                        failures_in_row = 0
+                        save_project()
+                        ui(refresh_table)
+                        continue
+                    except (Stopped, HistoryLost, RateLimited):
+                        raise
+                    except Exception as retry_exc:
+                        exc = retry_exc
                 scene["error"] = str(exc)[:300]
                 failures_in_row += 1
                 if failures_in_row >= 3:
@@ -1599,6 +1617,73 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
         log(f"✓ รูปครบ {len(scenes)} ฉาก")
         if indices is None:
             verify_images()
+
+    def gpt_text(prompt: str) -> str:
+        """One question to GPT in a temporary chat (keeps the story history clean)."""
+        body = {"model": "auto", "temporary_chat": True, "chatgpt_image_intercept": False,
+                "messages": [{"role": "user", "content": prompt}]}
+        request = urllib.request.Request(
+            g["_chatgpt_api_base"]() + "/chat/completions", data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
+            headers={"Authorization": "Bearer local-dev-key", "Content-Type": "application/json; charset=utf-8"},
+            method="POST")
+        with g.get("_bridge_queue_lock") or threading.Lock():
+            with urllib.request.urlopen(request, timeout=600) as response:
+                data = json.loads(response.read().decode("utf-8", errors="replace"))
+        message = ((data.get("choices") or [{}])[0].get("message") or {}).get("content") or ""
+        return str(message)
+
+    def refine_scene_prompt(index) -> str:
+        """Ask GPT to rewrite one scene prompt so the image generator accepts it, keeping the story beat."""
+        project = state["project"]
+        scene = project["scenes"][index]
+        context = project.get("context") or {}
+        ages = {c.get("name"): c.get("อายุ") or c.get("age") or "" for c in context.get("characters", [])}
+        who = "; ".join(f"{n} ({ages.get(n, '')})" for n in scene.get("characters") or [])
+        reply = gpt_text(
+            "prompt ภาพนี้ใช้สร้างรูปประกอบเรื่องเล่าไทยไม่ผ่าน (ตัวสร้างรูปปฏิเสธ หรือไม่ยอมวาด). "
+            "เขียน prompt ใหม่ภาษาไทยให้สร้างรูปได้ โดยคงเหตุการณ์และอารมณ์ของเรื่องไว้ให้มากที่สุด. หลักการ: "
+            "ถ้ามีเด็ก ห้ามให้เด็กดูตกอยู่ในอันตรายหรือถูกคุกคาม — ให้สิ่งน่ากลัวอยู่ห่าง เห็นแค่บางส่วน ถ่ายเด็กจากด้านหลังหรือไกลๆ "
+            "อารมณ์เด็กเป็นสงสัย/ชะงักแทนหวาดกลัว หรือทำเป็นภาพแทรกที่ไม่มีเด็กในเฟรม; "
+            "ความรุนแรง เลือด บาดแผล ให้เปลี่ยนเป็นนัยหรือเอฟเฟกต์ภาพยนตร์; ฉากและชุดเป็นแบบไทย; ภาพเดียวเต็มเฟรม ไม่มีตัวหนังสือ. "
+            "ตอบ JSON เท่านั้น {\"prompt\":\"...\"}\n\n"
+            f"ตัวละครในภาพ: {who or '-'}\nprompt เดิม: {scene.get('prompt', '')}")
+        new = str((parse_json_reply(reply) or {}).get("prompt") or "").strip()
+        if not new:
+            raise RuntimeError("GPT ไม่ได้ส่ง prompt ใหม่กลับมา")
+        scene.setdefault("prompt_before_refine", scene.get("prompt", ""))
+        scene["prompt"] = new
+        save_project()
+        return new
+
+    def refine_selected():
+        project = state["project"]
+        selected = sorted(int(i) for i in table.selection())
+        if not project or not selected:
+            messagebox.showinfo("เล่าภาพ", "เลือกฉากในตารางก่อน (คลิกแถว กด Ctrl เพื่อเลือกหลายฉาก)", parent=page)
+            return
+        if state["busy"]:
+            messagebox.showinfo("เล่าภาพ", "กำลังทำงานอยู่ — รอให้เสร็จ หรือกดหยุดก่อน", parent=page)
+            return
+        state["busy"], state["stop"] = True, False
+
+        def worker():
+            done = []
+            try:
+                for i in selected:
+                    set_progress("images", 0, f"GPT กำลังแก้ prompt ฉาก {i + 1}")
+                    log(f"ฉาก {i + 1} prompt ใหม่: {refine_scene_prompt(i)}")
+                    done.append(i)
+            except Exception as exc:
+                log(f"❌ GPT แก้ prompt ไม่สำเร็จ: {exc}")
+            finally:
+                state["busy"] = False
+                ui(refresh_all)
+            if done:
+                def ask():
+                    if messagebox.askyesno("เล่าภาพ", f"แก้ prompt แล้ว {len(done)} ฉาก (ดูได้ในตาราง/ดับเบิลคลิก) — เจนรูปใหม่เลยไหม?", parent=page):
+                        regenerate_selected(done, ask=False)
+                ui(ask)
+        threading.Thread(target=worker, daemon=True).start()
 
     def gpt_image_problems(scenes):
         """One look by GPT at a numbered sheet of every scene (temporary chat, not the story history)."""

@@ -1550,6 +1550,7 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
                         scene_prompt(scene) + "\nภาพฉากจริงที่มีฉากหลังและบรรยากาศตามเรื่อง ห้ามพื้นหลังสีเรียบ",
                         [], images_dir, f"scene_{i + 1:03d}", project["aspect"]))
                 scene.pop("error", None)
+                scene.pop("bad", None)
                 failures_in_row = 0
             except (Stopped, HistoryLost, RateLimited):
                 raise
@@ -2034,12 +2035,12 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
             state["stop"] = True
             log("กำลังหยุดหลังขั้นตอนย่อยที่ทำอยู่ ...")
 
-    def regenerate_selected():
+    def regenerate_selected(only=None, ask=True):
         project = state["project"]
-        selected = sorted(int(i) for i in table.selection())
+        selected = sorted(only if only is not None else (int(i) for i in table.selection()))
         if state["busy"] or not project or not selected:
             return
-        if not messagebox.askyesno("เล่าภาพ", f"สร้างรูปใหม่ {len(selected)} ฉาก (ใช้เครดิต {len(selected)} รูป)?", parent=page):
+        if ask and not messagebox.askyesno("เล่าภาพ", f"สร้างรูปใหม่ {len(selected)} ฉาก (ใช้เครดิต {len(selected)} รูป)?", parent=page):
             return
         state["busy"], state["stop"] = True, False
 
@@ -2064,7 +2065,8 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
         selection = table.selection()
         if not selection or state["busy"]:
             return
-        scene = state["project"]["scenes"][int(selection[0])]
+        index = int(selection[0])
+        scene = state["project"]["scenes"][index]
         win = tk.Toplevel(page)
         win.title(f"แก้ฉาก {int(selection[0]) + 1}")
         win.geometry("760x360")
@@ -2077,7 +2079,14 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
             save_project()
             refresh_table()
             win.destroy()
-        make_styled_button(win, "PRIMARY", "บันทึก", command=save).pack(anchor="e", padx=8, pady=(0, 8))
+
+        def save_and_redraw():
+            save()
+            regenerate_selected([index], ask=False)
+        buttons = tk.Frame(win)
+        buttons.pack(anchor="e", padx=8, pady=(0, 8))
+        make_styled_button(buttons, "SECONDARY", "บันทึก", command=save).pack(side="left", padx=4)
+        make_styled_button(buttons, "PRIMARY", "บันทึกแล้วเจนรูปใหม่", command=save_and_redraw).pack(side="left", padx=4)
 
     def show_preview(_event=None):
         selection = table.selection()

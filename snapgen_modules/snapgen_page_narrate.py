@@ -85,15 +85,18 @@ import snapgen_voice_input as V
 model, backend = V._get_whisper_model(log_fn=lambda m: emit({"log": str(m)}))
 emit({"backend": backend})
 segments, _info = model.transcribe(sys.argv[2], language="th", vad_filter=True, beam_size=1, temperature=0.0,
-                                   initial_prompt=sys.argv[3] or None, word_timestamps=True)
+                                   initial_prompt=sys.argv[3] or None, word_timestamps=sys.argv[4] == "1")
 for s in segments:
     words = [[round(w.start, 2), round(w.end, 2), w.word] for w in (s.words or [])]
     emit({"start": s.start, "end": s.end, "text": s.text, "words": words})
 """
 
 
-def transcribe_in_background(audio: str, initial_prompt: str = "", should_stop=lambda: False):
-    """Yield Whisper results from a separate below-normal-priority process."""
+def transcribe_in_background(audio: str, initial_prompt: str = "", should_stop=lambda: False, words: bool = False):
+    """Yield Whisper results from a separate below-normal-priority process.
+
+    ``words`` adds Whisper word times (Slot 2 ออโต้ cuts dialogue with them); เล่าภาพ does not need them.
+    """
     import sys
     python = sys.executable
     console_python = Path(python).with_name("python.exe")
@@ -101,7 +104,7 @@ def transcribe_in_background(audio: str, initial_prompt: str = "", should_stop=l
         python = str(console_python)  # pythonw has no usable stdout pipe on some PCs
     env = dict(os.environ, PYTHONIOENCODING="utf-8")
     proc = subprocess.Popen(
-        [python, "-B", "-c", _TRANSCRIBE_CHILD, str(Path(__file__).resolve().parent), str(audio), initial_prompt],
+        [python, "-B", "-c", _TRANSCRIBE_CHILD, str(Path(__file__).resolve().parent), str(audio), initial_prompt, "1" if words else "0"],
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env, creationflags=LOW_PRIORITY)
     try:
         for raw in proc.stdout:
@@ -1678,7 +1681,7 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
         # Whisper runs in its own low-priority process: the GPU does the model,
         # but audio decoding/features use the CPU and must not freeze the PC.
         for item in transcribe_in_background(project["audio"], ("ชื่อในเรื่อง: " + ", ".join(names)) if names else "",
-                                             should_stop=lambda: state["stop"]):
+                                             should_stop=lambda: state["stop"], words=video_mode):
             if "log" in item:
                 log(item["log"])
                 continue
@@ -1687,8 +1690,9 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
                 continue
             text = item["text"].strip().replace("ํา", "ำ")  # ํา → ำ
             if text:
-                segments.append({"start": round(item["start"], 2), "end": round(item["end"], 2), "text": text,
-                                 "words": item.get("words") or []})  # word times place dialogue cuts
+                segments.append({"start": round(item["start"], 2), "end": round(item["end"], 2), "text": text})
+                if item.get("words"):  # Slot 2 ออโต้ only: word times place dialogue cuts
+                    segments[-1]["words"] = item["words"]
             set_progress("transcribe", item["end"] / duration, f"ฟังเสียง {fmt_time(item['end'])} / {fmt_time(duration)} ({backend})")
         check_stop()
         if not segments:

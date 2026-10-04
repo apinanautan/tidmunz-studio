@@ -2084,6 +2084,7 @@ try:
             result = subprocess.run(
                 [ffmpeg, "-y", "-i", str(src), "-map", "0:v:0", "-c:v", "copy", "-an", str(tmp)],
                 capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=300,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             )
             if result.returncode or not tmp.is_file() or tmp.stat().st_size <= 0:
                 raise RuntimeError((result.stderr or result.stdout or "ffmpeg mute failed")[-500:])
@@ -2111,6 +2112,7 @@ try:
             probe = subprocess.run(
                 [ffmpeg, "-hide_banner", "-i", str(src)],
                 capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             )
             probe_text = (probe.stderr or "") + "\n" + (probe.stdout or "")
             video_line = next((line for line in probe_text.splitlines() if "Video:" in line), "")

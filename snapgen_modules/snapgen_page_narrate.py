@@ -136,7 +136,8 @@ VIDEO_STAGES = (
     ("context", "วิเคราะห์บท", 4),
     ("transcribe", "ฟังเสียง", 6),
     ("plan", "วางแผนฉาก", 5),
-    ("images", "สร้างรูปฉาก", 25),
+    ("storyboard", "สตอรี่ชีต", 5),
+    ("images", "สร้างรูปฉาก", 20),
     ("clips", "สร้างคลิปวิดีโอ", 50),
     ("video", "ตัดต่อ", 10),
 )
@@ -968,6 +969,7 @@ def plan_video(segments: list, duration: float, names: list, era: str, ask, horr
                 "motion": MOTIONS[len(scenes) % len(MOTIONS)],
                 "slow": str(item.get("slow")).lower() == "true",
                 "cheap": str(item.get("cheap")).lower() == "true",
+                "shot_no": n,  # number in the director plan (its sequences use these)
             }
             if str(item.get("transition") or "").strip().lower() in TRANSITIONS:
                 scene["transition"] = str(item["transition"]).strip().lower()
@@ -1053,6 +1055,66 @@ def apply_continuity(scenes: list, entries, numbers: list | None = None) -> None
             scene["continuity"] = "; ".join(dict.fromkeys(notes))
         else:
             scene.pop("continuity", None)
+
+
+BOARD_CELLS = 9  # one storyboard sheet = 3 x 3 panels, each the video's own shape
+
+
+def board_groups(scenes: list, direction: dict | None) -> list:
+    """Scene indices per storyboard sheet: one director sequence per sheet (split above 9 panels).
+
+    Shots without a director sequence (older plans) go in runs of up to 9.
+    """
+    sequence_of = {}
+    for k, seq in enumerate((direction or {}).get("sequences") or []):
+        try:
+            a, b = (int(x) for x in (seq.get("shots") or [])[:2])
+        except (TypeError, ValueError):
+            continue
+        for n in range(a, b + 1):
+            sequence_of.setdefault(n, k)
+    groups, last = [], object()
+    for i, scene in enumerate(scenes):
+        key = sequence_of.get(scene.get("shot_no"), ("run", i // BOARD_CELLS))
+        if groups and key == last and len(groups[-1]) < BOARD_CELLS:
+            groups[-1].append(i)
+        else:
+            groups.append([i])
+        last = key
+    return groups
+
+
+def crop_board(sheet_path, count: int, out_paths: list, inset: float = 0.03) -> None:
+    """Cut panels 1..count (left to right, top to bottom) out of a 3 x 3 storyboard sheet."""
+    from PIL import Image
+    with Image.open(sheet_path) as sheet:
+        sheet = sheet.convert("RGB")
+        w, h = sheet.size
+        cw, ch = w / 3, h / 3
+        for k in range(count):
+            row, col = divmod(k, 3)
+            box = (int(col * cw + cw * inset), int(row * ch + ch * inset),
+                   int((col + 1) * cw - cw * inset), int((row + 1) * ch - ch * inset))
+            sheet.crop(box).save(out_paths[k])
+
+
+def board_request(numbered: list, aspect: str) -> str:
+    """One storyboard sheet: a 3 x 3 grid, panel k = the k-th listed shot, in story order."""
+    shape = "แนวตั้ง 9:16" if aspect == "9:16" else "แนวนอน 16:9"
+    lines = "\n".join(
+        f"ช่อง {k}: ช็อต {n} — {str(s.get('prompt') or '')[:260]}"
+        + (f" | สภาพต่อเนื่อง: {s['continuity']}" if s.get("continuity") else "")
+        for k, (n, s) in enumerate(numbered, 1))
+    empty = BOARD_CELLS - len(numbered)
+    return (
+        "วาดสตอรี่บอร์ดภาพยนตร์ 1 รูป เป็นตาราง 3 แถว x 3 คอลัมน์ ช่องเท่ากันทุกช่อง "
+        f"แต่ละช่องเป็นภาพ{shape} คั่นด้วยเส้นขาวบางๆ เรียงช่องจากซ้ายไปขวา บนลงล่าง ตามลำดับช็อตด้านล่าง "
+        "ทุกช่องเป็นช็อตต่อเนื่องของหนังเรื่องเดียวกัน: ตัวละครหน้าตาเหมือนกันทุกช่อง สภาพตัวละคร (บาดแผล เลือด ความเปียก ร่างที่เปลี่ยน) "
+        "ต่อเนื่องจากช่องก่อน แสงและโทนสีต่อเนื่องกัน ทิศทางจอสอดคล้องกัน. "
+        "ภาพสมจริงแบบภาพนิ่งจากภาพยนตร์ไลฟ์แอ็กชัน ไม่ใช่การ์ตูน ไม่มีตัวหนังสือ ไม่มีตัวเลขในภาพ. "
+        + (f"ช่องท้ายสุด {empty} ช่องที่ไม่มีช็อต ให้เป็นสีดำล้วน. " if empty > 0 else "")
+        + "รูปที่แนบมาใช้เป็นหน้าตา/รูปร่างของตัวละครและสถานที่เท่านั้น.\n\n" + lines
+    )
 
 
 def director_request(shots: list, names: list, era: str, horror: bool = False, refs: list | None = None) -> str:
@@ -1692,13 +1754,24 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
             message = "".join(str(p.get("text") or "") if isinstance(p, dict) else str(p) for p in message)
         return str(message)
 
-    def make_image(prompt, refs, out_dir, name, aspect):
+    def make_image(prompt, refs, out_dir, name, aspect, board=None):
         imgmod = runtime.get("_imgmod") or g.get("_imgmod")
         if imgmod is None:
             raise RuntimeError("ระบบสร้างรูปยังไม่พร้อม")
         project = state["project"]
+        if board:
+            # Image 1 = this shot's storyboard panel (layout to follow), then identity references.
+            refs = [board, *refs][:6]
         encoded = [base64.b64encode(Path(p).read_bytes()).decode("ascii") for p in refs]
-        if refs:
+        if board:
+            prompt += (
+                "\n\nImage 1 is the STORYBOARD PANEL of this shot: follow its composition, camera angle, framing, "
+                "character positions, action and each character's condition (wounds, blood, wet, transformed) exactly, "
+                "but redraw it as a full-resolution photorealistic live-action film frame with real detail. "
+                "No panel borders, no shot numbers, no text."
+                + ("\nOther attached images are ONLY each character's identity (face, body, outfit):\n"
+                   + "\n".join(f"Image {i}: {Path(p).stem}" for i, p in enumerate(refs[1:], 2)) if len(refs) > 1 else ""))
+        elif refs:
             prompt += (
                 "\n\nATTACHED REFERENCES are ONLY for each character's identity (face, body, outfit):\n"
                 + "\n".join(f"Image {i}: {Path(p).stem}" for i, p in enumerate(refs, 1))
@@ -2134,6 +2207,44 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
         count = sum(1 for sc in scenes if sc.get("continuity"))
         log(f"✓ บันทึกความต่อเนื่อง: {count} ช็อตมีสภาพที่ต้องต่อเนื่อง (เช่น บาดแผล) — ใส่ในคำสั่งรูปและคลิปให้อัตโนมัติ")
 
+    def stage_storyboard():
+        """Draw the shots as storyboard sheets (one per sequence, 3 x 3), then cut each sheet into panels.
+
+        Each shot's picture is later drawn from its own panel, so the sheet's
+        continuity (same faces, wounds, light, screen direction) carries over.
+        """
+        project = state["project"]
+        check_script_matches_audio()
+        ensure_story_in_history()
+        ensure_continuity()
+        scenes = project["scenes"]
+        board_dir = Path(state["folder"]) / "storyboard"
+        board_dir.mkdir(exist_ok=True)
+        groups = [grp for grp in board_groups(scenes, project.get("direction"))
+                  if any(not (scenes[i].get("image") and os.path.isfile(scenes[i]["image"])) for i in grp)]
+        groups = [grp for grp in groups if not all(scenes[i].get("board") and os.path.isfile(scenes[i]["board"]) for i in grp)]
+        if not groups:
+            log("สตอรี่ชีต: ไม่มีช็อตที่ต้องวาดรูปใหม่ — ข้าม")
+            return
+        for k, grp in enumerate(groups, 1):
+            check_stop()
+            first, last = grp[0] + 1, grp[-1] + 1
+            set_progress("storyboard", (k - 1) / len(groups), f"วาดสตอรี่ชีต {k}/{len(groups)} (ช็อต {first}–{last})")
+            refs = []
+            for i in grp:
+                refs += [p for p in attachments_for(scenes[i]) if p not in refs]
+            name = f"sheet_{first:03d}-{last:03d}"
+            sheet = with_retries(f"สตอรี่ชีต ช็อต {first}–{last}", lambda grp=grp, refs=refs, name=name: make_image(
+                board_request([(i + 1, scenes[i]) for i in grp], project["aspect"]) + "\n" + style_text(),
+                refs[:6], board_dir, name, project["aspect"]))
+            panels = [board_dir / f"panel_{i + 1:03d}.png" for i in grp]
+            crop_board(sheet, len(grp), panels)
+            for i, panel in zip(grp, panels):
+                scenes[i]["board"] = str(panel)
+            save_project()
+            log(f"✓ สตอรี่ชีต ช็อต {first}–{last}: {Path(sheet).name}")
+        log(f"✓ สตอรี่ชีตครบ {len(groups)} ชีต (โฟลเดอร์ storyboard) — รูปฉากแต่ละช็อตจะวาดตามช่องของตัวเอง")
+
     def stage_images(indices=None):
         project = state["project"]
         check_script_matches_audio()
@@ -2161,8 +2272,9 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
             else:
                 ref_paths = [refs[c] for c in scene.get("characters") or [] if c in refs][:4]
             try:
+                board = scene.get("board") if video_mode and scene.get("board") and os.path.isfile(scene["board"]) else None
                 scene["image"] = with_retries(f"ฉาก {i + 1}", lambda: make_image(
-                    scene_prompt(scene), ref_paths, images_dir, f"scene_{i + 1:03d}", project["aspect"]))
+                    scene_prompt(scene), ref_paths, images_dir, f"scene_{i + 1:03d}", project["aspect"], board=board))
                 if ref_paths and looks_like_reference_sheet(scene["image"]):
                     # The picture came back as a copy of a reference (plain backdrop): draw the scene again
                     # without attachments so every shot is a real scene picture.
@@ -2692,7 +2804,8 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
             ui(refresh_table)
 
     STAGE_FUNCS = {"context": stage_context, "transcribe": stage_transcribe, "characters": stage_characters,
-                   "plan": stage_plan, "images": stage_images, "clips": stage_clips, "video": stage_video}
+                   "plan": stage_plan, "storyboard": stage_storyboard, "images": stage_images,
+                   "clips": stage_clips, "video": stage_video}
 
     # ── control ──
     def ask_on_ui(title, message) -> bool:
@@ -2718,10 +2831,14 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
             if missing + len(todo) == 0:
                 return True
             assign_clips(scenes, float(project["duration"]))
+            sheets = sum(1 for grp in board_groups(scenes, project.get("direction"))
+                         if any(not (scenes[i].get("image") and os.path.isfile(scenes[i]["image"])) for i in grp)
+                         and not all(scenes[i].get("board") and os.path.isfile(scenes[i]["board"]) for i in grp))
             return ask_on_ui(
                 "ออโต้ — ยืนยันใช้เครดิต",
                 f"วางแผนเสร็จแล้ว\n\nไฟล์แนบที่จะใช้ ({len(matched)}): {', '.join(matched[:15]) or '-'}\n"
-                f"รูปฉาก {missing} รูป + คลิปวิดีโอ {len(todo)} คลิป (vela = ตัวถูก ถ้าเจนไม่ได้จะเปลี่ยนเป็น grok-lower เอง)\n"
+                + (f"สตอรี่ชีต {sheets} รูป (ตามซีเควนซ์ ชีตละไม่เกิน 9 ช็อต) + " if sheets else "")
+                + f"รูปฉาก {missing} รูป + คลิปวิดีโอ {len(todo)} คลิป (vela = ตัวถูก ถ้าเจนไม่ได้จะเปลี่ยนเป็น grok-lower เอง)\n"
                 f"   {clip_summary(todo)}\n   (สโลว์×2 = ทำ AI Slow 2x หลังได้คลิป)\n\nเริ่มเลยไหม?")
         new_refs = [(c, n) for c, n in characters_needing_refs(project.get("context") or {}, project.get("scenes") or [])
                     if c["name"] not in existing]
@@ -2836,7 +2953,7 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
                     current = key
                     if project["done"].get(key) and key != "video":
                         continue
-                    if key in ("characters", "images") and not confirmed:
+                    if key in ("characters", "storyboard", "images") and not confirmed:
                         if not confirm_credits():
                             log("⏸ ยังไม่สร้างรูป — แผนฉากยังอยู่ แก้แล้วกดเริ่มเพื่อทำต่อได้")
                             ui(stage_var.set, "รอยืนยันก่อนสร้างรูป")
@@ -2907,6 +3024,8 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
             project.pop("direction", None)
             project.pop("planned_windows", None)
         for scene in project.get("scenes") or []:
+            if "storyboard" in redo:
+                scene.pop("board", None)
             if "images" in redo:
                 for key in ("image", "bad", "error"):
                     scene.pop(key, None)

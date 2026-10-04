@@ -1327,6 +1327,9 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
     make_styled_button(table_tools, "SECONDARY", "สร้างรูปใหม่ช็อตที่เลือก", command=lambda: regenerate_selected()).pack(side="right", padx=6)
     make_styled_button(table_tools, "DANGER", "🛠 แก้ช็อตที่มีปัญหา" if video_mode else "🛠 แก้รูปที่มีปัญหา",
                        command=lambda: fix_problem_selected()).pack(side="right", padx=6)
+    if video_mode:
+        make_styled_button(table_tools, "SUCCESS", "🎬 เจนวิดีโอใหม่ช็อตที่เลือก",
+                           command=lambda: remake_clips_selected()).pack(side="right", padx=6)
     make_styled_button(table_tools, "PRIMARY", "GPT ช่วยแก้ prompt", command=lambda: refine_selected()).pack(side="right", padx=6)
     make_styled_button(table_tools, "DANGER", "เริ่มประวัติ GPT ใหม่", command=lambda: reset_history()).pack(side="right")
     table_frame = tk.Frame(box, bg=bg)
@@ -2945,7 +2948,8 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
                 redraw = []
                 for i in selected:
                     scene = project["scenes"][i]
-                    set_progress("images", 0, f"GPT กำลังเขียนช็อต {i + 1} ใหม่เพื่อแก้: {problem[:40]}")
+                    set_progress("clips" if video_mode else "images", 0,
+                                 f"GPT กำลังเขียนคำสั่งช็อต {i + 1} ใหม่เพื่อแก้: {problem[:40]}")
                     reply = with_retries(f"แก้ช็อต {i + 1}", lambda i=i: parse_json_reply(chat(fix_request(i, problem))))
                     if not str(reply.get("prompt") or "").strip():
                         raise RuntimeError(f"GPT ไม่ได้ส่ง prompt ใหม่ของช็อต {i + 1}")
@@ -2962,22 +2966,73 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
                         + (f" · ห้ามเด็ดขาด: {scene['forbid']}" if scene.get("forbid") else ""))
                     if not video_mode:
                         redraw.append(i)  # เล่าภาพ: the picture is the result
-                    # ออโต้: keep the first picture, make the video again with the stricter prompt.
-                    for key in ("clip", "clip_normal", "clip_error"):
-                        scene.pop(key, None)
                     save_project()
                     ui(refresh_table)
                 if redraw:
                     log(f"วาดภาพเริ่มต้นใหม่: ช็อต {', '.join(str(i + 1) for i in redraw)}")
                     stage_images(redraw)
                 if video_mode:
-                    log(f"เจนวิดีโอใหม่ด้วยคำสั่งที่แก้แล้ว: ช็อต {', '.join(str(i + 1) for i in selected)} "
-                        "(ถ้าภาพแรกก็มีปัญหาเดียวกัน กด 'สร้างรูปใหม่ช็อตที่เลือก' ก่อน)")
-                    project["done"].pop("clips", None)
-                    stage_clips(selected)
+                    # ออโต้: keep the first picture; making the video again uses credits, so ask first.
+                    shots = ", ".join(str(i + 1) for i in selected)
+                    set_progress("clips", 0, f"แก้คำสั่งช็อต {shots} แล้ว — รอยืนยันเจนวิดีโอ")
+                    if not ask_on_ui("เจนวิดีโอใหม่?",
+                                     f"แก้คำสั่งวิดีโอช็อต {shots} แล้ว (ดูได้ใน Log/ดับเบิลคลิกในตาราง)\n\n"
+                                     f"เจนวิดีโอใหม่ {len(selected)} คลิปเลยไหม? (ใช้เครดิตวิดีโอ)\n"
+                                     "ถ้าภาพแรกก็มีปัญหาเดียวกัน ให้ตอบ 'ไม่' แล้วกด 'สร้างรูปใหม่ช็อตที่เลือก' ก่อน"):
+                        log(f"⏸ ยังไม่เจนวิดีโอ — คำสั่งใหม่บันทึกแล้ว กด '🎬 เจนวิดีโอใหม่ช็อตที่เลือก' เมื่อพร้อม")
+                        ui(stage_var.set, "แก้คำสั่งแล้ว ยังไม่เจนวิดีโอ")
+                        return
+                    remake_clips(selected)
                 log("✓ แก้ช็อตเสร็จ — กด 'ต่อวิดีโอใหม่' เพื่อรวมวิดีโออีกรอบ")
             except Exception as exc:
                 log(f"❌ แก้ช็อตไม่สำเร็จ: {exc}")
+            finally:
+                project["done"].pop("video", None)
+                save_project()
+                state["busy"] = False
+                ui(refresh_all)
+        threading.Thread(target=worker, daemon=True).start()
+
+    def remake_clips(selected):
+        """Worker thread: make the clips of these shots again with their current prompts (and show it)."""
+        project = state["project"]
+        shots = ", ".join(str(i + 1) for i in selected)
+        log(f"🎬 กำลังเจนวิดีโอใหม่: ช็อต {shots}")
+        ui(stage_var.set, f"กำลังเจนวิดีโอใหม่ ช็อต {shots}")
+        for i in selected:
+            for key in ("clip", "clip_normal", "clip_error"):
+                project["scenes"][i].pop(key, None)
+        project["done"].pop("clips", None)
+        stage_clips(selected)
+        log(f"✓ เจนวิดีโอใหม่เสร็จ: ช็อต {shots}")
+
+    def remake_clips_selected():
+        """Button: make the video of the selected shots again (custom redo, nothing else changes)."""
+        project = state["project"]
+        selected = sorted(int(i) for i in table.selection())
+        if not project or not selected:
+            messagebox.showinfo("เจนวิดีโอใหม่", "เลือกช็อตในตารางก่อน (Ctrl+คลิก เลือกได้หลายช็อต)", parent=page)
+            return
+        if state["busy"]:
+            messagebox.showinfo("เจนวิดีโอใหม่", "กำลังทำงานอยู่ — กดหยุด หรือรอให้เสร็จก่อน", parent=page)
+            return
+        missing = [i + 1 for i in selected if not (project["scenes"][i].get("image") and os.path.isfile(project["scenes"][i]["image"]))]
+        if missing:
+            messagebox.showinfo("เจนวิดีโอใหม่", f"ช็อต {', '.join(map(str, missing))} ยังไม่มีรูป — สร้างรูปก่อน", parent=page)
+            return
+        if not messagebox.askyesno("เจนวิดีโอใหม่", f"เจนวิดีโอใหม่ช็อต {', '.join(str(i + 1) for i in selected)} "
+                                   f"({len(selected)} คลิป ใช้เครดิตวิดีโอ)?", parent=page):
+            return
+        follow_active_account()
+        state["busy"], state["stop"] = True, False
+
+        def worker():
+            try:
+                remake_clips(selected)
+                log("กด 'ต่อวิดีโอใหม่' เพื่อรวมวิดีโออีกรอบ")
+            except Exception as exc:
+                log(f"❌ เจนวิดีโอใหม่ไม่สำเร็จ: {exc}")
+                ui(stage_var.set, "เจนวิดีโอใหม่ไม่สำเร็จ")
             finally:
                 project["done"].pop("video", None)
                 save_project()

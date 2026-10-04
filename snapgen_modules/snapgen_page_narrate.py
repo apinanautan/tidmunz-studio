@@ -882,7 +882,7 @@ def video_shots(segments: list, target: float = 8.0, limit: float = SHOT_LIMIT) 
 
 def plan_video(segments: list, duration: float, names: list, era: str, ask, horror: bool = False,
                progress=None, out: list | None = None, batch: int = 20, script: str = "",
-               direction: dict | None = None) -> list:
+               direction: dict | None = None, refs: list | None = None) -> list:
     """Video mode plan: program-cut shots, GPT writes each one, every shot gets a clip choice.
 
     ``ask(prompt) -> dict`` talks to GPT.  Shots GPT skipped are asked again
@@ -896,7 +896,7 @@ def plan_video(segments: list, duration: float, names: list, era: str, ask, horr
     direction = direction if direction is not None else {}
     if not direction.get("sequences"):
         try:
-            direction.update(ask(director_request(shots, names, era, horror)) or {})
+            direction.update(ask(director_request(shots, names, era, horror, refs)) or {})
         except Exception:
             pass  # still plannable shot by shot
     for first in range(0, len(shots), batch):
@@ -910,7 +910,7 @@ def plan_video(segments: list, duration: float, names: list, era: str, ask, horr
             if not wanted:
                 break
             reply = ask(video_plan_request([(n, shots[n - 1]) for n in wanted], names, previous, era, horror,
-                                           direction_for(direction, wanted)))
+                                           direction_for(direction, wanted), refs))
             for item in reply.get("scenes") or []:
                 if not isinstance(item, dict) or not str(item.get("prompt") or "").strip():
                     continue
@@ -949,7 +949,16 @@ def _shot_lines(numbered: list) -> str:
                      for n, s in numbered)
 
 
-def director_request(shots: list, names: list, era: str, horror: bool = False) -> str:
+def refs_note(refs) -> str:
+    """Attachment names GPT must write exactly, so each picture gets its reference files."""
+    if not refs:
+        return ""
+    return ("ไฟล์แนบรูปอ้างอิง (ตัวละคร/สถานที่/สิ่งของ) ที่มี: " + ", ".join(refs)
+            + ". เมื่อสิ่งนั้นอยู่ในภาพ ให้เขียนชื่อตรงตามชื่อไฟล์นี้ทุกตัวอักษรใน characters/location/prompt "
+            "ห้ามเปลี่ยนคำ ห้ามย่อ (โปรแกรมแนบรูปตามชื่อนี้). ")
+
+
+def director_request(shots: list, names: list, era: str, horror: bool = False, refs: list | None = None) -> str:
     """Director pass: read the whole narration as a film and break it into sequences before any shot is written."""
     return (
         "คุณคือผู้กำกับภาพยนตร์ ต้องทำเรื่องเล่าด้านล่างให้เป็นหนังสั้นที่ดูเป็นภาพยนตร์จริง ไม่ใช่ภาพประกอบคำบรรยาย. "
@@ -959,8 +968,8 @@ def director_request(shots: list, names: list, era: str, horror: bool = False) -
         "จะเปิดด้วยภาพอะไร ไปจบที่ภาพอะไร. ประโยคนามธรรม (ความคิด อดีต คำทำนาย ความรู้สึก ข้อมูลเบื้องหลัง) "
         "ต้องคิดภาพรูปธรรมที่เล่าแทนได้ เช่น ภาพย้อนอดีตโทนสีต่าง โคลสอัพสีหน้า สิ่งของสัญลักษณ์ ปฏิกิริยาของตัวละคร. "
         + (HORROR_NOTE if horror else "")
-        + f"ยุค/บรรยากาศ: {era}. ตัวละคร: {', '.join(names) or '-'}. "
-        "ตอบ JSON เท่านั้น: {\"look\":{\"genre_tone\":\"\",\"palette\":\"\",\"lighting\":\"\",\"camera_style\":\"\"},"
+        + f"ยุค/บรรยากาศ: {era}. ตัวละคร: {', '.join(names) or '-'}. " + refs_note(refs)
+        + "ตอบ JSON เท่านั้น: {\"look\":{\"genre_tone\":\"\",\"palette\":\"\",\"lighting\":\"\",\"camera_style\":\"\"},"
         "\"sequences\":[{\"shots\":[1,5],\"name\":\"\",\"location\":\"\",\"time_of_day\":\"\",\"purpose\":\"\","
         "\"emotion\":\"\",\"blocking\":\"\",\"visual_plan\":\"\",\"abstract_lines\":\"\"}]} "
         "look = โทนหนังทั้งเรื่อง (แนว โทนสี แสง สไตล์กล้อง) ใช้คงที่ทุกช็อต. "
@@ -988,7 +997,7 @@ def direction_for(direction: dict, numbers: list) -> str:
 
 
 def video_plan_request(numbered: list, names: list, previous: str, era: str, horror: bool = False,
-                       direction: str = "") -> str:
+                       direction: str = "", refs: list | None = None) -> str:
     """Ask GPT to direct one AI video clip per given (number, shot) — the cuts are already fixed."""
     lines = _shot_lines(numbered)
     return (
@@ -1009,6 +1018,7 @@ def video_plan_request(numbered: list, names: list, previous: str, era: str, hor
         "(video_prompt ให้ X ขยับปากพูดตลอดคลิปด้วยความเร็วปกติ) ช็อตนี้ slow=false cheap=false เสมอ. "
         + (HORROR_NOTE if horror else "")
         + f"ยุค/บรรยากาศ: {era}. ตัวละครที่ใช้ได้ (ใช้ชื่อตรงตัวเท่านั้น): {', '.join(names) or '-'}. "
+        + refs_note(refs)
         + (f"แผนผู้กำกับของช่วงนี้: {direction}. " if direction else "")
         + (f"ช็อตก่อนหน้าคือ: {previous}. " if previous else "")
         + "ตอบ JSON เท่านั้น: {\"scenes\":[{\"shot\":1,\"characters\":[],\"location\":\"\",\"prompt\":\"\","
@@ -1155,9 +1165,18 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
         folder = (runtime.get("img_ref_folder") or [None])[0]
         return folder if folder and os.path.isdir(str(folder)) else None
 
+    def attachment_names() -> list:
+        """File names (without extension) of the Image page's attachment folder."""
+        folder = attachment_folder()
+        if not folder:
+            return []
+        return sorted(os.path.splitext(n)[0].strip() for n in os.listdir(folder)
+                      if os.path.splitext(n)[1].lower() in (".png", ".jpg", ".jpeg", ".webp"))
+
     def attachments_for(scene):
         """Video flow: the Image page's attachments, matched by name like Image AI does."""
-        text = " ".join([scene_prompt(scene), " ".join(scene.get("characters") or []), str(scene.get("location") or "")])
+        text = " ".join([scene_prompt(scene), " ".join(scene.get("characters") or []), str(scene.get("location") or ""),
+                         str(scene.get("text") or "")])
         matcher = runtime.get("img_match_refs_for_text")
         if callable(matcher):
             found = matcher(text)
@@ -1844,7 +1863,8 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
             scenes_so_far = []
             plan_video(segments, float(project["duration"]), names, era, ask,
                        horror=project.get("style_mode") == "เรื่องผี", progress=progress, out=scenes_so_far,
-                       script=read_script(project["script"]), direction=project.setdefault("direction", {}))
+                       script=read_script(project["script"]), direction=project.setdefault("direction", {}),
+                       refs=attachment_names())
             if project["direction"]:
                 (folder / "director_plan.json").write_text(
                     json.dumps(project["direction"], ensure_ascii=False, indent=2), encoding="utf-8")

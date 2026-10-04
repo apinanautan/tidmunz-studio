@@ -463,7 +463,9 @@ def limit_scenes(scenes: list, target: int, duration: float) -> list:
     scenes = list(scenes)
     while len(scenes) > max(1, target):
         durs = segment_durations([s["start"] for s in scenes], duration)
-        shortest = min(range(1, len(scenes)), key=lambda i: durs[i])
+        # Short punchy shots GPT marked as highlights stay; merge ordinary ones first.
+        plain = [i for i in range(1, len(scenes)) if not scenes[i].get("highlight")] or list(range(1, len(scenes)))
+        shortest = min(plain, key=lambda i: durs[i])
         del scenes[shortest]
     return scenes
 
@@ -648,17 +650,29 @@ def character_description(character: dict) -> str:
     return " ".join(p for p in parts if p and p not in ("ไม่ระบุ", "-"))
 
 
-def plan_request(window: list, count: int, names: list, previous: str, era: str, clip_seconds: float = 0) -> str:
+PACING_NOTE = (
+    "จังหวะภาพต้องไม่เท่ากัน: ช่วงเล่าเรื่องเรียบๆ ให้ภาพเดียวแช่ยาวได้ 8–15 วินาที "
+    "ส่วนจุดเด่น (เหตุการณ์สำคัญ จุดหักมุม สิ่งที่โผล่ขึ้นมา หรือรายละเอียดที่ควรเห็นชัด) ให้ตัดเป็นภาพสั้น 2–5 วินาทีถี่ๆ "
+    "ใส่ภาพแทรกเด่นๆ ที่ช่วยเล่าเรื่องได้ เช่น โคลสอัพสิ่งของ สีหน้า หรือสิ่งที่เคลื่อนออกมา. "
+    "ทำเครื่องหมาย highlight=true ให้ภาพที่เป็นจุดเด่นของเรื่อง. ")
+HORROR_NOTE = (
+    "เรื่องนี้เป็นเรื่องผี ต้องขายความสยอง: ใส่ภาพแทรกสร้างความหลอน เช่น เงาที่มุมห้อง มือโผล่ งูเลื้อยออกจากซอกมุม "
+    "ดวงตาในความมืด ประตูแง้มเอง และโคลสอัพสีหน้าตกใจ ในจุดที่บทกำลังเข้มข้น. ")
+
+
+def plan_request(window: list, count: int, names: list, previous: str, era: str, clip_seconds: float = 0,
+                 horror: bool = False) -> str:
     lines = "\n".join(f"[{s['start']:.1f}] {s['text']}" for s in window)
     return (
         f"วางแผนภาพประกอบเสียงบรรยายช่วง {fmt_time(window[0]['start'])}–{fmt_time(window[-1]['end'])} "
         f"ประมาณ {count} ภาพ จากประโยคที่ถอดจากเสียงพร้อมเวลาเริ่ม (วินาที) ด้านล่าง. "
         "เลือกจุดเปลี่ยนภาพที่เหตุการณ์ สถานที่ หรือผู้พูดเปลี่ยน ภาพติดกันห้ามซ้ำมุมกล้องเดิม. "
+        + PACING_NOTE + (HORROR_NOTE if horror else "") +
         f"ยุค/บรรยากาศ: {era}. ตัวละครที่ใช้ได้ (ใช้ชื่อตรงตัวเท่านั้น): {', '.join(names) or '-'}. "
         + (f"ภาพก่อนหน้าคือ: {previous}. " if previous else "")
         + (f"แต่ละช็อตจะเป็นคลิปวิดีโอยาว {clip_seconds:g} วินาที ช็อตหนึ่งไม่ควรยาวเกิน {clip_seconds * 1.5:g} วินาทีของเสียง. "
            if clip_seconds else "")
-        + "ตอบ JSON เท่านั้น: {\"scenes\":[{\"start\":0.0,\"characters\":[],\"location\":\"\",\"prompt\":\"\",\"motion\":\"\""
+        + "ตอบ JSON เท่านั้น: {\"scenes\":[{\"start\":0.0,\"characters\":[],\"location\":\"\",\"prompt\":\"\",\"motion\":\"\",\"highlight\":false"
         + (",\"video_prompt\":\"\"" if clip_seconds else "") + "}]} "
         "start = เวลาเริ่มของประโยคที่ภาพนี้เริ่ม (ต้องเป็นตัวเลขในวงเล็บด้านล่าง). "
         "characters = ชื่อตัวละครที่ปรากฏในภาพนี้ (ว่างได้ถ้าเป็นภาพสถานที่). "
@@ -1461,7 +1475,8 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
             previous = scenes[-1]["prompt"][:200] if scenes else ""
             reply = with_retries("วางแผนฉาก", lambda: parse_json_reply(
                 chat(plan_request(window, count, names, previous, era,
-                                  float(project.get("clip_seconds") or 0) if video_mode else 0))))
+                                  float(project.get("clip_seconds") or 0) if video_mode else 0,
+                                  horror=project.get("style_mode") == "เรื่องผี"))))
             items = [s for s in reply.get("scenes") or [] if isinstance(s, dict) and str(s.get("prompt") or "").strip()]
             window_start = 0.0 if w == 0 else window[0]["start"]
             seg_starts = [s["start"] for s in window]
@@ -1481,6 +1496,7 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
                     "prompt": str(item.get("prompt") or "").strip(),
                     "video_prompt": str(item.get("video_prompt") or "").strip(),
                     "motion": item.get("motion") if item.get("motion") in MOTIONS else MOTIONS[len(scenes) % 4],
+                    "highlight": bool(item.get("highlight")),
                 })
             project["scenes"] = scenes
             project["planned_windows"] = w + 1

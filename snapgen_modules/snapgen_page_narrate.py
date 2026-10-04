@@ -2480,6 +2480,8 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
         else:
             prompt += "\nไม่มีบทพูด ไม่มีตัวหนังสือในภาพ ตัวละครหน้าตาเหมือนในภาพเริ่มต้นตลอดคลิป"
         prompt += "\nภาพสมจริงแบบภาพยนตร์ไลฟ์แอ็กชัน ไม่ใช่การ์ตูนหรืออนิเมะ"
+        if scene.get("forbid"):  # problems already seen in this shot (🛠 แก้ช็อตที่มีปัญหา)
+            prompt += f"\nห้ามปรากฏเด็ดขาดตลอดทั้งคลิป: {scene['forbid']}"
 
         def submit():
             state["show_error_backup"] = runtime.get("show_error")
@@ -2899,17 +2901,19 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
         details = {c.get("name"): character_description(c) for c in context.get("characters", [])}
         who = "; ".join(f"{n}: {details.get(n, '')}" for n in scene.get("characters") or []) or "-"
         notes = "; ".join(scene.get("fix_notes") or [])
+        what = "วิดีโอ" if video_mode else "รูป"
         return (
-            f"ช็อตที่ {index + 1} เจน{'วิดีโอ' if video_mode else 'รูป'}ออกมามีปัญหา: {problem}. "
-            + (f"ปัญหาที่เคยแก้ในช็อตนี้แล้ว (ห้ามกลับมาอีก): {notes}. " if notes else "")
-            + "เขียน prompt ใหม่ให้ปัญหานี้ไม่เกิดอีก โดยคงเหตุการณ์ อารมณ์ ขนาดภาพ มุมกล้อง และความต่อเนื่องกับช็อตก่อน/หลังไว้. "
-            "หลักการ: บอกรูปร่างที่ถูกต้องแบบชัดเจนในทางบวก (เช่น 'พญานาคเป็นงูยักษ์ ลำตัวยาวมีเกล็ด ไม่มีแขน ไม่มีขา ไม่มีมือ'); "
-            "ตัดหรือเปลี่ยนการกระทำที่ทำให้เกิดปัญหา (เช่น ถือดาบ → ฟาดหาง ฉกด้วยเขี้ยว หรือพลังพุ่งออกจากร่าง); "
-            "ปิดท้าย prompt และ video_prompt ด้วยสิ่งที่ห้ามมีในภาพ; ภาพสมจริงแบบภาพยนตร์ ไม่มีตัวหนังสือ. "
-            "redo_image = true ถ้าปัญหาอยู่ในภาพแรกของช็อตด้วย (ต้องวาดภาพเริ่มต้นใหม่) "
-            "false ถ้าภาพเริ่มต้นใช้ได้ ปัญหาเกิดตอนเคลื่อนไหวเท่านั้น. "
-            "ตอบ JSON เท่านั้น {\"prompt\":\"\",\"video_prompt\":\"\",\"redo_image\":false,\"change\":\"\"} "
-            "change = สรุปสั้นๆ ว่าแก้อะไร.\n\n"
+            f"ช็อตที่ {index + 1} เจน{what}ออกมามีปัญหา: {problem}. "
+            + (f"ปัญหาที่เคยเจอในช็อตนี้แล้ว (ห้ามกลับมาอีก): {notes}. " if notes else "")
+            + f"เขียนคำสั่ง{what}ช็อตนี้ใหม่แบบเข้มงวด ให้ปัญหานี้ไม่เกิดอีกแน่นอน โดยคงเหตุการณ์ อารมณ์ ขนาดภาพ มุมกล้อง "
+            "และความต่อเนื่องกับช็อตก่อน/หลังไว้. หลักการ: "
+            "1) บอกรูปร่างที่ถูกต้องชัดเจนในทางบวกตั้งแต่ประโยคแรก และย้ำอีกครั้งตอนกลาง (เช่น 'พญานาคเป็นงูยักษ์ ลำตัวยาวมีเกล็ด ไม่มีแขน ไม่มีขา ไม่มีมือ'); "
+            "2) ตัดการกระทำที่ทำให้เกิดปัญหาออกทั้งหมด แทนด้วยการกระทำที่ไม่มีทางทำให้เกิดปัญหานั้น "
+            "(เช่น ถือดาบ → ฟาดหาง ฉกด้วยเขี้ยว พลังพุ่งออกจากร่าง); ใช้การเคลื่อนไหวน้อยลงและชัดขึ้น 1 อย่าง; "
+            "3) forbid = รายการสิ่งที่ห้ามปรากฏเด็ดขาดตลอดคลิป สั้นๆ คั่นด้วยจุลภาค (เช่น มือ, แขน, นิ้ว, ขา, อาวุธในมือ); "
+            "ภาพสมจริงแบบภาพยนตร์ ไม่มีตัวหนังสือ. "
+            "ตอบ JSON เท่านั้น {\"prompt\":\"\",\"video_prompt\":\"\",\"forbid\":\"\",\"change\":\"\"} "
+            "prompt = ภาพแรกของช็อต (ใช้เมื่อวาดภาพใหม่), video_prompt = การเคลื่อนไหวตลอดคลิป, change = สรุปสั้นๆ ว่าแก้อะไร.\n\n"
             f"คำบรรยายเสียงของช็อตนี้: {scene.get('line') or scene.get('text') or '-'}\n"
             f"ตัวละครในช็อต: {who}\nprompt เดิม: {scene.get('prompt', '')}\n"
             + (f"video_prompt เดิม: {scene.get('video_prompt', '')}" if video_mode else "")
@@ -2950,9 +2954,15 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
                     if video_mode and str(reply.get("video_prompt") or "").strip():
                         scene["video_prompt"] = str(reply["video_prompt"]).strip()
                     scene.setdefault("fix_notes", []).append(problem)
-                    log(f"🛠 ช็อต {i + 1}: {reply.get('change') or 'เขียน prompt ใหม่แล้ว'}")
-                    if not video_mode or str(reply.get("redo_image")).lower() == "true":
-                        redraw.append(i)
+                    forbid = str(reply.get("forbid") or "").strip()
+                    if forbid:  # repeated at the end of every clip request of this shot
+                        scene["forbid"] = ", ".join(dict.fromkeys(
+                            [w.strip() for w in (scene.get("forbid", "") + "," + forbid).split(",") if w.strip()]))
+                    log(f"🛠 ช็อต {i + 1}: {reply.get('change') or 'เขียน prompt ใหม่แล้ว'}"
+                        + (f" · ห้ามเด็ดขาด: {scene['forbid']}" if scene.get("forbid") else ""))
+                    if not video_mode:
+                        redraw.append(i)  # เล่าภาพ: the picture is the result
+                    # ออโต้: keep the first picture, make the video again with the stricter prompt.
                     for key in ("clip", "clip_normal", "clip_error"):
                         scene.pop(key, None)
                     save_project()
@@ -2961,6 +2971,8 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
                     log(f"วาดภาพเริ่มต้นใหม่: ช็อต {', '.join(str(i + 1) for i in redraw)}")
                     stage_images(redraw)
                 if video_mode:
+                    log(f"เจนวิดีโอใหม่ด้วยคำสั่งที่แก้แล้ว: ช็อต {', '.join(str(i + 1) for i in selected)} "
+                        "(ถ้าภาพแรกก็มีปัญหาเดียวกัน กด 'สร้างรูปใหม่ช็อตที่เลือก' ก่อน)")
                     project["done"].pop("clips", None)
                     stage_clips(selected)
                 log("✓ แก้ช็อตเสร็จ — กด 'ต่อวิดีโอใหม่' เพื่อรวมวิดีโออีกรอบ")

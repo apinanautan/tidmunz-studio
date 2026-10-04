@@ -38,3 +38,7 @@ After a completed Tidmunz Studio source task, commit and push only the files cha
 Never display or log the token.
 
 Create and publish a GitHub Release only when the user explicitly asks to release a version using `ออก vX.Y.Z`. Use the requested tag; do not create a tag or release otherwise. Push `main` first, push the tag, wait for the Release workflow, then confirm the release contains both `tidmun-studio-patch.zip` and `Tidmunz-Studio.exe`. Report the commit, checks, and release status in Thai; state any failed or unverified step plainly.
+
+## Character Creator 5 characters
+
+For any request to make or continue CC5 characters ("ทำตัวละคร", "ทำตัวที่เหลือต่อ", "เข้าไปอ่านหน้า CC5"), read `docs/CC5_CHARACTER_GUIDE.md` first and follow it end to end. It lists every file location, the user's rules, the token-saving method (`snapgen_modules/cc5/cc5_find.py` text search instead of thumbnails), and the exact CC5 click path.

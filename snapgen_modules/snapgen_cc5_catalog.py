@@ -51,6 +51,128 @@ def scan(root):
     return items
 
 
+def load_catalog(catalog_path, legacy_hair_pool=None, scan_hair_inventory=False):
+    """Load the shared CC5 catalog and migrate the old curated hair pool once."""
+    catalog_path = Path(catalog_path)
+    try:
+        catalog = json.loads(catalog_path.read_text(encoding="utf-8-sig"))
+    except (OSError, json.JSONDecodeError):
+        catalog = {"items": {}}
+    if not isinstance(catalog, dict):
+        catalog = {"items": {}}
+    items = catalog.setdefault("items", {})
+    if not isinstance(items, dict):
+        items = catalog["items"] = {}
+    changed = False
+
+    pool_path = Path(legacy_hair_pool) if legacy_hair_pool else None
+    if pool_path and pool_path.is_file():
+        try:
+            pool = json.loads(pool_path.read_text(encoding="utf-8-sig"))
+        except (OSError, json.JSONDecodeError):
+            pool = {}
+        if isinstance(pool, dict):
+            colors = pool.get("colors")
+            if isinstance(colors, dict) and "hair_colors" not in catalog:
+                catalog["hair_colors"] = colors
+                changed = True
+            pool_paths = [
+                str(hair.get("path") or "").strip()
+                for hair in pool.get("hairs", [])
+                if isinstance(hair, dict) and str(hair.get("path") or "").strip()
+            ]
+            try:
+                hair_root = Path(os.path.commonpath(pool_paths)) if pool_paths else None
+            except ValueError:
+                hair_root = None
+            if hair_root and hair_root.is_file():
+                hair_root = hair_root.parent
+            scanned_roots = catalog.get("hair_inventory_roots")
+            if not isinstance(scanned_roots, list):
+                scanned_roots = catalog["hair_inventory_roots"] = []
+            if hair_root and hair_root.is_dir() and (scan_hair_inventory or str(hair_root) not in scanned_roots):
+                for item in scan(hair_root):
+                    if item.get("kind") != "hair":
+                        continue
+                    if item["id"] not in items:
+                        item.update({
+                            "part": "hair", "name_th": "", "gender": "", "age": "",
+                            "groups": [], "review_status": "needs_classification",
+                            "folk_fit": None, "note": "ยังไม่ได้จัดหมวดเพศและวัย",
+                        })
+                        items[item["id"]] = item
+                        changed = True
+                if str(hair_root) not in scanned_roots:
+                    scanned_roots.append(str(hair_root))
+                    changed = True
+            thumbs = catalog_path.parent / "thumbs"
+            for hair in pool.get("hairs", []):
+                if not isinstance(hair, dict):
+                    continue
+                raw_path = str(hair.get("path") or "").strip()
+                if not raw_path:
+                    continue
+                path = Path(raw_path)
+                try:
+                    if not path.is_file():
+                        continue
+                    size = path.stat().st_size
+                except OSError:
+                    continue
+                item_id = hashlib.sha1(f"{path.name}|{size}".encode("utf-8")).hexdigest()[:16]
+                entry = items.get(item_id)
+                if not isinstance(entry, dict):
+                    entry = {
+                        "id": item_id, "path": str(path), "file": path.name,
+                        "kind": "hair", "size": size,
+                        "folder": str(path.parent),
+                    }
+                    items[item_id] = entry
+                    changed = True
+                groups = hair.get("groups") if isinstance(hair.get("groups"), list) else []
+                if entry.get("review_source") != "manual":
+                    gender = "หญิง" if any(str(group).startswith("female_") for group in groups) else "ชาย"
+                    ages = []
+                    for group in groups:
+                        suffix = str(group).partition("_")[2]
+                        label = {"child": "เด็ก", "adult": "หนุ่มสาว", "middle": "วัยกลางคน", "old": "ผู้สูงอายุ"}.get(suffix)
+                        if label and label not in ages:
+                            ages.append(label)
+                    metadata = {
+                        "kind": "hair", "part": "hair",
+                        "name_th": str(hair.get("name") or path.stem),
+                        "gender": gender, "age": "|".join(ages) or "ทุกวัย",
+                        "groups": [str(group) for group in groups],
+                        "review_status": "curated", "review_source": "legacy_hair_pool",
+                        "folk_fit": 2,
+                        "note": "นำเข้าจากรายการทรงผมที่คัดไว้เดิม",
+                    }
+                    for key, value in metadata.items():
+                        if entry.get(key) != value:
+                            entry[key] = value
+                            changed = True
+                thumb = thumbs / f"{item_id}.jpg"
+                if not thumb.is_file():
+                    try:
+                        preview = extract_thumbnail(path)
+                        if preview is not None:
+                            thumbs.mkdir(parents=True, exist_ok=True)
+                            preview.thumbnail((512, 512))
+                            preview.save(thumb, "JPEG", quality=88)
+                    except Exception:
+                        pass
+                if thumb.is_file() and entry.get("thumb") != str(thumb):
+                    entry["thumb"] = str(thumb)
+                    changed = True
+
+    if changed:
+        catalog_path.parent.mkdir(parents=True, exist_ok=True)
+        temp = catalog_path.with_suffix(catalog_path.suffix + ".tmp")
+        temp.write_text(json.dumps(catalog, ensure_ascii=False, indent=1), encoding="utf-8")
+        os.replace(temp, catalog_path)
+    return catalog
+
+
 def extract_thumbnail(path):
     """The largest embedded JPEG/PNG preview that decodes, as RGB PIL image (or None)."""
     from PIL import Image

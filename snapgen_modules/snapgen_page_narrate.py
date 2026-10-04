@@ -881,7 +881,8 @@ def video_shots(segments: list, target: float = 8.0, limit: float = SHOT_LIMIT) 
 
 
 def plan_video(segments: list, duration: float, names: list, era: str, ask, horror: bool = False,
-               progress=None, out: list | None = None, batch: int = 20, script: str = "") -> list:
+               progress=None, out: list | None = None, batch: int = 20, script: str = "",
+               direction: dict | None = None) -> list:
     """Video mode plan: program-cut shots, GPT writes each one, every shot gets a clip choice.
 
     ``ask(prompt) -> dict`` talks to GPT.  Shots GPT skipped are asked again
@@ -890,16 +891,26 @@ def plan_video(segments: list, duration: float, names: list, era: str, ask, horr
     """
     shots = video_shots(split_dialogue(segments, script) if script else segments)
     scenes = out if out is not None else []
+    # Director pass first: the whole story as film sequences, so shots are directed, not illustrated.
+    # ``direction`` is filled in place (the page saves it); a filled one is reused.
+    direction = direction if direction is not None else {}
+    if not direction.get("sequences"):
+        try:
+            direction.update(ask(director_request(shots, names, era, horror)) or {})
+        except Exception:
+            pass  # still plannable shot by shot
     for first in range(0, len(shots), batch):
         group = shots[first:first + batch]
-        previous = scenes[-1]["prompt"][:200] if scenes else ""
+        previous = (f"{scenes[-1]['prompt'][:200]} / จบคลิปด้วย: {scenes[-1].get('video_prompt', '')[-160:]}"
+                    if scenes else "")
         numbers = list(range(first + 1, first + len(group) + 1))
         items = {}
         for _attempt in range(2):
             wanted = [n for n in numbers if n not in items]
             if not wanted:
                 break
-            reply = ask(video_plan_request([(n, shots[n - 1]) for n in wanted], names, previous, era, horror))
+            reply = ask(video_plan_request([(n, shots[n - 1]) for n in wanted], names, previous, era, horror,
+                                           direction_for(direction, wanted)))
             for item in reply.get("scenes") or []:
                 if not isinstance(item, dict) or not str(item.get("prompt") or "").strip():
                     continue
@@ -932,28 +943,80 @@ def plan_video(segments: list, duration: float, names: list, era: str, ask, horr
     return scenes
 
 
-def video_plan_request(numbered: list, names: list, previous: str, era: str, horror: bool = False) -> str:
-    """Ask GPT to write one AI video clip per given (number, shot) — the cuts are already fixed."""
-    lines = "\n".join(f"[{n}] {s['start']:.1f}–{s['end']:.1f} ({s['end'] - s['start']:.0f} วิ) "
-                      + (f"บทพูดของ {s['dialogue']}: “{s['line']}”" if s.get("dialogue") else s["text"])
-                      for n, s in numbered)
+def _shot_lines(numbered: list) -> str:
+    return "\n".join(f"[{n}] {s['start']:.1f}–{s['end']:.1f} ({s['end'] - s['start']:.0f} วิ) "
+                     + (f"บทพูดของ {s['dialogue']}: “{s['line']}”" if s.get("dialogue") else s["text"])
+                     for n, s in numbered)
+
+
+def director_request(shots: list, names: list, era: str, horror: bool = False) -> str:
+    """Director pass: read the whole narration as a film and break it into sequences before any shot is written."""
     return (
-        f"วางแผนคลิปวิดีโอ AI ประกอบเสียงบรรยาย {len(numbered)} ช็อต "
-        "(แบ่งช็อตตามประโยคไว้แล้วด้านล่าง: เลขช็อต เวลา ความยาว และคำบรรยายของช็อตนั้น). "
-        "เขียนให้ครบทุกช็อต ช็อตละ 1 รายการ ห้ามรวม ห้ามข้าม. แต่ละช็อตต้องเห็นเหตุการณ์ของคำบรรยายช็อตนั้นเอง "
-        "ห้ามใช้ภาพซ้ำกับช็อตก่อน ช็อตติดกันต้องต่างมุมกล้องหรือขนาดภาพ แต่ตัวละคร สถานที่ และแสงต่อเนื่องกัน. "
-        "ห้ามวาดคนเล่าเรื่อง ผู้บรรยาย ไมโครโฟน หรือห้องอัดเสียง. "
+        "คุณคือผู้กำกับภาพยนตร์ ต้องทำเรื่องเล่าด้านล่างให้เป็นหนังสั้นที่ดูเป็นภาพยนตร์จริง ไม่ใช่ภาพประกอบคำบรรยาย. "
+        "เสียงบรรยายถูกแบ่งเป็นช็อตแล้ว (เลขช็อต เวลา ความยาว คำบรรยาย) — อ่านทั้งเรื่องก่อน แล้วแตกเป็นซีเควนซ์ "
+        "(ช่วงที่เหตุการณ์/สถานที่/อารมณ์ต่อเนื่องกัน) ทุกช็อตต้องอยู่ในซีเควนซ์ใดซีเควนซ์หนึ่ง เรียงต่อกันไม่ข้าม. "
+        "คิดแบบผู้กำกับ: แต่ละซีเควนซ์ต้องการบอกอะไร อารมณ์ไต่ระดับอย่างไร ใครอยู่ตรงไหนในฉาก ฝั่งไหนของจอ "
+        "จะเปิดด้วยภาพอะไร ไปจบที่ภาพอะไร. ประโยคนามธรรม (ความคิด อดีต คำทำนาย ความรู้สึก ข้อมูลเบื้องหลัง) "
+        "ต้องคิดภาพรูปธรรมที่เล่าแทนได้ เช่น ภาพย้อนอดีตโทนสีต่าง โคลสอัพสีหน้า สิ่งของสัญลักษณ์ ปฏิกิริยาของตัวละคร. "
+        + (HORROR_NOTE if horror else "")
+        + f"ยุค/บรรยากาศ: {era}. ตัวละคร: {', '.join(names) or '-'}. "
+        "ตอบ JSON เท่านั้น: {\"look\":{\"genre_tone\":\"\",\"palette\":\"\",\"lighting\":\"\",\"camera_style\":\"\"},"
+        "\"sequences\":[{\"shots\":[1,5],\"name\":\"\",\"location\":\"\",\"time_of_day\":\"\",\"purpose\":\"\","
+        "\"emotion\":\"\",\"blocking\":\"\",\"visual_plan\":\"\",\"abstract_lines\":\"\"}]} "
+        "look = โทนหนังทั้งเรื่อง (แนว โทนสี แสง สไตล์กล้อง) ใช้คงที่ทุกช็อต. "
+        "shots = ช็อตแรกและช็อตสุดท้ายของซีเควนซ์. blocking = ตำแหน่งและทิศทางของตัวละครในฉาก (ใครอยู่ซ้าย/ขวาจอ หันไปทางไหน). "
+        "visual_plan = ลำดับภาพของซีเควนซ์แบบผู้กำกับ: เปิดด้วยช็อตกว้างสร้างสถานที่ → ขยับเข้ามาระดับกลาง → โคลสอัพอารมณ์ "
+        "→ ภาพแทรกรายละเอียด/ปฏิกิริยา และบอกว่าช็อตไหนควรเป็นภาพแบบไหน. "
+        "abstract_lines = วิธีเล่าประโยคนามธรรมในซีเควนซ์นี้ด้วยภาพ (ว่างได้)."
+        "\n\n" + _shot_lines(list(enumerate(shots, 1)))
+    )
+
+
+def direction_for(direction: dict, numbers: list) -> str:
+    """The film look plus only the sequences that cover these shot numbers, for the shot request."""
+    if not direction:
+        return ""
+    picked = []
+    for seq in direction.get("sequences") or []:
+        try:
+            a, b = (int(x) for x in (seq.get("shots") or [])[:2])
+        except (TypeError, ValueError):
+            continue
+        if any(a <= n <= b for n in numbers):
+            picked.append(seq)
+    return json.dumps({"look": direction.get("look") or {}, "sequences": picked}, ensure_ascii=False)
+
+
+def video_plan_request(numbered: list, names: list, previous: str, era: str, horror: bool = False,
+                       direction: str = "") -> str:
+    """Ask GPT to direct one AI video clip per given (number, shot) — the cuts are already fixed."""
+    lines = _shot_lines(numbered)
+    return (
+        f"กำกับคลิปวิดีโอ AI {len(numbered)} ช็อตของหนังเรื่องนี้ ตามแผนผู้กำกับ (ถ้ามี) "
+        "(เสียงบรรยายแบ่งช็อตไว้แล้วด้านล่าง: เลขช็อต เวลา ความยาว และคำบรรยายของช็อตนั้น). "
+        "เขียนให้ครบทุกช็อต ช็อตละ 1 รายการ ห้ามรวม ห้ามข้าม. "
+        "หลักการทำให้เป็นหนัง ไม่ใช่ภาพประกอบคำ: "
+        "1) แต่ละช็อตเล่าเหตุการณ์/อารมณ์ของคำบรรยายช็อตนั้นด้วยการกระทำที่เห็นได้ ประโยคนามธรรมให้ใช้ภาพรูปธรรมตามแผนผู้กำกับ. "
+        "2) ภาษากล้องชัด: ทุก prompt ระบุขนาดภาพ (ช็อตกว้างมาก/กว้าง/กลาง/ใกล้/โคลสอัพ/ภาพแทรก) มุมกล้อง (ระดับสายตา/มุมต่ำ/มุมสูง/ข้ามไหล่) และเลนส์. "
+        "3) ตัดต่อแบบหนัง: ช็อตติดกันต้องเปลี่ยนขนาดภาพหรือมุมกล้อง เปิดซีเควนซ์ใหม่ด้วยช็อตสร้างสถานที่ "
+        "ใช้ภาพปฏิกิริยาและภาพแทรกรายละเอียดสลับ รักษาทิศทางจอ (ใครอยู่ซ้าย/ขวา ทิศการเคลื่อนที่) และเส้นสายตาให้ต่อเนื่อง. "
+        "4) ช็อตต่อเนื่อง: ช็อตถัดไปต่อจากจุดที่คลิปก่อนจบ (การเคลื่อนไหว ตำแหน่ง แสง สภาพตัวละคร เช่น บาดแผล ความเปียก). "
+        "5) คลิป AI ทำได้ดีเมื่อมีการกระทำหลักเดียวที่ชัด: ช็อตละ 1 การกระทำ ตัวละครหลักในเฟรมไม่เกิน 2 ตน "
+        "ฉากต่อสู้ให้แตกเป็นจังหวะเดียวต่อช็อต (ฟาด / หลบ / ปะทะ / ปฏิกิริยา) แทนการต่อสู้ยาวในช็อตเดียว. "
+        "6) โทนสี แสง และสไตล์กล้องตาม look เดียวกันทุกช็อต. "
+        "ห้ามวาดคนเล่าเรื่อง ผู้บรรยาย ไมโครโฟน หรือห้องอัดเสียง. ไม่มีตัวหนังสือในภาพ. "
         "ช็อต 'บทพูดของ X' = ภาพใกล้ระดับอก/ใบหน้าของ X กำลังพูดประโยคนั้น เห็นปากชัด สีหน้าและท่าทางตรงกับคำพูด "
         "(video_prompt ให้ X ขยับปากพูดตลอดคลิปด้วยความเร็วปกติ) ช็อตนี้ slow=false cheap=false เสมอ. "
         + (HORROR_NOTE if horror else "")
         + f"ยุค/บรรยากาศ: {era}. ตัวละครที่ใช้ได้ (ใช้ชื่อตรงตัวเท่านั้น): {', '.join(names) or '-'}. "
+        + (f"แผนผู้กำกับของช่วงนี้: {direction}. " if direction else "")
         + (f"ช็อตก่อนหน้าคือ: {previous}. " if previous else "")
         + "ตอบ JSON เท่านั้น: {\"scenes\":[{\"shot\":1,\"characters\":[],\"location\":\"\",\"prompt\":\"\","
         "\"video_prompt\":\"\",\"slow\":false,\"cheap\":false}]} "
         "shot = เลขช็อตในวงเล็บ. characters = ชื่อตัวละครที่ปรากฏในภาพ (ว่างได้ถ้าเป็นภาพสถานที่). "
-        "prompt = ภาพแรกของคลิป ภาษาไทย: ใครทำอะไร ที่ไหน เวลา แสง มุมกล้อง อารมณ์ ไม่มีตัวหนังสือในภาพ. "
-        "video_prompt = การเคลื่อนไหวตลอดคลิปที่เริ่มจากภาพนั้น ภาษาไทย: ใครขยับอย่างไร สีหน้า สิ่งรอบตัว "
-        "และกล้องเคลื่อนอย่างไร ให้เต็มความยาวช็อต ไม่มีบทพูด ไม่มีตัวหนังสือ. "
+        "prompt = ภาพแรกของคลิป ภาษาไทย: ขนาดภาพ มุมกล้อง เลนส์ ใครอยู่ตรงไหนของจอทำอะไร ที่ไหน เวลา แสง อารมณ์. "
+        "video_prompt = สิ่งที่เกิดตลอดคลิปที่เริ่มจากภาพนั้น ภาษาไทย: การกระทำหลัก 1 อย่าง สีหน้า สิ่งรอบตัว "
+        "และกล้องเคลื่อนอย่างไร (ดอลลี่เข้า/ถอย แทร็กตาม เครน แพน ถือกล้องสั่นเล็กน้อยในฉากต่อสู้) ให้เต็มความยาวช็อต ไม่มีบทพูด ไม่มีตัวหนังสือ. "
         "slow = true เมื่อเหมาะกับภาพสโลว์โมชัน 2 เท่า (บรรยากาศ วิว ฉากเงียบ เศร้า ลึกลับ การเคลื่อนไหวช้าๆ); "
         "false เมื่อมีแอ็กชันเร็ว ต่อสู้ วิ่ง หรือท่าทางที่ต้องดูเป็นธรรมชาติ. "
         "cheap = true เฉพาะช็อตง่ายที่ไม่สำคัญ (วิว ทะเล ท้องฟ้า สถานที่ สิ่งของ ขยับน้อย ไม่เห็นหน้าตัวละครชัด) "
@@ -1781,7 +1844,10 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
             scenes_so_far = []
             plan_video(segments, float(project["duration"]), names, era, ask,
                        horror=project.get("style_mode") == "เรื่องผี", progress=progress, out=scenes_so_far,
-                       script=read_script(project["script"]))
+                       script=read_script(project["script"]), direction=project.setdefault("direction", {}))
+            if project["direction"]:
+                (folder / "director_plan.json").write_text(
+                    json.dumps(project["direction"], ensure_ascii=False, indent=2), encoding="utf-8")
             project["scenes"] = scenes_so_far
             save_project()
             log(f"✓ วางแผน {len(scenes_so_far)} คลิป ({clip_summary(scenes_so_far)})")
@@ -2470,6 +2536,7 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
                     "เล่าภาพ", f"เปลี่ยน{what}แล้ว ต้องวางแผนฉากใหม่ (รูปและคลิปเดิมจะไม่ถูกใช้) ต่อไหม?", parent=page):
                 return
             project["scenes"] = []
+            project.pop("direction", None)
             for key in ("plan", "images", "clips", "video"):
                 project["done"].pop(key, None)
         if video_mode and not project.get("done", {}).get("plan") and project.get("done", {}).get("transcribe"):

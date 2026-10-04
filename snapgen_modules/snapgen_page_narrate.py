@@ -137,6 +137,15 @@ VIDEO_STAGES = (
     ("video", "ตัดต่อ", 10),
 )
 DEFAULT_STYLE = "ภาพสมจริงแบบภาพยนตร์ แสงธรรมชาติ รายละเอียดสูง ไม่มีตัวหนังสือหรือคำบรรยายในภาพ"
+# Picture styles the user can pick per story. "still" = no zoom/pan in the video.
+STYLES = {
+    "ปกติ": {"prompt": "", "still": False},
+    "เรื่องผี": {
+        "prompt": ("ภาพถ่ายสมจริงแบบภาพยนตร์สยองขวัญไทย โทนสีมืด หม่น อึมครึม สีซีดอมเขียวเทา แสงน้อย เงาเข้ม "
+                   "บรรยากาศน่ากลัววังเวง มีหมอกหรือความมืดรอบภาพ ไม่มีตัวหนังสือหรือคำบรรยายในภาพ"),
+        "still": True,
+    },
+}
 
 
 class Stopped(Exception):
@@ -355,7 +364,9 @@ def zoompan_filter(motion: str, frames: int, width: int, height: int) -> str:
     frames = max(1, int(frames))
     progress = f"on/{frames}"
     centre_x, centre_y = "iw/2-(iw/zoom/2)", "ih/2-(ih/zoom/2)"
-    if motion == "zoom_out":
+    if motion == "still":
+        z, x, y = "1", centre_x, centre_y
+    elif motion == "zoom_out":
         z, x, y = f"1.15-0.15*{progress}", centre_x, centre_y
     elif motion == "pan_left":
         z, x, y = "1.12", f"(iw-iw/zoom)*(1-{progress})", centre_y
@@ -620,6 +631,7 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
     aspect_var = tk.StringVar(value="16:9")
     count_var = tk.StringVar(value="50")
     subtitle_var = tk.BooleanVar(value=False)
+    style_var = tk.StringVar(value="ปกติ")
     review_var = tk.BooleanVar(value=False)
     stage_var = tk.StringVar(value="พร้อม")
     detail_var = tk.StringVar(value="")
@@ -691,6 +703,8 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
         tk.Label(options, text="จำนวนรูปทั้งเรื่อง", bg=bg).pack(side="left")
         ttk.Combobox(options, textvariable=count_var, values=IMAGE_COUNTS, width=5, state="readonly").pack(side="left", padx=4)
         tk.Label(options, text="รูปฉาก (+ รูปตัวละครตามเรื่อง)", bg=bg).pack(side="left", padx=(0, 14))
+    tk.Label(options, text="สไตล์", bg=bg).pack(side="left")
+    ttk.Combobox(options, textvariable=style_var, values=list(STYLES), width=9, state="readonly").pack(side="left", padx=(4, 14))
     tk.Checkbutton(options, text="ใส่ซับไตเติล", variable=subtitle_var, bg=bg).pack(side="left", padx=(0, 10))
     tk.Checkbutton(options, text="หยุดให้ตรวจแผนก่อนสร้างรูป", variable=review_var, bg=bg).pack(side="left")
 
@@ -823,6 +837,7 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
         aspect_var.set(project.get("aspect", aspect_var.get()))
         count_var.set(str(project.get("image_count", count_var.get())))
         subtitle_var.set(bool(project.get("subtitles", subtitle_var.get())))
+        style_var.set(project.get("style_mode") if project.get("style_mode") in STYLES else "ปกติ")
         save_project()
         refresh_all()
         refresh_clip_info()
@@ -1173,6 +1188,10 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
         rules = context.get("visual_rules") or {}
         era = (context.get("story") or {}).get("era") or ""
         style = str(rules.get("style") or "").strip() or DEFAULT_STYLE
+        mood = STYLES.get(state["project"].get("style_mode") or "ปกติ", STYLES["ปกติ"])["prompt"]
+        if mood:
+            # The chosen story style overrides the Context's general look.
+            style = mood
         return f"สไตล์: {style}. ยุค/บรรยากาศ: {era}." if era else f"สไตล์: {style}."
 
     def stage_characters():
@@ -1343,7 +1362,9 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
                 fit = clip_fit_filter(media_duration(source), length, width, height)
                 run(["-i", source, "-an", "-vf", fit, "-frames:v", str(frames), *encode, str(clip)])
             else:
-                run(["-i", scene["image"], "-vf", zoompan_filter(scene.get("motion", "zoom_in"), frames, width, height),
+                still = STYLES.get(project.get("style_mode") or "ปกติ", STYLES["ปกติ"])["still"]
+                motion = "still" if still else scene.get("motion", "zoom_in")
+                run(["-i", scene["image"], "-vf", zoompan_filter(motion, frames, width, height),
                      "-frames:v", str(frames), *encode, str(clip)])
             return clip
 
@@ -1587,6 +1608,17 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
                 scene.pop("clip", None)
             for key in ("images", "clips"):
                 project["done"].pop(key, None)
+        new_style = style_var.get() if style_var.get() in STYLES else "ปกติ"
+        if (project.get("scenes") and any(s.get("image") for s in project["scenes"])
+                and (project.get("style_mode") or "ปกติ") != new_style and only is None):
+            # Pictures carry the look, so a new style needs new pictures (the plan stays).
+            if not messagebox.askyesno("เล่าภาพ", f"เปลี่ยนสไตล์เป็น \"{new_style}\" ต้องสร้างรูปฉากใหม่ทั้งหมด ต่อไหม?", parent=page):
+                return
+            for scene in project["scenes"]:
+                scene.pop("image", None)
+                scene.pop("clip", None)
+            for key in ("images", "clips"):
+                project["done"].pop(key, None)
         if video_mode:
             model, seconds, _aspect = slot_settings()
             if not attachment_folder():
@@ -1612,7 +1644,8 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
                 project["done"].pop(key, None)
         project["image_count"] = wanted
         project.update({"aspect": aspect,
-                        "subtitles": bool(subtitle_var.get())})
+                        "subtitles": bool(subtitle_var.get()),
+                        "style_mode": style_var.get() if style_var.get() in STYLES else "ปกติ"})
         project["done"].pop("video", None)
         save_project()
         state["busy"], state["stop"] = True, False

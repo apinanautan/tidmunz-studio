@@ -2717,6 +2717,15 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
         newest = max(new_files, key=lambda f: f.stat().st_mtime)  # post-processed version is written last
         clips_dir = Path(state["folder"]) / "clips"
         clips_dir.mkdir(exist_ok=True)
+        # A shot made again never overwrites its earlier clips: they move to clips/_สำรอง with the time.
+        old = sorted(clips_dir.glob(f"clip_{index + 1:03d}.mp4")) + sorted(clips_dir.glob(f"clip_{index + 1:03d}_*.mp4"))
+        if old:
+            backup_dir = clips_dir / "_สำรอง"
+            backup_dir.mkdir(exist_ok=True)
+            stamp = time.strftime("%Y%m%d-%H%M%S")
+            for path in old:
+                shutil.move(str(path), str(backup_dir / f"{path.stem}_เก่า_{stamp}{path.suffix}"))
+            log(f"เก็บคลิปเดิมของช็อต {index + 1} ไว้ที่ clips/_สำรอง ({len(old)} ไฟล์)")
         if not scene.get("clip_slow"):
             target = clips_dir / f"clip_{index + 1:03d}.mp4"
             shutil.copy2(newest, target)

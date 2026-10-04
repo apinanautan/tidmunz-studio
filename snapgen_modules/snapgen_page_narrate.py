@@ -140,6 +140,11 @@ VIDEO_STAGES = (
     ("clips", "สร้างคลิปวิดีโอ", 50),
     ("video", "ตัดต่อ", 10),
 )
+# Slot 2 ออโต้ makes a film: pictures must look like live-action footage, never drawn.
+REALISM_NOTE = ("ภาพนิ่งจากภาพยนตร์ไลฟ์แอ็กชันสมจริง (photorealistic live-action film still) ถ่ายด้วยกล้องภาพยนตร์ "
+                "นักแสดงจริง ผิว ผ้า น้ำ หิน และพื้นผิวสมจริง แสงและเงาแบบหนังจริง ระยะชัดตื้นแบบเลนส์ภาพยนตร์; "
+                "สัตว์หรือสิ่งมีชีวิตในตำนาน (เช่น พญานาค) ทำเป็น CGI สมจริงระดับหนังฟอร์มยักษ์ มีเกล็ด น้ำหนัก และแสงสะท้อนจริง; "
+                "ห้ามเป็นการ์ตูน อนิเมะ ภาพวาด ภาพประกอบ หรือ 3D เรนเดอร์แบบเกม")
 DEFAULT_STYLE = "ภาพสมจริงแบบภาพยนตร์ แสงธรรมชาติ รายละเอียดสูง ไม่มีตัวหนังสือหรือคำบรรยายในภาพ"
 # Picture styles the user can pick per story. "still" = no zoom/pan in the video.
 STYLES = {
@@ -971,6 +976,7 @@ def director_request(shots: list, names: list, era: str, horror: bool = False, r
     """Director pass: read the whole narration as a film and break it into sequences before any shot is written."""
     return (
         "คุณคือผู้กำกับภาพยนตร์ ต้องทำเรื่องเล่าด้านล่างให้เป็นหนังสั้นที่ดูเป็นภาพยนตร์จริง ไม่ใช่ภาพประกอบคำบรรยาย. "
+        "ภาพทั้งเรื่อง: " + REALISM_NOTE + ". "
         "เสียงบรรยายถูกแบ่งเป็นช็อตแล้ว (เลขช็อต เวลา ความยาว คำบรรยาย) — อ่านทั้งเรื่องก่อน แล้วแตกเป็นซีเควนซ์ "
         "(ช่วงที่เหตุการณ์/สถานที่/อารมณ์ต่อเนื่องกัน) ทุกช็อตต้องอยู่ในซีเควนซ์ใดซีเควนซ์หนึ่ง เรียงต่อกันไม่ข้าม. "
         "คิดแบบผู้กำกับ: แต่ละซีเควนซ์ต้องการบอกอะไร อารมณ์ไต่ระดับอย่างไร ใครอยู่ตรงไหนในฉาก ฝั่งไหนของจอ "
@@ -1022,6 +1028,7 @@ def video_plan_request(numbered: list, names: list, previous: str, era: str, hor
         "5) คลิป AI ทำได้ดีเมื่อมีการกระทำหลักเดียวที่ชัด: ช็อตละ 1 การกระทำ ตัวละครหลักในเฟรมไม่เกิน 2 ตน "
         "ฉากต่อสู้ให้แตกเป็นจังหวะเดียวต่อช็อต (ฟาด / หลบ / ปะทะ / ปฏิกิริยา) แทนการต่อสู้ยาวในช็อตเดียว. "
         "6) โทนสี แสง และสไตล์กล้องตาม look เดียวกันทุกช็อต. "
+        "7) " + REALISM_NOTE + ". "
         "ห้ามวาดคนเล่าเรื่อง ผู้บรรยาย ไมโครโฟน หรือห้องอัดเสียง. ไม่มีตัวหนังสือในภาพ. "
         "ช็อต 'บทพูดของ X' = ภาพใกล้ระดับอก/ใบหน้าของ X กำลังพูดประโยคนั้น เห็นปากชัด สีหน้าและท่าทางตรงกับคำพูด "
         "(video_prompt ให้ X ขยับปากพูดตลอดคลิปด้วยความเร็วปกติ) ช็อตนี้ slow=false cheap=false เสมอ. "
@@ -1197,7 +1204,7 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
         return max(1, int(-(-duration // VIDEO_AUTO_AVG_SECONDS))) if duration else 0
 
     def desired_aspect() -> str:
-        return slot_settings()[2] if video_mode else aspect_var.get()
+        return aspect_var.get() if aspect_var.get() in SIZES else "16:9"
 
     def refresh_clip_info():
         if not video_mode:
@@ -1206,7 +1213,7 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
         count = desired_count()
         folder = attachment_folder()
         clip_info_var.set(f"ไฟล์แนบ: {Path(folder).name if folder else 'ยังไม่ได้เลือก (เลือกที่หน้ารูป AI)'} · "
-                          f"GPT เลือกต่อช็อต: grok-lower 6/10 วิ หรือ vela 5 วิ (+สโลว์ 2x) · {aspect}"
+                          "GPT เลือกต่อช็อต: grok-lower 6/10 วิ หรือ vela 5 วิ (+สโลว์ 2x)"
                           + (f" → ประมาณ {count} คลิป" if count else ""))
 
     # ── input row ──
@@ -1225,6 +1232,9 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
     options.pack(fill="x", padx=8, pady=2)
     clip_info_var = tk.StringVar(value="")
     if video_mode:
+        aspect_var.set(slot_settings()[2])
+        tk.Label(options, text="ภาพ", bg=bg).pack(side="left")
+        ttk.Combobox(options, textvariable=aspect_var, values=list(SIZES), width=6, state="readonly").pack(side="left", padx=(4, 10))
         tk.Label(options, textvariable=clip_info_var, bg=bg, fg="#1E3A8A").pack(side="left", padx=(0, 14))
     else:
         tk.Label(options, text="ภาพ", bg=bg).pack(side="left")
@@ -1245,6 +1255,10 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
     make_styled_button(run_row, "DANGER", "⏸ หยุด", command=lambda: request_stop()).pack(side="left", padx=6)
     make_styled_button(run_row, "SECONDARY", "เปิดโปรเจกต์", command=lambda: choose_saved_project()).pack(side="left", padx=6)
     make_styled_button(run_row, "SUCCESS", "▶ เปิดวิดีโอ", command=lambda: open_path((state["project"] or {}).get("last_video"))).pack(side="left")
+    redo_var = tk.StringVar(value=stages[2][1])
+    make_styled_button(run_row, "SECONDARY", "↺ ทำใหม่ตั้งแต่ขั้น", command=lambda: redo_from(redo_var.get())).pack(side="right")
+    ttk.Combobox(run_row, textvariable=redo_var, values=[t for _k, t, _w in stages], width=14,
+                 state="readonly").pack(side="right", padx=6)
 
     progress_row = tk.Frame(box, bg=bg)
     progress_row.pack(fill="x", padx=8, pady=(4, 0))
@@ -1677,7 +1691,8 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
         shared = None
         try:
             import snapgen_shared_context
-            shared = snapgen_shared_context.load(project["script"])
+            if not project.pop("force_new_context", False):  # "ทำใหม่ตั้งแต่วิเคราะห์บท" asks GPT again
+                shared = snapgen_shared_context.load(project["script"])
         except Exception:
             pass
         if shared:
@@ -1831,6 +1846,8 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
             style = mood
         thai = (" ฉาก บ้านเรือน วัด ร้านค้า เครื่องแต่งกาย และผู้คนเป็นแบบไทยของประเทศไทย "
                 "ห้ามออกเป็นแบบจีน ญี่ปุ่น เกาหลี หรือตะวันตก เว้นแต่บทระบุว่าอยู่ต่างประเทศ.")
+        if video_mode:
+            style = REALISM_NOTE + ". " + style
         return (f"สไตล์: {style}. ยุค/บรรยากาศ: {era}." if era else f"สไตล์: {style}.") + thai
 
     def stage_characters():
@@ -2353,6 +2370,7 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
                        "ไม่มีตัวหนังสือในภาพ ตัวละครหน้าตาเหมือนในภาพเริ่มต้นตลอดคลิป")
         else:
             prompt += "\nไม่มีบทพูด ไม่มีตัวหนังสือในภาพ ตัวละครหน้าตาเหมือนในภาพเริ่มต้นตลอดคลิป"
+        prompt += "\nภาพสมจริงแบบภาพยนตร์ไลฟ์แอ็กชัน ไม่ใช่การ์ตูนหรืออนิเมะ"
 
         def submit():
             state["show_error_backup"] = runtime.get("show_error")
@@ -2361,6 +2379,7 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
             cfg = runtime["slot_cfg_vars"][slot_index]
             cfg["model"].set(scene.get("clip_model") or VIDEO_AUTO_MODEL)
             cfg["duration"].set(str(scene.get("clip_seconds") or GROK_CLIP_SECONDS[0]))
+            cfg["aspect"].set(state["project"].get("aspect") or "16:9")
             runtime["_ai_slow2x_override"] = bool(scene.get("clip_slow"))
             runtime["slot_images"][slot_index].set(scene["image"])
             box = runtime["slot_prompts"][slot_index]
@@ -2406,13 +2425,14 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
             i for i, sc in enumerate(scenes) if not (sc.get("clip") and os.path.isfile(sc["clip"]))]
         assign_clips(scenes, float(project["duration"]))
         cfg = runtime["slot_cfg_vars"][slot_index]
-        saved_slot = run_on_ui(lambda: (cfg["model"].get(), cfg["duration"].get()))
+        saved_slot = run_on_ui(lambda: (cfg["model"].get(), cfg["duration"].get(), cfg["aspect"].get()))
         try:
             run_clips(project, scenes, todo)
         finally:
             def put_back():
                 cfg["model"].set(saved_slot[0])
                 cfg["duration"].set(saved_slot[1])
+                cfg["aspect"].set(saved_slot[2])
                 save_slots = runtime.get("save_slot_configs")
                 if callable(save_slots):
                     save_slots()
@@ -2653,6 +2673,51 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
                 ui(lambda: start_btn.config(state="normal", text="▶ ทำต่อ"))
                 ui(refresh_all)
         threading.Thread(target=worker, daemon=True).start()
+
+    def redo_from(title):
+        """Do one stage again and every stage after it; earlier stages are kept."""
+        project = state["project"]
+        if state["busy"] or not project:
+            return
+        keys = [k for k, _t, _w in stages]
+        titles = {t: k for k, t, _w in stages}
+        if title not in titles:
+            return
+        redo = keys[keys.index(titles[title]):]
+        names = ", ".join(t for k, t, _w in stages if k in redo)
+        if not messagebox.askyesno(
+                "ทำใหม่ตั้งแต่ขั้น", f"จะทำใหม่: {names}\nขั้นก่อนหน้านั้นเก็บไว้ใช้ต่อ\n\n"
+                + ("รูป/คลิปเดิมของช็อตจะไม่ถูกใช้ (ไฟล์ยังอยู่ในโฟลเดอร์)\n\n" if {"plan", "images", "clips"} & set(redo) else "")
+                + "เริ่มเลยไหม?", parent=page):
+            return
+        for key in redo:
+            project["done"].pop(key, None)
+        if "context" in redo:
+            project.pop("context", None)
+            project.pop("ghosts", None)
+            project["force_new_context"] = True
+        if "transcribe" in redo:
+            try:
+                (Path(state["folder"]) / "transcript.json").unlink()
+            except OSError:
+                pass
+        if "plan" in redo:
+            project["scenes"] = []
+            project.pop("direction", None)
+            project.pop("planned_windows", None)
+        for scene in project.get("scenes") or []:
+            if "images" in redo:
+                for key in ("image", "bad", "error"):
+                    scene.pop(key, None)
+            if "clips" in redo or "images" in redo:
+                for key in ("clip", "clip_error", "clip_fallback"):
+                    scene.pop(key, None)
+        if "images" in redo:
+            project["images_verified"] = False
+        save_project()
+        refresh_all()
+        log(f"↺ ทำใหม่ตั้งแต่ {title}")
+        start_pipeline()
 
     def reset_history():
         """The only way this story gets a second GPT history: the user asks for it."""

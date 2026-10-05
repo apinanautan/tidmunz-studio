@@ -2,6 +2,7 @@
 """Local audio cutter/converter. Audio never leaves this computer."""
 from __future__ import annotations
 
+import os
 import subprocess
 import threading
 import sys
@@ -11,6 +12,7 @@ import re
 import time
 import ctypes
 import json
+import hashlib
 import urllib.request
 from array import array
 from pathlib import Path
@@ -45,7 +47,19 @@ def install(g: dict, root: tk.Misc) -> tk.Frame:
         "seek_after": None, "resume_after_seek": False,
         "player_alias": "snapgen_audio_preview",
         "preview_source_start": 0.0,
+        # Whole-file WAV decoded once per source so Play/seek are instant.
+        "full_preview": None, "open_file": None, "open_length_ms": 0,
+        "mode": None, "load_token": 0, "drawn_size": None, "redraw_after": None,
     }
+    ffmpeg_cache = [None]
+    cache_dir = Path(tempfile.gettempdir()) / "snapgen_audio_cache"
+    # Longer files fall back to per-play clips instead of a huge temp WAV.
+    full_preview_max_seconds = 150 * 60
+
+    def source_key(path: Path) -> str:
+        stat = path.stat()
+        raw = f"{path.resolve()}|{stat.st_size}|{stat.st_mtime_ns}|v2"
+        return hashlib.sha1(raw.encode("utf-8", "replace")).hexdigest()[:16]
 
     def save_last_audio(path=""):
         try:
@@ -292,6 +306,9 @@ def install(g: dict, root: tk.Misc) -> tk.Frame:
     def set_source(path):
         source = Path(str(path or "")).expanduser()
         if source.is_file() and source.suffix.lower() in {".mp3", ".wav", ".m4a", ".aac", ".flac", ".ogg", ".opus", ".wma"}:
+            stop_preview()
+            close_mci()
+            waveform["full_preview"] = None
             source_var.set(str(source))
             custom_name_var.set(smart_audio_name(source))
             status_var.set(source.name)
@@ -432,14 +449,18 @@ def install(g: dict, root: tk.Misc) -> tk.Frame:
     g["_audio_log"] = write
 
     def ffmpeg_path():
+        if ffmpeg_cache[0] and Path(ffmpeg_cache[0]).is_file():
+            return ffmpeg_cache[0]
         from ai_slow2x import _ffmpeg_bin, ensure_ffmpeg_tool
         found = Path(str(_ffmpeg_bin()))
         if found.is_file():
+            ffmpeg_cache[0] = str(found)
             return str(found)
         installed = ensure_ffmpeg_tool(write)
         candidate = Path(str(installed or _ffmpeg_bin()))
         if not candidate.is_file():
             raise RuntimeError("ติดตั้ง FFmpeg ไม่สำเร็จ")
+        ffmpeg_cache[0] = str(candidate)
         return str(candidate)
 
     def draw_waveform(_event=None):
@@ -447,6 +468,7 @@ def install(g: dict, root: tk.Misc) -> tk.Frame:
         canvas.delete("all")
         width = max(canvas.winfo_width(), 400)
         height = max(canvas.winfo_height(), 110)
+        waveform["drawn_size"] = (canvas.winfo_width(), canvas.winfo_height())
         margin = 18
         usable = max(width - margin * 2, 1)
         middle = height / 2
@@ -508,7 +530,7 @@ def install(g: dict, root: tk.Misc) -> tk.Frame:
         canvas.tag_raise(waveform["items"]["playhead_text"])
         update_waveform_selection()
 
-    def update_waveform_selection():
+    def update_waveform_selection(playhead_only=False):
         if not waveform["items"] or waveform["duration"] <= 0:
             return
         canvas = waveform_canvas
@@ -520,6 +542,11 @@ def install(g: dict, root: tk.Misc) -> tk.Frame:
         end_x = margin + usable * waveform["end"] / waveform["duration"]
         playhead_x = margin + usable * waveform["playhead"] / waveform["duration"]
         items = waveform["items"]
+        if playhead_only:
+            # Playback ticks and playhead scrubbing move only these three items;
+            # leaving the trim markers untouched keeps each frame cheap.
+            update_playhead_items(canvas, items, playhead_x, height)
+            return
         canvas.coords(items["start"], start_x - 2, 0, start_x + 2, height - 28)
         canvas.coords(items["end"], end_x - 2, 0, end_x + 2, height - 28)
         canvas.coords(items["start_grip"], start_x - 12, height - 27, start_x + 12, height)
@@ -533,6 +560,9 @@ def install(g: dict, root: tk.Misc) -> tk.Frame:
             items["range_duration"],
             text=clock(max(0.0, waveform["end"] - waveform["start"])),
         )
+        update_playhead_items(canvas, items, playhead_x, height)
+
+    def update_playhead_items(canvas, items, playhead_x, height):
         canvas.coords(items["playhead"], playhead_x, 0, playhead_x, height)
         playhead_text = clock(waveform["playhead"])
         text_width = max(52, len(playhead_text) * 8)
@@ -540,39 +570,144 @@ def install(g: dict, root: tk.Misc) -> tk.Frame:
         canvas.coords(items["playhead_text"], playhead_x, 8)
         canvas.itemconfigure(items["playhead_text"], text=playhead_text)
 
+    def build_full_preview(path: Path, token: int):
+        """Decode the whole source once to a temp WAV; Play then only seeks it."""
+        def worker():
+            try:
+                cache_dir.mkdir(parents=True, exist_ok=True)
+                target = cache_dir / f"preview_{source_key(path)}.wav"
+                if not target.is_file():
+                    for old in cache_dir.glob("preview_*.wav"):
+                        if old != target:
+                            try:
+                                old.unlink()
+                            except OSError:
+                                pass
+                    part = target.with_suffix(".part")
+                    command = [ffmpeg_path(), "-y", "-hide_banner", "-loglevel", "error",
+                               "-i", str(path), "-vn", "-ac", "2", "-ar", "44100",
+                               "-c:a", "pcm_s16le", "-f", "wav", str(part)]
+                    result = subprocess.run(command, capture_output=True,
+                                            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+                    if result.returncode != 0 or not part.is_file():
+                        part.unlink(missing_ok=True)
+                        return
+                    part.replace(target)
+
+                def ready():
+                    if token == waveform["load_token"]:
+                        waveform["full_preview"] = str(target)
+                root.after(0, ready)
+            except Exception:
+                pass
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def header_duration(path: Path) -> float:
+        """Read the container's Duration line without decoding any audio."""
+        result = subprocess.run([ffmpeg_path(), "-hide_banner", "-i", str(path)],
+                                capture_output=True, text=True, encoding="utf-8", errors="replace",
+                                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        match = re.search(r"Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)", result.stderr or "")
+        if not match:
+            return 0.0
+        return int(match.group(1)) * 3600 + int(match.group(2)) * 60 + float(match.group(3))
+
+    def decode_waveform_pcm(path: Path, rate: int) -> bytes:
+        """Mono s16le PCM for peaks. Long files decode in parallel slices; a
+        single FFmpeg MP3 decoder uses one core and took ~20 s per hour."""
+        def run(extra_before, extra_after):
+            command = ([ffmpeg_path(), "-hide_banner", "-loglevel", "error"] + extra_before +
+                       ["-i", str(path)] + extra_after +
+                       ["-vn", "-ac", "1", "-ar", str(rate), "-f", "s16le", "-"])
+            result = subprocess.run(command, capture_output=True,
+                                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+            if result.returncode != 0 or not result.stdout:
+                raise RuntimeError((result.stderr.decode("utf-8", "replace") or "อ่านเสียงไม่ได้")[-500:])
+            return result.stdout
+
+        workers = max(1, min(4, (os.cpu_count() or 2) - 1))
+        try:
+            duration = header_duration(path)
+        except Exception:
+            duration = 0.0
+        if workers < 2 or duration < 120:
+            return run([], [])
+        slice_length = duration / workers
+        results = [None] * workers
+        errors = []
+
+        def decode_slice(index):
+            try:
+                before = ["-ss", f"{index * slice_length:.3f}"] if index else []
+                after = ["-t", f"{slice_length:.3f}"] if index < workers - 1 else []
+                results[index] = run(before, after)
+            except Exception as exc:
+                errors.append(exc)
+
+        threads = [threading.Thread(target=decode_slice, args=(index,), daemon=True)
+                   for index in range(workers)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+        if errors or not all(results):
+            return run([], [])
+        return b"".join(results)
+
     def load_waveform(path):
         status_var.set("กำลังอ่านคลื่นเสียง...")
+        waveform["load_token"] += 1
+        token = waveform["load_token"]
+        path = Path(path)
+
+        def show(peaks, duration):
+            if token != waveform["load_token"]:
+                return
+            waveform.update(samples=peaks, duration=duration, start=0.0, end=duration,
+                            playhead=0.0, drag=None)
+            start_var.set(clock(0))
+            end_var.set(clock(duration))
+            status_var.set(f"{path.name} — {clock(duration)}")
+            draw_waveform()
+            if duration <= full_preview_max_seconds:
+                build_full_preview(path, token)
 
         def worker():
             try:
+                peaks_file = cache_dir / f"peaks_{source_key(path)}.json"
+                try:
+                    cached = json.loads(peaks_file.read_text(encoding="utf-8"))
+                    peaks = [float(value) for value in cached["peaks"]]
+                    duration = float(cached["duration"])
+                    if peaks and duration > 0:
+                        root.after(0, lambda: show(peaks, duration))
+                        return
+                except Exception:
+                    pass
                 rate = 8000
-                command = [ffmpeg_path(), "-hide_banner", "-loglevel", "error", "-i", str(path),
-                           "-vn", "-ac", "1", "-ar", str(rate), "-f", "s16le", "-"]
-                result = subprocess.run(command, capture_output=True,
-                                        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
-                if result.returncode != 0 or not result.stdout:
-                    raise RuntimeError((result.stderr.decode("utf-8", "replace") or "อ่านเสียงไม่ได้")[-500:])
                 pcm = array("h")
-                pcm.frombytes(result.stdout)
+                pcm.frombytes(decode_waveform_pcm(path, rate))
                 if sys.byteorder != "little":
                     pcm.byteswap()
                 duration = len(pcm) / rate
-                # 800 bars stay detailed at desktop width but redraw smoothly while dragging.
-                bucket_count = 800
+                # The waveform is drawn once into a bitmap, so 1600 bars cost
+                # nothing while dragging. Builtin max/min over array slices run
+                # in C; a per-sample Python loop took seconds on long files.
+                bucket_count = 1600
                 bucket_size = max(1, len(pcm) // bucket_count)
                 peaks = []
                 for offset in range(0, len(pcm), bucket_size):
                     block = pcm[offset:offset + bucket_size]
-                    peaks.append(max((abs(value) for value in block), default=0) / 32768.0)
-
-                def finish():
-                    waveform.update(samples=peaks, duration=duration, start=0.0, end=duration,
-                                    playhead=0.0, drag=None)
-                    start_var.set(clock(0))
-                    end_var.set(clock(duration))
-                    status_var.set(f"{Path(path).name} — {clock(duration)}")
-                    draw_waveform()
-                root.after(0, finish)
+                    peaks.append(max(max(block), -min(block)) / 32768.0)
+                try:
+                    cache_dir.mkdir(parents=True, exist_ok=True)
+                    peaks_file.write_text(json.dumps(
+                        {"duration": duration, "peaks": [round(value, 4) for value in peaks]}
+                    ), encoding="utf-8")
+                except Exception:
+                    pass
+                root.after(0, lambda: show(peaks, duration))
             except Exception as exc:
                 write(f"อ่านคลื่นเสียงไม่ได้: {exc}")
 
@@ -627,6 +762,8 @@ def install(g: dict, root: tk.Misc) -> tk.Frame:
         else:
             waveform["playhead"] = min(waveform["end"], max(waveform["start"], value))
             schedule_live_seek()
+            update_waveform_selection(playhead_only=True)
+            return
         update_waveform_selection()
 
     def waveform_drag(event):
@@ -648,7 +785,22 @@ def install(g: dict, root: tk.Misc) -> tk.Frame:
             seek_preview_live()
         waveform["drag"] = None
 
-    waveform_canvas.bind("<Configure>", draw_waveform)
+    def redraw_after_resize():
+        waveform["redraw_after"] = None
+        draw_waveform()
+
+    def on_canvas_configure(event):
+        # Resizing fires many Configure events; rebuild the bitmap once it settles.
+        if (event.width, event.height) == waveform["drawn_size"]:
+            return
+        if waveform["redraw_after"] is not None:
+            try:
+                root.after_cancel(waveform["redraw_after"])
+            except Exception:
+                pass
+        waveform["redraw_after"] = root.after(40, redraw_after_resize)
+
+    waveform_canvas.bind("<Configure>", on_canvas_configure)
     waveform_canvas.bind("<Button-1>", waveform_press)
     waveform_canvas.bind("<B1-Motion>", waveform_drag)
     waveform_canvas.bind("<ButtonRelease-1>", waveform_release)
@@ -681,15 +833,54 @@ def install(g: dict, root: tk.Misc) -> tk.Frame:
         if error:
             raise RuntimeError(f"Windows audio error {error}")
 
+    def mci_query(command):
+        buffer = ctypes.create_unicode_buffer(128)
+        error = ctypes.windll.winmm.mciSendStringW(command, buffer, 128, None)
+        if error:
+            raise RuntimeError(f"Windows audio error {error}")
+        return buffer.value
+
     def close_mci():
+        waveform["open_file"] = None
+        waveform["open_length_ms"] = 0
         try:
             mci(f'close {waveform["player_alias"]}')
         except Exception:
             pass
 
+    def open_full_player():
+        """Keep the whole-file WAV open between plays; return its length in ms."""
+        path = waveform.get("full_preview")
+        if not path or not Path(path).is_file():
+            return 0
+        alias = waveform["player_alias"]
+        if waveform["open_file"] != path:
+            close_mci()
+            mci(f'open "{path}" type waveaudio alias {alias}')
+            mci(f'set {alias} time format milliseconds')
+            waveform["open_file"] = path
+            waveform["open_length_ms"] = int(mci_query(f'status {alias} length') or 0)
+        return waveform["open_length_ms"]
+
+    def play_full_from(position):
+        length = waveform["open_length_ms"]
+        start_ms = max(0, min(int(position * 1000), length - 1))
+        end_ms = max(start_ms + 1, min(int(waveform["end"] * 1000), length))
+        mci(f'play {waveform["player_alias"]} from {start_ms} to {end_ms}')
+
     def seek_preview_live():
         waveform["seek_after"] = None
-        if not waveform["playing"] or not waveform.get("preview"):
+        if not waveform["playing"]:
+            return
+        if waveform["mode"] == "full":
+            try:
+                play_full_from(waveform["playhead"])
+                waveform["play_started_at"] = time.perf_counter()
+                waveform["play_started_from"] = waveform["playhead"]
+            except Exception:
+                pass
+            return
+        if not waveform.get("preview"):
             return
         try:
             alias = waveform["player_alias"]
@@ -719,7 +910,7 @@ def install(g: dict, root: tk.Misc) -> tk.Frame:
         waveform["playhead"] = min(
             waveform["end"], waveform["play_started_from"] + elapsed
         )
-        update_waveform_selection()
+        update_waveform_selection(playhead_only=True)
         if waveform["playhead"] < waveform["end"]:
             root.after(16, lambda: update_playhead_during_preview(token))
         elif token == waveform["play_token"]:
@@ -742,7 +933,15 @@ def install(g: dict, root: tk.Misc) -> tk.Frame:
             except Exception:
                 pass
             waveform["seek_after"] = None
-        close_mci()
+        if waveform["open_file"]:
+            # Keep the whole-file player open so the next Play starts instantly.
+            try:
+                mci(f'stop {waveform["player_alias"]}')
+            except Exception:
+                close_mci()
+        else:
+            close_mci()
+        waveform["mode"] = None
         winsound.PlaySound(None, winsound.SND_PURGE)
         preview = waveform.get("preview")
         if preview:
@@ -772,10 +971,28 @@ def install(g: dict, root: tk.Misc) -> tk.Frame:
         duration = waveform["end"] - preview_start
         if duration <= 0:
             return
+        if not preview_start <= start < waveform["end"] - 0.05:
+            start = preview_start
+            waveform["playhead"] = start
         waveform["playing"] = True
         waveform["play_token"] += 1
         token = waveform["play_token"]
         play_btn.config(text="หยุด")
+
+        try:
+            if open_full_player():
+                waveform["mode"] = "full"
+                waveform["preview"] = None
+                waveform["preview_source_start"] = 0.0
+                waveform["play_started_from"] = start
+                waveform["play_duration"] = duration
+                play_full_from(start)
+                waveform["play_started_at"] = time.perf_counter()
+                update_playhead_during_preview(token)
+                return
+        except Exception:
+            close_mci()
+        waveform["mode"] = "clip"
 
         def worker():
             try:
@@ -885,6 +1102,9 @@ def install(g: dict, root: tk.Misc) -> tk.Frame:
 
     def clear_audio():
         stop_preview()
+        close_mci()
+        waveform["load_token"] += 1
+        waveform["full_preview"] = None
         save_last_audio("")
         source_var.set("")
         custom_name_var.set("")

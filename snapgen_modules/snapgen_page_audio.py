@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 import threading
 import sys
@@ -50,6 +51,9 @@ def install(g: dict, root: tk.Misc) -> tk.Frame:
         # Whole-file WAV decoded once per source so Play/seek are instant.
         "full_preview": None, "open_file": None, "open_length_ms": 0,
         "mode": None, "load_token": 0, "drawn_size": None, "redraw_after": None,
+        # Play pressed while the whole-file WAV is still being built waits for
+        # it instead of starting a second slow FFmpeg decode.
+        "preview_building": False, "pending_play": False,
     }
     ffmpeg_cache = [None]
     cache_dir = Path(tempfile.gettempdir()) / "snapgen_audio_cache"
@@ -571,37 +575,102 @@ def install(g: dict, root: tk.Misc) -> tk.Frame:
         canvas.itemconfigure(items["playhead_text"], text=playhead_text)
 
     def build_full_preview(path: Path, token: int):
-        """Decode the whole source once to a temp WAV; Play then only seeks it."""
+        """Decode the whole source once to a temp WAV; Play then only seeks it.
+        Long files decode in parallel slices of raw PCM joined under one WAV
+        header, so the first Play after opening a file is ready in seconds."""
+        rate, channels = 44100, 2
+        waveform["preview_building"] = True
+
+        def decode_raw(before, after, output):
+            command = ([ffmpeg_path(), "-y", "-hide_banner", "-loglevel", "error"] + before +
+                       ["-i", str(path)] + after +
+                       ["-vn", "-ac", str(channels), "-ar", str(rate), "-f", "s16le", str(output)])
+            result = subprocess.run(command, capture_output=True,
+                                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+            if result.returncode != 0 or not output.is_file():
+                raise RuntimeError("decode failed")
+
+        def write_wav(part, pieces):
+            data_size = sum(piece.stat().st_size for piece in pieces)
+            block = channels * 2
+            header = (b"RIFF" + (36 + data_size).to_bytes(4, "little") + b"WAVEfmt " +
+                      (16).to_bytes(4, "little") + (1).to_bytes(2, "little") +
+                      channels.to_bytes(2, "little") + rate.to_bytes(4, "little") +
+                      (rate * block).to_bytes(4, "little") + block.to_bytes(2, "little") +
+                      (16).to_bytes(2, "little") + b"data" + data_size.to_bytes(4, "little"))
+            with part.open("wb") as out:
+                out.write(header)
+                for piece in pieces:
+                    with piece.open("rb") as source:
+                        shutil.copyfileobj(source, out, 4 * 1024 * 1024)
+
         def worker():
+            target = None
             try:
                 cache_dir.mkdir(parents=True, exist_ok=True)
                 target = cache_dir / f"preview_{source_key(path)}.wav"
                 if not target.is_file():
-                    for old in cache_dir.glob("preview_*.wav"):
-                        if old != target:
+                    duration = header_duration(path)
+                    if duration > full_preview_max_seconds:
+                        target = None
+                        return
+                    for old in cache_dir.glob("preview_*"):
+                        if not old.name.startswith(target.stem):
                             try:
                                 old.unlink()
                             except OSError:
                                 pass
                     part = target.with_suffix(".part")
-                    command = [ffmpeg_path(), "-y", "-hide_banner", "-loglevel", "error",
-                               "-i", str(path), "-vn", "-ac", "2", "-ar", "44100",
-                               "-c:a", "pcm_s16le", "-f", "wav", str(part)]
-                    result = subprocess.run(command, capture_output=True,
-                                            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
-                    if result.returncode != 0 or not part.is_file():
-                        part.unlink(missing_ok=True)
-                        return
-                    part.replace(target)
+                    workers = max(1, min(4, (os.cpu_count() or 2) - 1))
+                    if workers < 2 or duration < 120:
+                        workers = 1
+                    slice_length = duration / workers if duration > 0 else 0
+                    pieces = [target.with_name(f"{target.stem}.{index}.raw") for index in range(workers)]
+                    errors = []
 
-                def ready():
-                    if token == waveform["load_token"]:
-                        waveform["full_preview"] = str(target)
-                root.after(0, ready)
+                    def decode_slice(index):
+                        try:
+                            before = ["-ss", f"{index * slice_length:.3f}"] if index else []
+                            after = ["-t", f"{slice_length:.3f}"] if index < workers - 1 else []
+                            decode_raw(before, after, pieces[index])
+                        except Exception as exc:
+                            errors.append(exc)
+
+                    try:
+                        threads = [threading.Thread(target=decode_slice, args=(index,), daemon=True)
+                                   for index in range(workers)]
+                        for thread in threads:
+                            thread.start()
+                        for thread in threads:
+                            thread.join()
+                        if errors:
+                            raise errors[0]
+                        write_wav(part, pieces)
+                        part.replace(target)
+                    finally:
+                        for piece in pieces + [part]:
+                            try:
+                                piece.unlink(missing_ok=True)
+                            except OSError:
+                                pass
             except Exception:
-                pass
+                target = None
+            finally:
+                root.after(0, lambda: preview_finished(token, target))
 
         threading.Thread(target=worker, daemon=True).start()
+
+    def preview_finished(token, target):
+        if token != waveform["load_token"]:
+            return
+        waveform["preview_building"] = False
+        if target is not None and Path(target).is_file():
+            waveform["full_preview"] = str(target)
+        if waveform["pending_play"]:
+            waveform["pending_play"] = False
+            play_btn.config(text="เล่น")
+            # Falls back to the per-play clip when the full WAV failed.
+            play_selection()
 
     def header_duration(path: Path) -> float:
         """Read the container's Duration line without decoding any audio."""
@@ -660,6 +729,7 @@ def install(g: dict, root: tk.Misc) -> tk.Frame:
         waveform["load_token"] += 1
         token = waveform["load_token"]
         path = Path(path)
+        build_full_preview(path, token)
 
         def show(peaks, duration):
             if token != waveform["load_token"]:
@@ -670,8 +740,6 @@ def install(g: dict, root: tk.Misc) -> tk.Frame:
             end_var.set(clock(duration))
             status_var.set(f"{path.name} — {clock(duration)}")
             draw_waveform()
-            if duration <= full_preview_max_seconds:
-                build_full_preview(path, token)
 
         def worker():
             try:
@@ -917,6 +985,7 @@ def install(g: dict, root: tk.Misc) -> tk.Frame:
             stop_preview(preserve_playhead=True)
 
     def stop_preview(preserve_playhead=False):
+        waveform["pending_play"] = False
         held_playhead = waveform["playhead"]
         if not preserve_playhead and waveform["playing"] and waveform["play_started_at"]:
             elapsed = max(0.0, time.perf_counter() - waveform["play_started_at"])
@@ -959,8 +1028,17 @@ def install(g: dict, root: tk.Misc) -> tk.Frame:
             update_waveform_selection()
 
     def play_selection():
+        if waveform["pending_play"]:
+            waveform["pending_play"] = False
+            play_btn.config(text="เล่น")
+            return
         if waveform["playing"]:
             stop_preview()
+            return
+        if waveform["preview_building"] and not waveform.get("full_preview") and waveform["duration"] > 0:
+            waveform["pending_play"] = True
+            play_btn.config(text="หยุด")
+            status_var.set("กำลังเตรียมเสียง... จะเล่นทันทีที่พร้อม")
             return
         source = Path(source_var.get().strip())
         if not source.is_file():
@@ -1105,6 +1183,7 @@ def install(g: dict, root: tk.Misc) -> tk.Frame:
         close_mci()
         waveform["load_token"] += 1
         waveform["full_preview"] = None
+        waveform["preview_building"] = False
         save_last_audio("")
         source_var.set("")
         custom_name_var.set("")

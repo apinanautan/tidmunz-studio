@@ -10,7 +10,7 @@
 | สคริปต์ (ส่วนหนึ่งของโปรแกรม) | `%LOCALAPPDATA%\Tidmunz Studio\snapgen_modules\cc5\` — ซอร์สอยู่ใน repo `snapgen_modules/cc5/` |
 | งานของแต่ละตัว (job) | `%LOCALAPPDATA%\Tidmunz Studio\snapgen_data\cc5_jobs\<ชื่อภาษาอังกฤษตัวเล็ก_ขีดล่าง>\` |
 | ตัวชี้ job ปัจจุบัน | `snapgen_data\cc5_jobs\current_job.txt` (บรรทัดเดียว = path โฟลเดอร์ job) |
-| สารบัญของ CC5 (ทุกไฟล์ในคลัง) | `%LOCALAPPDATA%\Tidmunz Studio\cc5_catalog\catalog.json` — ดูในโปรแกรมได้ที่หน้านิทาน → คลังทรัพย์สิน CC5 |
+| สารบัญของ CC5 (ทุกไฟล์ในคลัง) | `%LOCALAPPDATA%\Tidmunz Studio\cc5_catalog\catalog.json` — ค้นด้วย `cc5_find.py` (ข้อ 3) |
 | ของที่ลองใช้จริงแล้ว (ใช้ได้/เสีย/ไม่เอา/ใช้กับใคร) | `snapgen_data\cc5_wardrobe.json` |
 | ทรงผมที่คัดด้วยตาแล้ว | `snapgen_data\cc5_hair_pool.json` |
 | รายชื่อตัวละครของเรื่อง (ข้อมูลชุด) | `snapgen_data\story_face_batch_latest.json` → key `text` (ใช้เลขข้อตามนี้เสมอ เช่น 3.1, 8, 9) |

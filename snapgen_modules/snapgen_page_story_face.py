@@ -280,30 +280,22 @@ def install(g: dict, root: tk.Misc) -> tk.Misc:
     story_content.pack(fill="both", expand=True)
     story_character_page = tk.Frame(story_content, bg="#FAFAF7")
     story_scene_page = tk.Frame(story_content, bg="#FAFAF7")
-    story_asset_page = tk.Frame(story_content, bg="#FAFAF7")
 
     story_subpage_buttons = {}
     story_scene_refresh = [lambda: None]
-    story_asset_refresh = [lambda: None]
 
     def _show_story_subpage(name="character"):
-        target = name if name in {"character", "scene", "database"} else "character"
-        for child_page in (story_character_page, story_scene_page, story_asset_page):
+        target = name if name in {"character", "scene"} else "character"
+        for child_page in (story_character_page, story_scene_page):
             child_page.pack_forget()
         page = {
             "character": story_character_page,
             "scene": story_scene_page,
-            "database": story_asset_page,
         }[target]
         page.pack(fill="both", expand=True)
         if target == "scene":
             try:
                 story_scene_refresh[0]()
-            except Exception:
-                pass
-        elif target == "database":
-            try:
-                story_asset_refresh[0]()
             except Exception:
                 pass
         for key, button in story_subpage_buttons.items():
@@ -315,7 +307,7 @@ def install(g: dict, root: tk.Misc) -> tk.Misc:
                 activeforeground="#FFFFFF" if active else "#1A1A1A",
             )
 
-    for key, label in (("character", "👤 ตัวละคร"), ("scene", "🎬 ฉาก"), ("database", "📚 คลัง CC5")):
+    for key, label in (("character", "👤 ตัวละคร"), ("scene", "🎬 ฉาก")):
         button = tk.Button(
             story_subnav,
             text=label,
@@ -340,11 +332,6 @@ def install(g: dict, root: tk.Misc) -> tk.Misc:
     scene_runtime = _install_story_scene_page(g, root, story_scene_page)
     if callable(scene_runtime.get("refresh")):
         story_scene_refresh[0] = scene_runtime["refresh"]
-
-    from snapgen_story_asset_database import install as _install_story_asset_database
-    asset_runtime = _install_story_asset_database(g, story_asset_page)
-    if callable(asset_runtime.get("refresh")):
-        story_asset_refresh[0] = asset_runtime["refresh"]
 
     g["story_character_page"] = story_character_page
     g["story_scene_page"] = story_scene_page

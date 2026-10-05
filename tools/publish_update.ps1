@@ -6,7 +6,7 @@ param(
 $ErrorActionPreference = "Stop"
 $Tools = Split-Path -Parent $MyInvocation.MyCommand.Path
 $Root = Split-Path -Parent $Tools
-$Repo = "tidmunzsocial-lab/tidmunz-studio"
+$Repo = "apinanautan/tidmunz-studio"
 $Version = $Version.Trim().TrimStart("v")
 if ($Version -notmatch '^\d+\.\d+\.\d+$') {
     throw "เลขเวอร์ชันต้องเป็นรูปแบบ 1.0.1"

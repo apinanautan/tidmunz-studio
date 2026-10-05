@@ -5663,7 +5663,7 @@ def _open_publish_update_window(settings_win, settings_status=None):
         if not messagebox.askokcancel(
             "ยืนยันเผยแพร่",
             f"จะสร้างและเผยแพร่ v{version} ไปที่\n"
-            "tidmunzsocial-lab/tidmunz-studio\n\n"
+            "apinanautan/tidmunz-studio\n\n"
             "Patch จะมีเฉพาะไฟล์โปรแกรม ไม่มี Account, Cookie, Context หรือ export",
             parent=win,
         ):
@@ -5779,7 +5779,7 @@ def _open_publish_update_window(settings_win, settings_status=None):
                      )
                     account = (user.stdout or "").strip()
                     permission = subprocess.run(
-                        ["gh", "api", "repos/tidmunzsocial-lab/tidmunz-studio", "--jq", ".permissions.push"],
+                        ["gh", "api", "repos/apinanautan/tidmunz-studio", "--jq", ".permissions.push"],
                         cwd=str(BASE_ROOT), capture_output=True, text=True,
                         encoding="utf-8", errors="replace", timeout=15,
                         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),

@@ -23,9 +23,15 @@ import urllib.request
 import zipfile
 from pathlib import Path
 
-OWNER = "tidmunzsocial-lab"
+OWNER = "apinanautan"
 REPOSITORY = "tidmunz-studio"
 API_LATEST = f"https://api.github.com/repos/{OWNER}/{REPOSITORY}/releases/latest"
+# Same list as snapgen_updater.RELEASE_REPOSITORIES: install the newest
+# Release found in any of them.
+RELEASE_REPOSITORIES = (
+    ("apinanautan", "tidmunz-studio"),
+    ("tidmunzsocial-lab", "tidmunz-studio"),
+)
 APP_NAME = "Tidmunz Studio"
 MAIN_SCRIPT = "snapgen_gui_v2.py"
 SETUP_STEPS = 7  # "[n/7]" markers printed by setup_and_run.bat
@@ -51,13 +57,31 @@ def _request(url: str, timeout: int = 60):
     return urllib.request.urlopen(req, timeout=timeout)
 
 
+def _version_tuple(value) -> tuple:
+    parts = []
+    for part in str(value or "0").strip().lower().lstrip("v").split(".")[:4]:
+        digits = "".join(ch for ch in part if ch.isdigit())
+        parts.append(int(digits or 0))
+    return tuple((parts + [0, 0, 0, 0])[:4])
+
+
 def latest_release() -> dict:
-    with _request(API_LATEST, timeout=30) as response:
-        release = json.loads(response.read().decode("utf-8"))
-    tag = str(release.get("tag_name") or "").strip()
-    if not tag:
-        raise RuntimeError("GitHub Release ล่าสุดไม่มีเลขเวอร์ชัน")
-    return {"tag": tag, "version": tag.lstrip("v")}
+    best, errors = None, []
+    for owner, repository in RELEASE_REPOSITORIES:
+        url = f"https://api.github.com/repos/{owner}/{repository}/releases/latest"
+        try:
+            with _request(url, timeout=30) as response:
+                release = json.loads(response.read().decode("utf-8"))
+        except Exception as exc:
+            errors.append(f"{owner}: {exc}")
+            continue
+        tag = str(release.get("tag_name") or "").strip()
+        if tag and (best is None or _version_tuple(tag) > _version_tuple(best["tag"])):
+            best = {"tag": tag, "version": tag.lstrip("v"),
+                    "owner": owner, "repository": repository}
+    if best is None:
+        raise RuntimeError("หา GitHub Release ไม่เจอ: " + "; ".join(errors))
+    return best
 
 
 def install_program(home: Path, progress=lambda _text, _fraction=None: None) -> str:
@@ -68,7 +92,7 @@ def install_program(home: Path, progress=lambda _text, _fraction=None: None) -> 
     """
     progress("กำลังตรวจเวอร์ชันล่าสุด ...", 0.0)
     info = latest_release()
-    url = f"https://api.github.com/repos/{OWNER}/{REPOSITORY}/zipball/{info['tag']}"
+    url = f"https://api.github.com/repos/{info['owner']}/{info['repository']}/zipball/{info['tag']}"
     buffer = io.BytesIO()
     with _request(url, timeout=300) as response:
         total = int(response.headers.get("Content-Length") or 0)

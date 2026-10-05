@@ -23,7 +23,7 @@ import traceback
 import urllib.request
 import uuid
 
-REPOSITORY = "tidmunzsocial-lab/tidmunz-studio"
+REPOSITORY = "apinanautan/tidmunz-studio"
 ERROR_WORDS = re.compile(
     r"(?:\bERROR\b|\bFAILED?\b|\bEXCEPTION\b|\bWARNING\b|\bWARN\b|\bFATAL\b|\bCRITICAL\b|TRACEBACK|ล้มเหลว|ไม่สำเร็จ|ผิดพลาด)",
     re.IGNORECASE,

@@ -3,7 +3,7 @@
 Repository หลัก:
 
 ```text
-https://github.com/tidmunzsocial-lab/tidmunz-studio
+https://github.com/apinanautan/tidmunz-studio
 ```
 
 ## วิธีติดตั้งบนเครื่องใหม่
@@ -16,7 +16,7 @@ https://github.com/tidmunzsocial-lab/tidmunz-studio
 หรือใช้คำสั่ง:
 
 ```bat
-git clone https://github.com/tidmunzsocial-lab/tidmunz-studio.git SnapGen
+git clone https://github.com/apinanautan/tidmunz-studio.git SnapGen
 cd SnapGen
 setup_and_run.bat
 ```

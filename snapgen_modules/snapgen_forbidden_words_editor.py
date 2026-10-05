@@ -13,7 +13,7 @@ from snapgen_fonts import font_family as _snapgen_font_family
 
 SNAPGEN_UI_FONT = _snapgen_font_family()
 
-REPO = "tidmunzsocial-lab/tidmunz-studio"
+REPO = "apinanautan/tidmunz-studio"
 BRANCH = "main"
 REMOTE_PATH = "assets/video_forbidden_words.json"
 SYNC_TTL_SECONDS = 600

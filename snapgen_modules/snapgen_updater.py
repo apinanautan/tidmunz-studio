@@ -26,8 +26,15 @@ import urllib.request
 import zipfile
 from pathlib import Path, PurePosixPath
 
-OWNER = "tidmunzsocial-lab"
+OWNER = "apinanautan"
 REPOSITORY = "tidmunz-studio"
+# Releases are published to both repositories. Every check reads all of them
+# and installs the highest version, so either repository alone is enough and
+# a missing/private one never blocks updates. First entry wins version ties.
+RELEASE_REPOSITORIES = (
+    ("apinanautan", "tidmunz-studio"),
+    ("tidmunzsocial-lab", "tidmunz-studio"),
+)
 API_LATEST = f"https://api.github.com/repos/{OWNER}/{REPOSITORY}/releases/latest"
 API_RELEASES = f"https://api.github.com/repos/{OWNER}/{REPOSITORY}/releases?per_page=50"
 ASSET_NAME = "tidmun-studio-patch.zip"
@@ -88,28 +95,50 @@ def current_version(project_root):
     return "0.0.0"
 
 
+def _fetch_from_repositories(path, timeout):
+    """GET ``path`` from every release repository.
+
+    Returns ``(results, errors)``; a 404 (no Release yet, or a private
+    repository) is not an error, it simply contributes nothing.
+    """
+    results, errors = [], []
+    for owner, repository in RELEASE_REPOSITORIES:
+        url = f"https://api.github.com/repos/{owner}/{repository}/{path}"
+        try:
+            with _request(url, timeout=timeout) as response:
+                results.append(json.loads(response.read().decode("utf-8")))
+        except urllib.error.HTTPError as exc:
+            if exc.code != 404:
+                errors.append(f"{owner}: HTTP {exc.code}")
+        except Exception as exc:
+            errors.append(f"{owner}: {exc}")
+    return results, errors
+
+
 def check_latest(project_root):
-    try:
-        with _request(API_LATEST, timeout=20) as response:
-            release = json.loads(response.read().decode("utf-8"))
-    except urllib.error.HTTPError as exc:
-        if exc.code == 404:
-            return {
-                "available": False,
-                "current": current_version(project_root),
-                "latest": None,
-                "message": "ยังไม่มี GitHub Release",
-            }
-        raise UpdateError(f"GitHub ตอบ HTTP {exc.code}") from exc
-    except Exception as exc:
-        raise UpdateError(f"ตรวจสอบ GitHub ไม่สำเร็จ: {exc}") from exc
+    found, errors = _fetch_from_repositories("releases/latest", timeout=20)
+    release = None
+    for candidate in found:
+        if not isinstance(candidate, dict):
+            continue
+        tag = str(candidate.get("tag_name") or "").lstrip("v")
+        asset = _release_asset(candidate)
+        if not tag or not asset or not asset.get("browser_download_url"):
+            continue
+        if release is None or _version_tuple(tag) > _version_tuple(release.get("tag_name")):
+            release = candidate
+    if release is None:
+        if errors and not found:
+            raise UpdateError("ตรวจสอบ GitHub ไม่สำเร็จ: " + "; ".join(errors))
+        return {
+            "available": False,
+            "current": current_version(project_root),
+            "latest": None,
+            "message": "ยังไม่มี GitHub Release",
+        }
 
     latest = str(release.get("tag_name") or "").lstrip("v")
-    asset = next((a for a in release.get("assets", []) if a.get("name") == ASSET_NAME), None)
-    if not latest:
-        raise UpdateError("Release ล่าสุดไม่มีเลขเวอร์ชัน")
-    if not asset or not asset.get("browser_download_url"):
-        raise UpdateError(f"Release v{latest} ไม่มีไฟล์ {ASSET_NAME}")
+    asset = _release_asset(release)
     current = current_version(project_root)
     return {
         "available": _version_tuple(latest) > _version_tuple(current),
@@ -130,25 +159,14 @@ def _release_asset(release):
 
 def list_releases(project_root, limit=40):
     """Return published GitHub versions that can be restored/installed."""
-    try:
-        with _request(API_RELEASES, timeout=30) as response:
-            releases = json.loads(response.read().decode("utf-8"))
-    except urllib.error.HTTPError as exc:
-        if exc.code == 404:
-            return {
-                "current": current_version(project_root),
-                "releases": [],
-                "message": "ยังไม่มี GitHub Release",
-            }
-        raise UpdateError(f"GitHub ตอบ HTTP {exc.code}") from exc
-    except Exception as exc:
-        raise UpdateError(f"ดึงรายการเวอร์ชันจาก GitHub ไม่สำเร็จ: {exc}") from exc
-
-    if not isinstance(releases, list):
-        raise UpdateError("รูปแบบรายการ Release จาก GitHub ไม่ถูกต้อง")
+    found, errors = _fetch_from_repositories("releases?per_page=50", timeout=30)
+    if errors and not found:
+        raise UpdateError("ดึงรายการเวอร์ชันจาก GitHub ไม่สำเร็จ: " + "; ".join(errors))
+    releases = [release for batch in found if isinstance(batch, list) for release in batch]
 
     current = current_version(project_root)
     items = []
+    seen_versions = set()
     for release in releases:
         if release.get("draft") or release.get("prerelease"):
             continue
@@ -156,6 +174,9 @@ def list_releases(project_root, limit=40):
         asset = _release_asset(release)
         if not version or not asset or not asset.get("browser_download_url"):
             continue
+        if _version_tuple(version) in seen_versions:
+            continue
+        seen_versions.add(_version_tuple(version))
         items.append({
             "version": version,
             "latest": version,  # download_and_stage expects this key
@@ -167,10 +188,9 @@ def list_releases(project_root, limit=40):
             "published_at": str(release.get("published_at") or release.get("created_at") or ""),
             "is_current": _version_tuple(version) == _version_tuple(current),
         })
-        if len(items) >= int(limit or 40):
-            break
 
     items.sort(key=lambda item: _version_tuple(item.get("version")), reverse=True)
+    items = items[:int(limit or 40)]
     return {
         "current": current,
         "releases": items,

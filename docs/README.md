@@ -6,7 +6,7 @@ Repository สำหรับ source code, การติดตั้งเค�
 ## ติดตั้งหรือกู้คืนบนเครื่องใหม่
 
 ```bat
-git clone https://github.com/tidmunzsocial-lab/tidmunz-studio.git SnapGen
+git clone https://github.com/apinanautan/tidmunz-studio.git SnapGen
 cd SnapGen
 setup_and_run.bat
 ```

@@ -1,0 +1,35 @@
+# Personal working copy (apinanautan/tidmunz-studio) -> company repo.
+# Claude Code cloud sessions work in the personal repo. Pushing main or a
+# version tag here forwards it to tidmunzsocial-lab/tidmunz-studio, where the
+# Release workflow builds the update every PC downloads.
+# Needs the secret COMPANY_PUSH_TOKEN: a token of a user with write access to
+# the company repo (apinanautan is a collaborator there).
+name: Forward to company repo
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*.*.*"]
+
+jobs:
+  forward:
+    if: github.repository == 'apinanautan/tidmunz-studio'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Push to tidmunzsocial-lab/tidmunz-studio
+        env:
+          TOKEN: ${{ secrets.COMPANY_PUSH_TOKEN }}
+        run: |
+          if [ -z "$TOKEN" ]; then echo "COMPANY_PUSH_TOKEN is not set"; exit 1; fi
+          url="https://x-access-token:${TOKEN}@github.com/tidmunzsocial-lab/tidmunz-studio.git"
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            # Main first, so the tag's commit is on the company main too.
+            git push "$url" "${GITHUB_SHA}:refs/heads/main"
+            git push "$url" "refs/tags/${GITHUB_REF_NAME}"
+          else
+            git push "$url" "${GITHUB_SHA}:refs/heads/main"
+          fi

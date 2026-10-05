@@ -12,6 +12,8 @@ permissions:
 
 jobs:
   release:
+    # Releases live only in the company repo (every PC updates from it).
+    if: github.repository == 'tidmunzsocial-lab/tidmunz-studio'
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4

@@ -1,6 +1,6 @@
 @echo off
 setlocal
-set "REPO=https://github.com/tidmunzsocial-lab/tidmunz-studio.git"
+set "REPO=https://github.com/apinanautan/tidmunz-studio.git"
 for %%I in ("%~dp0..") do set "PROJECT_ROOT=%%~fI"
 if exist "%PROJECT_ROOT%\setup_and_run.bat" (
   set "TARGET=%PROJECT_ROOT%"

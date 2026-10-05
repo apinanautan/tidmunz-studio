@@ -58,7 +58,7 @@ for path in files:
 
 manifest = {
     "version": VERSION,
-    "repository": "tidmunzsocial-lab/tidmunz-studio",
+    "repository": "apinanautan/tidmunz-studio",
     "files": manifest_files,
 }
 OUTPUT.parent.mkdir(parents=True, exist_ok=True)

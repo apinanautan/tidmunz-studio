@@ -23,7 +23,7 @@ import urllib.request
 import zipfile
 from pathlib import Path
 
-OWNER = "tidmunzsocial-lab"
+OWNER = "apinanautan"
 REPOSITORY = "tidmunz-studio"
 API_LATEST = f"https://api.github.com/repos/{OWNER}/{REPOSITORY}/releases/latest"
 APP_NAME = "Tidmunz Studio"

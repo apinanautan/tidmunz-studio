@@ -26,7 +26,7 @@ import urllib.request
 import zipfile
 from pathlib import Path, PurePosixPath
 
-OWNER = "tidmunzsocial-lab"
+OWNER = "apinanautan"
 REPOSITORY = "tidmunz-studio"
 API_LATEST = f"https://api.github.com/repos/{OWNER}/{REPOSITORY}/releases/latest"
 API_RELEASES = f"https://api.github.com/repos/{OWNER}/{REPOSITORY}/releases?per_page=50"

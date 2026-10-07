@@ -204,7 +204,7 @@ CREATURE_BODIES = (
     (("พญานาค", "นาคราช", "นาคี", "นาคิน", "นาคา", "naga"),
      "พญานาคเป็นงูยักษ์ ลำตัวยาวมีเกล็ด มีหงอนบนหัว ไม่มีแขน ไม่มีขา ไม่มีมือ ไม่มีเท้า; เคลื่อนที่ด้วยการเลื้อยและขดตัว "
      "สู้ด้วยการฉกด้วยเขี้ยว รัดด้วยลำตัว ฟาดหาง หรือพ่นพลัง; ท่าหมอบ/ยอมแพ้ = ขดตัวลดหัวลงแนบพื้น",
-     "มือ, แขน, นิ้ว, ขา, เท้า, อาวุธในมือ"),
+     "มือหรือแขนบนตัวพญานาค, ขาหรือเท้าบนตัวพญานาค, พญานาคถืออาวุธ"),
     (("มังกร", "dragon"),
      "มังกรมีลำตัวยาวมีเกล็ด มีขา 4 ขาพร้อมกรงเล็บ (ต่างจากพญานาคที่ไม่มีขา)",
      ""),
@@ -1277,7 +1277,8 @@ def motion_request(items: list, era: str, horror: bool = False) -> str:
         "5) รูปร่าง: สิ่งมีชีวิตที่ไม่ใช่คนทุกตัวในเฟรม ให้เขียน anatomy บอกว่ามีอะไรและไม่มีอะไร (เช่น พญานาคไม่มีแขน ขา มือ) "
         "และในพรอมต์ใช้แต่ท่าที่ร่างกายนั้นทำได้จริง — ห้ามท่าที่ต้องใช้มือหรือขากับสิ่งที่ไม่มีมือหรือขา "
         "(เช่น พญานาคหมอบ = ขดตัวลดหัวลงแนบพื้น ไม่ใช่คุกเข่า/ยันมือ). "
-        "6) forbid = สิ่งที่ห้ามปรากฏตลอดคลิป สั้นๆ คั่นด้วยจุลภาค (เช่น มือ, แขน, ตัวละครใหม่, ตัวหนังสือ). "
+        "6) forbid = สิ่งที่ห้ามปรากฏตลอดคลิป สั้นๆ คั่นด้วยจุลภาค ระบุเจ้าของเสมอเพราะคนในเฟรมยังต้องมีมือ "
+        "(เช่น มือบนตัวพญานาค, ขาบนตัวพญานาค, ตัวละครใหม่, ตัวหนังสือ — ห้ามเขียนแค่ 'มือ' เฉยๆ). "
         "7) " + REALISM_NOTE + ". ไม่มีตัวหนังสือ ไม่มีคนเล่าเรื่อง. "
         + (HORROR_NOTE if horror else "")
         + f"ยุค/บรรยากาศ: {era}. "
@@ -2824,17 +2825,21 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
             shots = ", ".join(str(i + 1) for i in batch)
             set_progress("motion", (b - 1) / len(batches),
                          f"GPT ดูรูปและบท เขียนพรอมต์วิดีโอ {b}/{len(batches)} (ช็อต {shots})")
-            content = [{"type": "text", "text": motion_request(motion_items(batch), era, horror)}]
-            content += [{"type": "image_url", "image_url": {"url": image_data_url(scenes[i]["image"])}} for i in batch]
-            try:
-                reply = with_retries(f"พรอมต์วิดีโอ ช็อต {shots}",
-                                     lambda content=content: parse_json_reply(chat(content)), attempts=2)
-            except (Stopped, HistoryLost, RateLimited):
-                raise
-            except Exception as exc:
-                # Pictures could not be sent: still rewrite from the script and the image prompt alone.
-                log(f"ส่งรูปให้ GPT ดูไม่ได้ ({str(exc)[:120]}) — เขียนพรอมต์วิดีโอจากบทและคำสั่งรูปแทน")
-                text = content[0]["text"] + "\n\n(ไม่มีรูปแนบ: ภาพแรกของแต่ละช็อตคือ) " + " | ".join(
+            request = motion_request(motion_items(batch), era, horror)
+            reply = None
+            if not state.get("motion_text_only"):
+                content = [{"type": "text", "text": request}]
+                content += [{"type": "image_url", "image_url": {"url": image_data_url(scenes[i]["image"])}} for i in batch]
+                try:
+                    reply = parse_json_reply(chat(content))
+                except (Stopped, HistoryLost, RateLimited):
+                    raise
+                except Exception as exc:
+                    # Pictures could not be sent: for the rest of this run write from the script and image prompt.
+                    state["motion_text_only"] = True
+                    log(f"ส่งรูปให้ GPT ดูไม่ได้ ({str(exc)[:120]}) — เขียนพรอมต์วิดีโอจากบทและคำสั่งรูปแทน")
+            if reply is None:
+                text = request + "\n\n(ไม่มีรูปแนบ: ภาพแรกของแต่ละช็อตคือ) " + " | ".join(
                     f"ช็อต {i + 1}: {str(scenes[i].get('prompt') or '')[:300]}" for i in batch)
                 reply = with_retries(f"พรอมต์วิดีโอ ช็อต {shots}", lambda text=text: parse_json_reply(chat(text)))
             for item in reply.get("shots") or []:
@@ -3336,7 +3341,8 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
             "1) บอกรูปร่างที่ถูกต้องชัดเจนในทางบวกตั้งแต่ประโยคแรก และย้ำอีกครั้งตอนกลาง (เช่น 'พญานาคเป็นงูยักษ์ ลำตัวยาวมีเกล็ด ไม่มีแขน ไม่มีขา ไม่มีมือ'); "
             "2) ตัดการกระทำที่ทำให้เกิดปัญหาออกทั้งหมด แทนด้วยการกระทำที่ไม่มีทางทำให้เกิดปัญหานั้น "
             "(เช่น ถือดาบ → ฟาดหาง ฉกด้วยเขี้ยว พลังพุ่งออกจากร่าง); ใช้การเคลื่อนไหวน้อยลงและชัดขึ้น 1 อย่าง; "
-            "3) forbid = รายการสิ่งที่ห้ามปรากฏเด็ดขาดตลอดคลิป สั้นๆ คั่นด้วยจุลภาค (เช่น มือ, แขน, นิ้ว, ขา, อาวุธในมือ); "
+            "3) forbid = รายการสิ่งที่ห้ามปรากฏเด็ดขาดตลอดคลิป สั้นๆ คั่นด้วยจุลภาค ระบุเจ้าของเสมอ เพราะคนในเฟรมยังต้องมีมือ "
+            "(เช่น มือบนตัวพญานาค, ขาบนตัวพญานาค, พญานาคถืออาวุธ — ห้ามเขียนแค่ 'มือ' เฉยๆ); "
             "ภาพสมจริงแบบภาพยนตร์ ไม่มีตัวหนังสือ. "
             "ตอบ JSON เท่านั้น {\"prompt\":\"\",\"video_prompt\":\"\",\"forbid\":\"\",\"change\":\"\"} "
             "prompt = ภาพแรกของช็อต (ใช้เมื่อวาดภาพใหม่), video_prompt = การเคลื่อนไหวตลอดคลิป, change = สรุปสั้นๆ ว่าแก้อะไร.\n\n"

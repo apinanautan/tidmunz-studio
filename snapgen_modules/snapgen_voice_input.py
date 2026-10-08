@@ -302,7 +302,7 @@ def _gpu_compute_types():
     return ("float16", "int8_float16", "int8", "float32")
 
 
-def _get_whisper_model(log_fn=None, force_cpu=False, compute_types=None):
+def _get_whisper_model(log_fn=None, force_cpu=False, compute_types=None, gpu_only=False):
     """Load the best local speech model this computer can actually run.
 
     Never hard-code one GPU model here: SnapGen is shared across different
@@ -350,6 +350,9 @@ def _get_whisper_model(log_fn=None, force_cpu=False, compute_types=None):
             except Exception as exc:
                 gpu_error = exc
     if gpu_error is not None:
+        if gpu_only:
+            # Caller tries another GPU route (whisper.cpp Vulkan) before CPU.
+            raise RuntimeError(f"CUDA ใช้ไม่ได้: {gpu_error}")
         if callable(log_fn):
             log_fn(f"GPU ใช้ไม่ได้ ({gpu_error}) — ใช้ CPU")
         _WHISPER_MODEL = WhisperModel(

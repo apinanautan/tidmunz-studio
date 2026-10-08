@@ -54,6 +54,11 @@ jobs:
           New-Item -ItemType Directory -Force out | Out-Null
           Copy-Item $exe.FullName out\
           Get-ChildItem $exe.DirectoryName -Filter *.dll | Copy-Item -Destination out\
+          # App-local Visual C++ runtime: machines without the VC++
+          # Redistributable cannot start whisper-cli.exe otherwise.
+          foreach ($dll in "msvcp140.dll", "vcruntime140.dll", "vcruntime140_1.dll") {
+            Copy-Item "$env:WINDIR\System32\$dll" out\
+          }
           Compress-Archive -Path out\* -DestinationPath whisper-vulkan-win-x64.zip -Force
 
       - name: Publish pre-release

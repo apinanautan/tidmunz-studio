@@ -83,28 +83,30 @@ def emit(item):
     sys.stdout.write(json.dumps(item, ensure_ascii=False) + "\n"); sys.stdout.flush()
 import snapgen_voice_input as V
 sent = [0]
-vulkan_segments = None
+samples = []
+log = lambda m: emit({"log": str(m)})
 try:
     import snapgen_whisper_vulkan as WV
-    use_vulkan = WV.wanted()
 except Exception:
-    use_vulkan = False
-if use_vulkan:
-    # AMD / Intel GPUs: whisper.cpp + Vulkan with the same large-v3 model.
+    WV = None
+vulkan_tried = [False]
+def try_vulkan():
+    # whisper.cpp + Vulkan: any GPU (AMD, Intel, NVIDIA without CUDA libs).
+    if WV is None or not WV.usable() or vulkan_tried[0]:
+        return False
+    vulkan_tried[0] = True
     try:
-        vulkan_segments = WV.transcribe(sys.argv[2], sys.argv[3], sys.argv[4] == "1",
-                                        log=lambda m: emit({"log": str(m)}))
+        found = WV.transcribe(sys.argv[2], sys.argv[3], sys.argv[4] == "1", log=log)
     except Exception as exc:
-        emit({"log": f"ถอดเสียงด้วยการ์ดจอ (Vulkan) ไม่ได้ ({exc}) — ใช้ CPU"})
-if vulkan_segments is not None:
+        log(f"ถอดเสียงด้วยการ์ดจอ (Vulkan) ไม่ได้ ({exc})")
+        return False
     emit({"backend": "GPU Vulkan"})
-    for item in vulkan_segments:
+    for item in found:
         emit(item)
-    sys.exit(0)
-samples = []
-def run(force_cpu, compute_types=None):
-    model, backend = V._get_whisper_model(log_fn=lambda m: emit({"log": str(m)}), force_cpu=force_cpu,
-                                          compute_types=compute_types)
+    return True
+def run(force_cpu, compute_types=None, gpu_only=False):
+    model, backend = V._get_whisper_model(log_fn=log, force_cpu=force_cpu,
+                                          compute_types=compute_types, gpu_only=gpu_only)
     emit({"backend": backend})
     if not samples:
         samples.append(V.load_audio(sys.argv[2]))  # FFmpeg, not PyAV
@@ -114,27 +116,31 @@ def run(force_cpu, compute_types=None):
         words = [[round(w.start, 2), round(w.end, 2), w.word] for w in (s.words or [])]
         emit({"start": s.start, "end": s.end, "text": s.text, "words": words})
         sent[0] += 1
+# Order on every machine: NVIDIA CUDA -> (int8 on CUDA) -> Vulkan GPU -> CPU.
+if WV is not None and WV.wanted() and try_vulkan():
+    sys.exit(0)  # AMD / Intel: Vulkan first
+done = False
 try:
-    run(False)
+    run(False, gpu_only=True)
+    done = True
 except Exception as exc:
-    # A GPU without the CUDA/cuDNN libraries opens the model but fails on the
-    # first transcription, and a small-VRAM card can run out of memory: retry
-    # the GPU in int8 (lightest), then redo the whole file on CPU.
-    if sent[0] or V._WHISPER_BACKEND == "CPU":
+    if sent[0]:
         raise
-    retried = False
-    if V._WHISPER_BACKEND != "GPU int8":
-        emit({"log": f"GPU ถอดเสียงไม่ได้ ({exc}) — ลองใหม่บน GPU แบบประหยัดหน่วยความจำ (int8)"})
+    if str(V._WHISPER_BACKEND or "").startswith("GPU") and V._WHISPER_BACKEND != "GPU int8":
+        # Opened on CUDA but failed while transcribing (missing cuDNN, out of memory).
+        log(f"GPU ถอดเสียงไม่ได้ ({exc}) — ลองใหม่บน GPU แบบประหยัดหน่วยความจำ (int8)")
         try:
-            run(False, ("int8",))
-            retried = True
+            run(False, ("int8",), gpu_only=True)
+            done = True
         except Exception as again:
             if sent[0]:
                 raise
             exc = again
-    if not retried:
-        emit({"log": f"GPU ถอดเสียงไม่ได้ ({exc}) — เปลี่ยนเป็น CPU"})
-        run(True)
+    if not done:
+        log(f"CUDA ใช้ไม่ได้ ({exc}) — ลองถอดเสียงด้วยการ์ดจอแบบ Vulkan")
+if not done and not try_vulkan():
+    log("ใช้การ์ดจอไม่ได้ — ถอดเสียงด้วย CPU")
+    run(True)
 """
 
 

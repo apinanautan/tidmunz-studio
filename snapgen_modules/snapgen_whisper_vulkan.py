@@ -38,6 +38,11 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 TOOL_DIR = PROJECT_ROOT / "snapgen_data" / "tools" / "whisper_vulkan"
 
 
+def usable() -> bool:
+    """whisper.cpp + Vulkan build exists for Windows only."""
+    return os.name == "nt" and not os.environ.get("SNAPGEN_NO_VULKAN_WHISPER")
+
+
 def has_nvidia_gpu() -> bool:
     """NVIDIA driver present on this machine (checked without faster-whisper,
     which may not be installed yet on a fresh teammate machine)."""
@@ -54,9 +59,7 @@ def has_nvidia_gpu() -> bool:
 def wanted() -> bool:
     """Choose per machine: NVIDIA keeps faster-whisper on CUDA; Windows
     machines with AMD / Intel (or no) GPU use whisper.cpp + Vulkan."""
-    if os.name != "nt" or os.environ.get("SNAPGEN_NO_VULKAN_WHISPER"):
-        return False
-    return not has_nvidia_gpu()
+    return usable() and not has_nvidia_gpu()
 
 
 def _download(url, target: Path, log, label, min_bytes=1):
@@ -89,7 +92,9 @@ def _download(url, target: Path, log, label, min_bytes=1):
 def ensure(log=print):
     """Return (whisper-cli.exe, model, vad model), downloading what is missing."""
     exe = TOOL_DIR / "bin" / "whisper-cli.exe"
-    if not exe.is_file():
+    # Builds before the bundled VC++ runtime cannot start on machines without
+    # the Visual C++ Redistributable: fetch the current build once.
+    if not exe.is_file() or not (exe.parent / "msvcp140.dll").is_file():
         log("ดาวน์โหลดตัวถอดเสียงสำหรับ GPU AMD/Intel (Vulkan) ครั้งแรกครั้งเดียว ...")
         archive = _download(BUILD_URL, TOOL_DIR / "whisper-vulkan-win-x64.zip", log, "ตัวถอดเสียง Vulkan")
         staging = TOOL_DIR / "bin.new"

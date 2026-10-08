@@ -211,7 +211,30 @@ def _prepare_cuda_libraries(log_fn=None):
                 os.environ["PATH"] = str(bin_dir) + os.pathsep + os.environ.get("PATH", "")
 
 
-def _get_whisper_model(log_fn=None, force_cpu=False):
+def _nvidia_vram_mb():
+    """Total memory of the first NVIDIA GPU in MB (0 when unknown)."""
+    import subprocess
+    try:
+        result = subprocess.run(
+            ["nvidia-smi", "--query-gpu=memory.total", "--format=csv,noheader,nounits"],
+            capture_output=True, text=True, timeout=15,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        return int(str(result.stdout).strip().splitlines()[0].strip())
+    except Exception:
+        return 0
+
+
+def _gpu_compute_types():
+    """large-v3 in float16 needs ~5 GB of VRAM: 4-6 GB laptop cards such as
+    the RTX 3050 Laptop start with int8 (~3 GB) and still run on the GPU."""
+    vram = _nvidia_vram_mb()
+    if vram and vram < 8000:
+        return ("int8_float16", "int8", "float16", "float32")
+    return ("float16", "int8_float16", "int8", "float32")
+
+
+def _get_whisper_model(log_fn=None, force_cpu=False, compute_types=None):
     """Load the best local speech model this computer can actually run.
 
     Never hard-code one GPU model here: SnapGen is shared across different
@@ -219,6 +242,9 @@ def _get_whisper_model(log_fn=None, force_cpu=False):
     GPU transparently falls back to CPU rather than breaking voice input.
     """
     global _WHISPER_MODEL, _WHISPER_BACKEND
+    if compute_types is not None and _WHISPER_BACKEND not in (None, "CPU"):
+        _WHISPER_MODEL = None  # retry the GPU with lighter types
+        _WHISPER_BACKEND = None
     if force_cpu and _WHISPER_BACKEND not in (None, "CPU"):
         _WHISPER_MODEL = None
         _WHISPER_BACKEND = None
@@ -244,7 +270,7 @@ def _get_whisper_model(log_fn=None, force_cpu=False):
         _prepare_cuda_libraries(log_fn)
         # float16 needs a recent card; older NVIDIA cards fall through to the
         # lighter types instead of dropping straight to the slow CPU.
-        for compute_type in ("float16", "int8_float16", "int8", "float32"):
+        for compute_type in (compute_types or _gpu_compute_types()):
             try:
                 _WHISPER_MODEL = WhisperModel(
                     _WHISPER_MODEL_NAME, device="cuda", compute_type=compute_type, num_workers=1,

@@ -101,8 +101,9 @@ if vulkan_segments is not None:
     for item in vulkan_segments:
         emit(item)
     sys.exit(0)
-def run(force_cpu):
-    model, backend = V._get_whisper_model(log_fn=lambda m: emit({"log": str(m)}), force_cpu=force_cpu)
+def run(force_cpu, compute_types=None):
+    model, backend = V._get_whisper_model(log_fn=lambda m: emit({"log": str(m)}), force_cpu=force_cpu,
+                                          compute_types=compute_types)
     emit({"backend": backend})
     segments, _info = model.transcribe(sys.argv[2], language="th", vad_filter=True, beam_size=1, temperature=0.0,
                                        initial_prompt=sys.argv[3] or None, word_timestamps=sys.argv[4] == "1")
@@ -114,11 +115,23 @@ try:
     run(False)
 except Exception as exc:
     # A GPU without the CUDA/cuDNN libraries opens the model but fails on the
-    # first transcription; redo the whole file on CPU instead of failing.
+    # first transcription, and a small-VRAM card can run out of memory: retry
+    # the GPU in int8 (lightest), then redo the whole file on CPU.
     if sent[0] or V._WHISPER_BACKEND == "CPU":
         raise
-    emit({"log": f"GPU ถอดเสียงไม่ได้ ({exc}) — เปลี่ยนเป็น CPU"})
-    run(True)
+    retried = False
+    if V._WHISPER_BACKEND != "GPU int8":
+        emit({"log": f"GPU ถอดเสียงไม่ได้ ({exc}) — ลองใหม่บน GPU แบบประหยัดหน่วยความจำ (int8)"})
+        try:
+            run(False, ("int8",))
+            retried = True
+        except Exception as again:
+            if sent[0]:
+                raise
+            exc = again
+    if not retried:
+        emit({"log": f"GPU ถอดเสียงไม่ได้ ({exc}) — เปลี่ยนเป็น CPU"})
+        run(True)
 """
 
 

@@ -145,7 +145,9 @@ def _patch_transport(source: str) -> str:
         # SnapGen image history cursor v2: preserve exactly one conversation.
         # Text turns already repair a stale parent from the durable mapping;
         # image turns must do the same before sending to ChatGPT.
-        self._repair_invalid_conversation_parent(payload, headers)
+        # SnapGen guarded parent repair: older Bridge releases lack this helper.
+        if hasattr(self, "_repair_invalid_conversation_parent"):
+            self._repair_invalid_conversation_parent(payload, headers)
         if self.refresh_web_tokens:
 '''
     source = _replace_once(source, repair_old, repair_new, "image parent repair")
@@ -238,6 +240,33 @@ def _patch_transport(source: str) -> str:
     return source[:function_start] + block + source[function_end:]
 
 
+GUARD_MARKER = "# SnapGen guarded parent repair"
+_UNGUARDED_CALL = "        self._repair_invalid_conversation_parent(payload, headers)\n"
+_GUARDED_CALL = (
+    "        " + GUARD_MARKER + ": older Bridge releases lack this helper.\n"
+    '        if hasattr(self, "_repair_invalid_conversation_parent"):\n'
+    "            self._repair_invalid_conversation_parent(payload, headers)\n"
+)
+
+
+def _guard_parent_repair(transport_path: Path) -> bool:
+    """Bridges patched by earlier SnapGen releases call a helper that only
+    newer Bridge code defines, failing every image request with
+    AttributeError. Make that call conditional in place."""
+    source = transport_path.read_text(encoding="utf-8")
+    if GUARD_MARKER in source or _UNGUARDED_CALL not in source:
+        return False
+    updated = source.replace(_UNGUARDED_CALL, _GUARDED_CALL, 1)
+    temp = transport_path.with_suffix(transport_path.suffix + ".image-cursor.tmp")
+    try:
+        temp.write_text(updated, encoding="utf-8")
+        py_compile.compile(str(temp), doraise=True)
+        temp.replace(transport_path)
+    finally:
+        temp.unlink(missing_ok=True)
+    return True
+
+
 def install(bridge_dir, log=print) -> bool:
     root = Path(bridge_dir) / "chatgpt_api"
     paths = {
@@ -248,6 +277,9 @@ def install(bridge_dir, log=print) -> bool:
         if not path.is_file():
             raise RuntimeError(f"Bridge source not found: {path}")
     if image_cursor_supported(bridge_dir):
+        if _guard_parent_repair(paths["transport"]):
+            log("✓ แก้ Bridge: ข้ามการซ่อม parent ที่ Bridge รุ่นนี้ไม่มี")
+            return True
         return False
 
     original = {name: path.read_text(encoding="utf-8") for name, path in paths.items()}

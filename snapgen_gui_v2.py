@@ -8775,6 +8775,55 @@ def _attach_docx_and_build_prompt_ref_context(source_file, story_for_hash=""):
     return reply
 
 
+def _attach_loaded_context_to_history(master):
+    """Give an already-made Context (team file / saved JSON) its GPT history.
+
+    Loading Context only writes local files. After เริ่มเรื่องใหม่ there is no
+    ChatGPT conversation yet, so Image AI / Ref / Storyboard stop with
+    "ไม่พบประวัติ". Send the story once and then the existing Context JSON into
+    one new history (no GPT re-analysis), and mark that turn as the Context.
+    """
+    story = _ensure_prompt_ref_story_text()
+    if not story:
+        raise RuntimeError("ยังไม่มีไฟล์บทของเรื่องนี้ — เลือกไฟล์บทก่อน")
+    if not isinstance(master, dict) or not (master.get("characters") or master.get("locations")):
+        raise RuntimeError("Context ว่าง")
+    if not _prompt_ref_history_ready(story):
+        # Keep an existing history of this same story (Storyboard progress);
+        # only a missing or different-story history starts a new chat.
+        _reset_prompt_ref_conversation()
+        _ingest_prompt_ref_story(story)
+    encoded = json.dumps(master, ensure_ascii=False)
+    chunk_size = 12000
+    chunks = [encoded[index:index + chunk_size] for index in range(0, len(encoded), chunk_size)]
+    reply = _prompt_ref_chat([{
+        "role": "user",
+        "content": [{
+            "type": "input_text",
+            "text": (
+                "ต่อไปนี้คือ Context JSON ของเรื่องนี้ที่แตกและตรวจไว้แล้ว ใช้เป็นข้อมูลหลักของตัวละคร "
+                "สถานที่ พร็อพ และกฎภาพในประวัตินี้ทั้งหมด ไม่ต้องแตกใหม่ ยังไม่ต้องสร้างภาพ "
+                f"มี {len(chunks)} ส่วน อ่านครบแล้วตอบ CONTEXT_OK"
+            ),
+        }] + [{
+            "type": "input_text",
+            "text": f"CONTEXT_JSON_PART {index}/{len(chunks)}\n{chunk}\nEND_CONTEXT_JSON_PART {index}/{len(chunks)}",
+        } for index, chunk in enumerate(chunks, 1)],
+    }], require_history=True)
+    if not reply or "CONTEXT_OK" not in reply.upper():
+        raise RuntimeError("GPT ยังไม่ยืนยันว่ารับ Context แล้ว: " + str(reply or "")[:200])
+    _mark_prompt_ref_context_ready()
+    _prompt_ref_conversation["new_story_requested"] = False
+    _save_prompt_ref_conversation()
+    callback = g.get("_prompt_ref_on_history_attached")
+    if callable(callback):
+        try:
+            root.after(0, callback)
+        except Exception:
+            pass
+    return True
+
+
 def _build_prompt_ref_context_in_history():
     """Create shared Ref/Prop context as the next turn in Prompt-Ref's story chat."""
     shared = _shared_context_payload(require_story_match=True)
@@ -11578,9 +11627,51 @@ def _open_prompt_bank_ai():
                 st.set(f"โหลด context: {json_context_path.name}")
             except Exception:
                 pass
+        attaching_history = [False]
+
+        def ensure_history_for_loaded_context(master=None):
+            """Loaded Context without a GPT history (e.g. after เริ่มเรื่องใหม่):
+            send the story + this Context into one history so every page works."""
+            if attaching_history[0]:
+                return
+            try:
+                if master is None:
+                    master = json.loads(json_context_path.read_text(encoding="utf-8"))
+                story = _ensure_prompt_ref_story_text()
+            except Exception:
+                return
+            if not story or not isinstance(master, dict) or not (master.get("characters") or master.get("locations")):
+                return
+            if _prompt_ref_context_history_ready(story):
+                return
+            attaching_history[0] = True
+            set_context_state("working", "กำลังส่งบท + Context เข้า GPT",
+                              "ยังไม่มีประวัติเรื่องนี้ใน GPT — ส่งบทและ Context ที่โหลดไว้ (ไม่แตก Context ใหม่)")
+
+            def worker():
+                try:
+                    lock = globals().get("_bridge_queue_lock")
+                    if lock is not None:
+                        with lock:
+                            _wait_bridge_free()
+                            _attach_loaded_context_to_history(master)
+                    else:
+                        _attach_loaded_context_to_history(master)
+                    root.after(0, lambda: set_context_state(
+                        "success", "พร้อมใช้ทุกหน้า",
+                        "GPT รับบทและ Context แล้ว — หน้าสร้างรูป/Ref/Storyboard ใช้ประวัตินี้ได้ทันที"))
+                except Exception as exc:
+                    message = str(exc)
+                    root.after(0, lambda: set_context_state("error", "ส่งบท + Context ไม่สำเร็จ", message[:400]))
+                finally:
+                    attaching_history[0] = False
+
+            threading.Thread(target=worker, daemon=True).start()
+
         if _shared_master is not None:
             prompt_ref_context[0] = json.dumps(_shared_master, ensure_ascii=False, indent=2)
             st.set(_shared_message)
+            root.after(300, lambda: ensure_history_for_loaded_context(_shared_master))
 
         def show_shared_context_for_selection():
             """After a story is selected, pull the team's Context if it exists."""
@@ -11596,6 +11687,7 @@ def _open_prompt_bank_ai():
             ctx_box.insert("1.0", encoded)
             prompt_ref_context[0] = encoded
             set_context_state("success", "พร้อมใช้ Context ของทีม", message)
+            ensure_history_for_loaded_context(master)
             return True
 
         def upload_main_file():
@@ -11651,6 +11743,7 @@ def _open_prompt_bank_ai():
                 prompt_ref_context[0] = encoded
                 status.set(f"System Context พร้อมใช้: {json_context_path.name}")
                 set_context_state("success", "บันทึก Context สำเร็จ", "บันทึกข้อมูลที่จัดรูปแบบแล้วเรียบร้อย")
+                ensure_history_for_loaded_context(master)
             else:
                 prompt_ref_context[0] = ""
                 for p in [
@@ -11884,6 +11977,15 @@ def _open_prompt_bank_ai():
             return "\n".join(parts)
         return raw
     new_story_requested = [bool(_prompt_ref_conversation.get("new_story_requested"))]
+
+    def _on_history_attached():
+        new_story_requested[0] = False
+        try:
+            gen_btn.config(state="normal", text="สร้าง Storyboard + Prompt")
+            set_status_light("#22C55E", "GPT รับบทและ Context ที่โหลดไว้แล้ว — พร้อมใช้ทุกหน้า")
+        except Exception:
+            pass
+    g["_prompt_ref_on_history_attached"] = _on_history_attached
 
     def send_full_story():
         if not new_story_requested[0]:

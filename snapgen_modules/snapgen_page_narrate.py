@@ -197,9 +197,12 @@ VIDEO_STAGES = (
     ("plan", "วางแผนฉาก", 5),
     ("storyboard", "สตอรี่ชีต", 5),
     ("images", "สร้างรูปฉาก", 20),
-    ("clips", "สร้างคลิปวิดีโอ", 50),
+    ("motion", "พรอมต์วิดีโอ", 5),
+    ("clips", "สร้างคลิปวิดีโอ", 45),
     ("video", "ตัดต่อ", 10),
 )
+# ออโต้ writes each clip's video prompt from this many finished pictures per GPT look.
+MOTION_BATCH = 4
 # Slot 2 ออโต้ makes a film: pictures must look like live-action footage, never drawn.
 REALISM_NOTE = ("ภาพนิ่งจากภาพยนตร์ไลฟ์แอ็กชันสมจริง (photorealistic live-action film still) ถ่ายด้วยกล้องภาพยนตร์ "
                 "นักแสดงจริง ผิว ผ้า น้ำ หิน และพื้นผิวสมจริง แสงและเงาแบบหนังจริง ระยะชัดตื้นแบบเลนส์ภาพยนตร์; "
@@ -251,6 +254,37 @@ def find_ghosts(text: str, extra=()) -> list:
             seen.add(names[0])
             found.append((names[0], entry["look"]))
     return found
+
+
+# Mythical bodies video models get wrong (a naga grows hands, crouches on legs).
+# (aliases, body facts, what must never appear). Skipped when the shot says the
+# being is in human form.
+CREATURE_BODIES = (
+    (("พญานาค", "นาคราช", "นาคี", "นาคิน", "นาคา", "naga"),
+     "พญานาคเป็นงูยักษ์ ลำตัวยาวมีเกล็ด มีหงอนบนหัว ไม่มีแขน ไม่มีขา ไม่มีมือ ไม่มีเท้า; เคลื่อนที่ด้วยการเลื้อยและขดตัว "
+     "สู้ด้วยการฉกด้วยเขี้ยว รัดด้วยลำตัว ฟาดหาง หรือพ่นพลัง; ท่าหมอบ/ยอมแพ้ = ขดตัวลดหัวลงแนบพื้น",
+     "มือหรือแขนบนตัวพญานาค, ขาหรือเท้าบนตัวพญานาค, พญานาคถืออาวุธ"),
+    (("มังกร", "dragon"),
+     "มังกรมีลำตัวยาวมีเกล็ด มีขา 4 ขาพร้อมกรงเล็บ (ต่างจากพญานาคที่ไม่มีขา)",
+     ""),
+)
+HUMAN_FORM = re.compile(r"ร่างมนุษย์|ร่างคน|แปลงร่างเป็น(?:คน|มนุษย์|หญิง|ชาย)|ในร่างของ(?:คน|มนุษย์|หญิง|ชาย)")
+
+
+def creature_bodies(text: str) -> tuple[str, str]:
+    """(body facts, forbidden parts) for the mythical beings named in one shot's text."""
+    text = str(text or "")
+    if HUMAN_FORM.search(text):
+        return "", ""
+    lower = text.lower()
+    found = [(body, forbid) for aliases, body, forbid in CREATURE_BODIES if any(a in lower for a in aliases)]
+    return "; ".join(b for b, _f in found), ", ".join(f for _b, f in found if f)
+
+
+def merge_forbid(*lists) -> str:
+    """Comma lists joined without repeats, in order."""
+    words = [w.strip() for text in lists for w in str(text or "").split(",")]
+    return ", ".join(dict.fromkeys(w for w in words if w))
 
 
 GHOST_HINT = re.compile(r"ผี|วิญญาณ|ปีศาจ|อมนุษย์|กระสือ|กระหัง|ปอบ|เปรต|พราย|โพง|ตานี|ตะเคียน|ซอมบี้|ยักษ์")
@@ -1263,6 +1297,99 @@ def video_plan_request(numbered: list, names: list, previous: str, era: str, hor
     )
 
 
+def motion_request(items: list, era: str, horror: bool = False) -> str:
+    """Write each clip's video prompt from its finished first frame (attached in order) and the script.
+
+    items: dicts with shot, seconds, line, characters, before, after, planned,
+    continuity, dialogue, bodies, notes (problems already seen in this shot).
+    """
+    blocks = []
+    for k, it in enumerate(items, 1):
+        rows = [f"รูปที่ {k} = ช็อต {it['shot']} (คลิปยาว {it.get('seconds') or '?'} วินาที)",
+                f"คำบรรยายของช็อตนี้: {it.get('line') or '-'}",
+                f"ตัวละครในช็อต: {it.get('characters') or '-'}"]
+        if it.get("before"):
+            rows.append(f"ช็อตก่อนหน้า: {it['before']}")
+        if it.get("after"):
+            rows.append(f"ช็อตถัดไป: {it['after']}")
+        if it.get("planned"):
+            rows.append(f"แผนการเคลื่อนไหวเดิม (ร่างก่อนมีรูป): {it['planned']}")
+        if it.get("continuity"):
+            rows.append(f"สภาพต่อเนื่องที่ต้องคงไว้: {it['continuity']}")
+        if it.get("dialogue"):
+            rows.append(f"บทพูด: {it['dialogue']}")
+        if it.get("bodies"):
+            rows.append(f"ร่างกาย: {it['bodies']}")
+        if it.get("notes"):
+            rows.append(f"ปัญหาที่เคยเจอในช็อตนี้ (ห้ามเกิดอีก): {it['notes']}")
+        blocks.append("\n".join(rows))
+    return (
+        f"รูปที่แนบมา {len(items)} รูปคือภาพแรกจริงของคลิปวิดีโอ AI แต่ละช็อตของเรื่องนี้ (เรียงตามลำดับด้านล่าง; "
+        "ภาพแรกวาดตามสตอรี่บอร์ดแล้ว). เขียนพรอมต์วิดีโอใหม่ของแต่ละช็อตให้ครบทุกด้านและชัดพอที่โมเดลวิดีโอ AI เข้าใจได้ทันที. "
+        "video_prompt เขียนเป็นหัวข้อตามลำดับนี้ทุกช็อต: "
+        "[เปิดภาพ] ตรงกับที่เห็นจริงในรูป: ใครอยู่ตรงไหนของจอ หันทางไหน ท่าทางตอนเริ่ม ฉากหลัง แสง — คลิปเริ่มจากภาพนี้พอดี "
+        "ห้ามเปลี่ยนองค์ประกอบ มุมกล้อง หรือตำแหน่งตัวละครไปจากภาพนี้; "
+        "[จังหวะ] แบ่งตามเวลาให้เต็มความยาวคลิป เช่น '0–2 วิ: … / 2–5 วิ: … / 5–8 วิ: …' "
+        "การกระทำต้องเล่าเหตุการณ์ของคำบรรยายช็อตนี้ ต่อจากช็อตก่อน และพาไปสู่ช็อตถัดไป มีการกระทำหลัก 1 อย่างที่เห็นชัด "
+        "บอกว่าใครทำอะไร ด้วยส่วนไหนของร่างกาย ไปทางไหน (ซ้าย/ขวา/เข้าหากล้อง) และผลที่เกิด; "
+        "ฉากต่อสู้/แอ็กชัน: ช็อตละ 1 จังหวะ (โจมตี / หลบ / ปะทะ / ล้ม) บอกผู้โจมตี อาวุธหรือส่วนของร่างกาย จุดที่โดน และปฏิกิริยา "
+        "ห้ามเขียนแค่ 'ต่อสู้กัน'; "
+        "[ร่างกาย] ทุกตัวในเฟรม (คน สัตว์ สิ่งมีชีวิตในตำนาน ผี หุ่น) ขยับได้เฉพาะแบบที่ร่างกายของตัวนั้นทำได้จริงตาม 'ร่างกาย' "
+        "ที่ให้ไว้ — ตัวที่ไม่มีมือ/ขาห้ามทำท่าที่ต้องใช้มือ/ขา, สัตว์สี่ขาเดินสี่ขา, คนมี 2 แขน 2 ขา มือละ 5 นิ้ว; "
+        "[กล้อง] ขนาดภาพ มุม และการเคลื่อนกล้อง (นิ่ง/ดอลลี่/แพน/แทร็ก/ถือกล้อง); "
+        "[บรรยากาศ] สิ่งรอบตัวที่ขยับ (น้ำ ลม ฝุ่น ไฟ ผม ผ้า) แสงและอารมณ์. "
+        "anatomy = เฉพาะเรื่องร่างกายที่ต้องระวังในเฟรมนี้ (ท่าตอนเริ่ม ส่วนที่เห็น/ถูกบัง ส่วนที่ต้องขยับ) "
+        "ไม่ต้องทวน 'ร่างกาย' ที่ให้ไว้. "
+        "negative = negative prompt ของช็อตนี้: สิ่งที่ห้ามปรากฏตลอดคลิป คั่นด้วยจุลภาค ระบุเจ้าของเสมอ "
+        "(เช่น มือบนตัวพญานาค, ขาที่ห้าบนตัวม้า, นิ้วเกินบนมือคน, ตัวละครใหม่, เปลี่ยนสถานที่, ตัวหนังสือ — "
+        "ห้ามเขียนแค่ 'มือ' เฉยๆ เพราะคนในเฟรมยังต้องมีมือ) และสิ่งที่ผิดบทหรือผิดยุคของช็อตนี้. "
+        + REALISM_NOTE + ". ไม่มีตัวหนังสือ ไม่มีคนเล่าเรื่อง. "
+        + (HORROR_NOTE if horror else "")
+        + f"ยุค/บรรยากาศ: {era}. "
+        "ตอบ JSON เท่านั้น: {\"shots\":[{\"shot\":1,\"seen\":\"\",\"video_prompt\":\"\",\"anatomy\":\"\",\"negative\":\"\"}]} "
+        "seen = สิ่งที่เห็นในรูปสั้นๆ.\n\n"
+        + "\n\n".join(blocks)
+    )
+
+
+def bodies_request(names: list, era: str) -> str:
+    """Once per story: how every character's body is built, moves, and what must never appear on it."""
+    return (
+        "ทำ 'ใบร่างกาย' ของทุกตัวละครในเรื่องนี้ (ตามบทและ Context ในประวัตินี้) ไว้ใช้คุมรูปและวิดีโอ AI ไม่ให้ร่างกายผิด. "
+        "ทุกตัว ทั้งคน สัตว์ สิ่งมีชีวิตในตำนาน ผี ยักษ์ เทวดา หุ่น หรือสิ่งของที่ขยับได้: "
+        "kind = ประเภท (คน/สัตว์/สิ่งมีชีวิตในตำนาน/ผี/สิ่งของ ...); "
+        "body = ร่างกายจริงสั้นๆ 1 ประโยค: มีอะไร ไม่มีอะไร จำนวนแขน ขา ปีก หาง หัว ผิว/เกล็ด/ขน ขนาด "
+        "(ตามความเชื่อไทยหรือตามบท เช่น พญานาค = งูยักษ์มีหงอน ไม่มีแขนขา); "
+        "moves = เคลื่อนที่ แสดงอารมณ์ และต่อสู้ด้วยอะไร และท่าที่มักพลาด เช่น 'หมอบ' ของตัวนี้คืออะไร; "
+        "negative = สิ่งที่ห้ามมีบนตัวนี้ คั่นด้วยจุลภาค ระบุเจ้าของ (เช่น มือบนตัวพญานาค, นิ้วเกินบนมือนางแก้ว, ปีกบนตัวม้า). "
+        "ถ้าบทบอกว่าตัวละครแปลงร่าง ให้ใส่ forms = ร่างแต่ละร่างและช่วงที่ใช้. "
+        f"ยุค/บรรยากาศ: {era or '-'}. รายชื่อ: {', '.join(names) or '-'}. "
+        "ตอบ JSON เท่านั้น: {\"bodies\":[{\"name\":\"\",\"kind\":\"\",\"body\":\"\",\"moves\":\"\",\"negative\":\"\",\"forms\":\"\"}]}"
+    )
+
+
+# Every clip: things AI video often breaks, whatever the story.
+VIDEO_NEGATIVE = ("ตัวหนังสือ, ลายน้ำ, ตัวละครใหม่ที่ไม่มีในภาพเริ่มต้น, หน้าตาหรือร่างกายเปลี่ยนไปเองโดยบทไม่ได้สั่ง, "
+                  "แขนขาหรือนิ้วเกินหรือหาย, ร่างกายบิดเบี้ยว, ภาพการ์ตูนหรืออนิเมะ, ฉากเปลี่ยนกะทันหัน")
+
+
+def image_data_url(path, max_side: int = 768) -> str:
+    """A small JPEG data URL of one picture for a GPT look."""
+    import io
+    from PIL import Image
+    with Image.open(path) as image:
+        pic = image.convert("RGB")
+    pic.thumbnail((max_side, max_side))
+    buffer = io.BytesIO()
+    pic.save(buffer, "JPEG", quality=85)
+    return "data:image/jpeg;base64," + base64.b64encode(buffer.getvalue()).decode("ascii")
+
+
+def file_digest(path) -> str:
+    import hashlib
+    return hashlib.md5(Path(path).read_bytes()).hexdigest()
+
+
 def parse_json_reply(text: str) -> dict:
     text = str(text or "").strip()
     for candidate in [text] + re.findall(r"```(?:json)?\s*([\s\S]*?)```", text):
@@ -2244,8 +2371,102 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
         ghost_note = ("\nลักษณะผีตามความเชื่อไทย (ต้องวาดตามนี้ ห้ามเดาเอง): " + "; ".join(look for _n, look in ghosts)) if ghosts else ""
         state_note = (f"\nความต่อเนื่องจากช็อตก่อน (ต้องเห็นในภาพนี้ชัดเจน แม้รูปอ้างอิงจะไม่มี): {scene['continuity']}"
                       if scene.get("continuity") else "")
+        bodies, forbid = shot_bodies(scene)
+        body_note = (f"\nร่างกายที่ถูกต้อง (ห้ามผิด): {bodies}" if bodies else "") + \
+                    (f"\nสิ่งที่ห้ามมีในภาพ: {forbid}" if forbid else "")
         return (f"{scene['prompt']}{location}" + (f"\nตัวละครในภาพ — {who}" if who else "") + state_note + ghost_note
-                + f"\n{style_text()}")
+                + body_note + f"\n{style_text()}")
+
+    def shot_bodies(scene):
+        """(body facts, negative) of everyone in one shot, from the story's body sheet.
+
+        Characters missing from the sheet fall back to the built-in mythical bodies (e.g. พญานาค).
+        """
+        sheet = (state["project"] or {}).get("bodies") or {}
+        if not sheet:  # no body sheet yet (or GPT failed): built-in bodies found anywhere in the shot
+            return creature_bodies(" ".join([scene.get("prompt", ""), " ".join(scene.get("characters") or []),
+                                             str(scene.get("text") or ""), str(scene.get("line") or "")]))
+        facts, never, missing = [], [], []
+        for name in scene.get("characters") or []:
+            entry = sheet.get(name)
+            if not entry:
+                missing.append(name)
+                continue
+            fact = f"{name}" + (f" ({entry['kind']})" if entry.get("kind") else "") + f": {entry.get('body', '')}"
+            if entry.get("moves"):
+                fact += f" — เคลื่อนไหว: {entry['moves']}"
+            if entry.get("forms"):
+                fact += f" — ร่างตามช่วงเรื่อง: {entry['forms']}"
+            facts.append(fact)
+            never.append(entry.get("negative"))
+        if missing:
+            local, local_never = creature_bodies(" ".join(missing))
+            facts.append(local)
+            never.append(local_never)
+        return "; ".join(f for f in facts if f), merge_forbid(*never)
+
+    def ensure_bodies():
+        """Once per story: GPT writes every character's body sheet (kind, body, moves, negative)."""
+        project = state["project"]
+        if not video_mode or project.get("bodies") is not None or state.get("bodies_failed"):
+            return
+        names = [c.get("name") for c in (project.get("context") or {}).get("characters", []) if c.get("name")]
+        names += [n for n in attachment_names() if n not in names]
+        if not names:
+            return
+        ensure_story_in_history()
+        log("GPT กำลังทำใบร่างกายของทุกตัวละคร (มีอะไร ไม่มีอะไร ขยับยังไง สิ่งที่ห้ามมี) ...")
+        era = ((project.get("context") or {}).get("story") or {}).get("era") or ""
+        try:
+            reply = with_retries("ใบร่างกายตัวละคร", lambda: parse_json_reply(chat(bodies_request(names, era))), attempts=2)
+        except (Stopped, HistoryLost, RateLimited):
+            raise
+        except Exception as exc:
+            state["bodies_failed"] = True  # not again this run; pictures still get the built-in bodies
+            log(f"ทำใบร่างกายไม่สำเร็จ ({str(exc)[:120]}) — ใช้ข้อมูลร่างกายในตัวโปรแกรมแทน")
+            return
+        sheet = {}
+        for item in reply.get("bodies") or []:
+            if isinstance(item, dict) and str(item.get("name") or "").strip() and str(item.get("body") or "").strip():
+                sheet[str(item["name"]).strip()] = {k: str(item.get(k) or "").strip()
+                                                   for k in ("kind", "body", "moves", "negative", "forms")}
+        project["bodies"] = sheet
+        save_project()
+        try:
+            (Path(state["folder"]) / "character_bodies.json").write_text(
+                json.dumps(sheet, ensure_ascii=False, indent=2), encoding="utf-8")
+        except OSError:
+            pass
+        log(f"✓ ใบร่างกาย {len(sheet)} ตัว: " + ", ".join(f"{n} ({e.get('kind') or '-'})" for n, e in sheet.items()))
+
+    def who_in(scene) -> str:
+        context = state["project"].get("context") or {}
+        details = {c.get("name"): character_description(c) for c in context.get("characters", [])}
+        return "; ".join(f"{n}: {details.get(n, '')}".rstrip(": ") for n in scene.get("characters") or [])
+
+    def story_anchor(index) -> str:
+        """What this shot is in the story: narration, people, continuity, neighbours — keeps redraws on the script."""
+        scenes = state["project"]["scenes"]
+        scene = scenes[index]
+        rows = [f"ช็อต {index + 1} ของเรื่อง — คำบรรยาย: {scene.get('text') or '-'}"]
+        if scene.get("dialogue"):
+            rows.append(f"บทพูดของ {scene['dialogue']}: “{scene.get('line', '')}”")
+        if scene.get("characters"):
+            rows.append(f"ตัวละครในภาพ: {who_in(scene)}")
+        if scene.get("location"):
+            rows.append(f"สถานที่: {scene['location']}")
+        if scene.get("continuity"):
+            rows.append(f"สภาพต่อเนื่องที่ต้องคงไว้: {scene['continuity']}")
+        bodies, forbid = shot_bodies(scene)
+        if bodies:
+            rows.append(f"ร่างกายที่ถูกต้อง: {bodies}")
+        if forbid:
+            rows.append(f"สิ่งที่ห้ามมี: {forbid}")
+        if index > 0:
+            rows.append(f"ช็อตก่อนหน้า: {str(scenes[index - 1].get('prompt') or '')[:200]}")
+        if index + 1 < len(scenes):
+            rows.append(f"ช็อตถัดไป: {str(scenes[index + 1].get('prompt') or '')[:200]}")
+        return "\n".join(rows)
 
     def ensure_continuity():
         """Plans made before the continuity record: ask GPT for it once (text only, story history)."""
@@ -2276,6 +2497,7 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
         check_script_matches_audio()
         ensure_story_in_history()
         ensure_continuity()
+        ensure_bodies()
         scenes = project["scenes"]
         board_dir = Path(state["folder"]) / "storyboard"
         board_dir.mkdir(exist_ok=True)
@@ -2310,6 +2532,7 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
         project["images_verified"] = False
         ensure_story_in_history()
         ensure_continuity()
+        ensure_bodies()
         research_ghosts()  # stories analysed before this feature
         images_dir = Path(state["folder"]) / "images"
         images_dir.mkdir(exist_ok=True)
@@ -2353,7 +2576,7 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
                         log(f"ฉาก {i + 1} เจนไม่ได้ — ให้ GPT แก้ prompt ให้เจนได้แล้วลองใหม่")
                         refine_scene_prompt(i)
                         scene["image"] = make_image(scene_prompt(scene), ref_paths, images_dir, f"scene_{i + 1:03d}",
-                                                    project["aspect"])
+                                                    project["aspect"], board=board)
                         scene.pop("error", None)
                         scene.pop("bad", None)
                         failures_in_row = 0
@@ -2396,18 +2619,19 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
         """Ask GPT to rewrite one scene prompt so the image generator accepts it, keeping the story beat."""
         project = state["project"]
         scene = project["scenes"][index]
-        context = project.get("context") or {}
-        ages = {c.get("name"): c.get("อายุ") or c.get("age") or "" for c in context.get("characters", [])}
-        who = "; ".join(f"{n} ({ages.get(n, '')})" for n in scene.get("characters") or [])
+        ensure_bodies()
         reply = gpt_text(
             "prompt ภาพนี้ใช้สร้างรูปประกอบเรื่องเล่าไทยไม่ผ่าน (ตัวสร้างรูปปฏิเสธ หรือไม่ยอมวาด). "
-            "เขียน prompt ใหม่ภาษาไทยให้สร้างรูปได้ โดยคงเหตุการณ์และอารมณ์ของเรื่องไว้ให้มากที่สุด. หลักการ: "
+            "เขียน prompt ใหม่ภาษาไทยให้สร้างรูปได้ โดยยังเป็นช็อตเดิมของเรื่องเดิม: ตัวละครเดิม (หน้าตา รูปร่าง ชุด) "
+            "สถานที่เดิม เหตุการณ์เดิมตามคำบรรยาย และต่อเนื่องกับช็อตก่อน/หลัง — ห้ามเปลี่ยนเป็นเรื่องอื่น ห้ามแปลงร่างตัวละคร "
+            "ห้ามเพิ่มตัวละครใหม่ คงองค์ประกอบ มุมกล้อง และตำแหน่งตัวละครเดิม (ตามสตอรี่บอร์ด) "
+            "แก้เฉพาะวิธีเล่าภาพที่ทำให้ถูกปฏิเสธ. หลักการ: "
             "ถ้ามีเด็ก ห้ามให้เด็กดูตกอยู่ในอันตรายหรือถูกคุกคาม — ให้สิ่งน่ากลัวอยู่ห่าง เห็นแค่บางส่วน ถ่ายเด็กจากด้านหลังหรือไกลๆ "
             "อารมณ์เด็กเป็นสงสัย/ชะงักแทนหวาดกลัว หรือทำเป็นภาพแทรกที่ไม่มีเด็กในเฟรม; "
             "ความรุนแรง เลือด บาดแผล ให้เปลี่ยนเป็นนัยหรือเอฟเฟกต์ภาพยนตร์; ฉากและชุดเป็นแบบไทย; ภาพเดียวเต็มเฟรม ไม่มีตัวหนังสือ; "
             "ถ้า prompt เดิมเป็นภาพคนเล่าเรื่อง/เจ้าของช่อง/ไมโครโฟน/ห้องอัด ให้เปลี่ยนเป็นภาพเหตุการณ์หรือสถานที่สำคัญจากในเรื่องแทน. "
             "ตอบ JSON เท่านั้น {\"prompt\":\"...\"}\n\n"
-            f"ตัวละครในภาพ: {who or '-'}\nprompt เดิม: {scene.get('prompt', '')}")
+            f"{story_anchor(index)}\nprompt เดิม: {scene.get('prompt', '')}")
         new = str((parse_json_reply(reply) or {}).get("prompt") or "").strip()
         if not new:
             raise RuntimeError("GPT ไม่ได้ส่ง prompt ใหม่กลับมา")
@@ -2708,6 +2932,87 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
         cfg["duration"].set(duration)
         cfg["aspect"].set(aspect)
 
+    def motion_items(indices):
+        scenes = state["project"]["scenes"]
+        items = []
+        for i in indices:
+            scene = scenes[i]
+            bodies, _forbid = shot_bodies(scene)
+            items.append({
+                "shot": i + 1, "seconds": scene.get("clip_seconds") or scene.get("shot_seconds"),
+                "line": scene.get("text"), "characters": who_in(scene),
+                "before": str(scenes[i - 1].get("video_prompt") or scenes[i - 1].get("prompt") or "")[:220] if i > 0 else "",
+                "after": str(scenes[i + 1].get("prompt") or "")[:220] if i + 1 < len(scenes) else "",
+                "planned": scene.get("video_prompt_planned") or scene.get("video_prompt") or "",
+                "continuity": scene.get("continuity"),
+                "dialogue": f"{scene['dialogue']} พูดว่า “{scene.get('line', '')}”" if scene.get("dialogue") else "",
+                "bodies": bodies, "notes": "; ".join(scene.get("fix_notes") or [])})
+        return items
+
+    def stage_motion(indices=None):
+        """After the pictures: GPT looks at each finished first frame with the script and writes its video prompt.
+
+        A shot is written again only when its picture changed since (or never had one).
+        The planning-time prompt is kept as video_prompt_planned.
+        """
+        project = state["project"]
+        scenes = project["scenes"]
+        pool = indices if indices is not None else [
+            i for i, sc in enumerate(scenes) if not (sc.get("clip") and os.path.isfile(sc["clip"]))]
+        todo = [i for i in pool if scenes[i].get("image") and os.path.isfile(scenes[i]["image"])
+                and scenes[i].get("motion_image") != file_digest(scenes[i]["image"])]
+        if not todo:
+            return
+        ensure_story_in_history()
+        ensure_continuity()
+        ensure_bodies()
+        assign_clips(scenes, float(project["duration"]))
+        era = ((project.get("context") or {}).get("story") or {}).get("era") or "-"
+        horror = project.get("style_mode") == "เรื่องผี"
+        batches = [todo[k:k + MOTION_BATCH] for k in range(0, len(todo), MOTION_BATCH)]
+        for b, batch in enumerate(batches, 1):
+            check_stop()
+            shots = ", ".join(str(i + 1) for i in batch)
+            set_progress("motion", (b - 1) / len(batches),
+                         f"GPT ดูรูปและบท เขียนพรอมต์วิดีโอ {b}/{len(batches)} (ช็อต {shots})")
+            request = motion_request(motion_items(batch), era, horror)
+            reply = None
+            if not state.get("motion_text_only"):
+                content = [{"type": "text", "text": request}]
+                content += [{"type": "image_url", "image_url": {"url": image_data_url(scenes[i]["image"])}} for i in batch]
+                try:
+                    reply = parse_json_reply(chat(content))
+                except (Stopped, HistoryLost, RateLimited):
+                    raise
+                except Exception as exc:
+                    # Pictures could not be sent: for the rest of this run write from the script and image prompt.
+                    state["motion_text_only"] = True
+                    log(f"ส่งรูปให้ GPT ดูไม่ได้ ({str(exc)[:120]}) — เขียนพรอมต์วิดีโอจากบทและคำสั่งรูปแทน")
+            if reply is None:
+                text = request + "\n\n(ไม่มีรูปแนบ: ภาพแรกของแต่ละช็อตคือ) " + " | ".join(
+                    f"ช็อต {i + 1}: {str(scenes[i].get('prompt') or '')[:300]}" for i in batch)
+                reply = with_retries(f"พรอมต์วิดีโอ ช็อต {shots}", lambda text=text: parse_json_reply(chat(text)))
+            for item in reply.get("shots") or []:
+                try:
+                    i = int(item.get("shot")) - 1
+                except (TypeError, ValueError, AttributeError):
+                    continue
+                prompt = str(item.get("video_prompt") or "").strip()
+                if i not in batch or not prompt:
+                    continue
+                scene = scenes[i]
+                scene.setdefault("video_prompt_planned", scene.get("video_prompt") or "")
+                scene["video_prompt"] = prompt
+                scene["anatomy"] = str(item.get("anatomy") or "").strip()
+                scene["forbid"] = merge_forbid(scene.get("forbid"), item.get("negative"), item.get("forbid"))
+                scene["motion_image"] = file_digest(scene["image"])
+            missed = [i + 1 for i in batch if scenes[i].get("motion_image") != file_digest(scenes[i]["image"])]
+            if missed:
+                log(f"พรอมต์วิดีโอ: GPT ไม่ได้ส่งช็อต {', '.join(map(str, missed))} — ใช้พรอมต์จากแผนเดิม")
+            save_project()
+            ui(refresh_table)
+        log(f"✓ พรอมต์วิดีโอจากรูปจริง + บท: {len(todo)} ช็อต")
+
     def make_clip(scene, index):
         """Generate one clip by driving the Slot exactly like pressing its Generate button."""
         busy = runtime["slot_busy"]
@@ -2723,6 +3028,12 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
         started = time.time()
         errors = []
         prompt = (scene.get("video_prompt") or scene["prompt"]).strip()
+        bodies, body_forbid = shot_bodies(scene)
+        # The body sheet always (GPT's per-shot summary may leave someone out), then what GPT saw in this frame.
+        note = str(scene.get("anatomy") or "")
+        anatomy = "; ".join(x for x in (bodies, f"ในช็อตนี้: {note}" if note and note[:40] not in bodies else "") if x)
+        if anatomy:  # stated first: video models weigh the opening words most
+            prompt = f"ร่างกายที่ต้องคงไว้ตลอดคลิป: {anatomy}\n{prompt}"
         if scene.get("dialogue"):
             prompt += (f"\n{scene['dialogue']} พูดว่า “{scene.get('line', '')}” ขยับปากพูดด้วยความเร็วปกติตลอดคลิป "
                        "ไม่มีตัวหนังสือในภาพ ตัวละครหน้าตาเหมือนในภาพเริ่มต้นตลอดคลิป")
@@ -2731,8 +3042,8 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
         prompt += "\nภาพสมจริงแบบภาพยนตร์ไลฟ์แอ็กชัน ไม่ใช่การ์ตูนหรืออนิเมะ"
         if scene.get("continuity"):  # wounds, blood, wet, transformed ... carried from earlier shots
             prompt += f"\nความต่อเนื่อง (คงไว้ตลอดคลิป): {scene['continuity']}"
-        if scene.get("forbid"):  # problems already seen in this shot (🛠 แก้ช็อตที่มีปัญหา)
-            prompt += f"\nห้ามปรากฏเด็ดขาดตลอดทั้งคลิป: {scene['forbid']}"
+        # Negative prompt: this shot's (GPT + 🛠 problems seen) + each body's + what AI video always breaks.
+        prompt += f"\nNegative — ห้ามปรากฏเด็ดขาดตลอดทั้งคลิป: {merge_forbid(scene.get('forbid'), body_forbid, VIDEO_NEGATIVE)}"
 
         def submit():
             state["show_error_backup"] = runtime.get("show_error")
@@ -2805,6 +3116,7 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
         scenes = project["scenes"]
         todo = indices if indices is not None else [
             i for i, sc in enumerate(scenes) if not (sc.get("clip") and os.path.isfile(sc["clip"]))]
+        stage_motion(todo)  # pictures changed since (redrawn / edited) get a fresh video prompt first
         assign_clips(scenes, float(project["duration"]))
         cfg = runtime["slot_cfg_vars"][slot_index]
         saved_slot = run_on_ui(lambda: (cfg["model"].get(), cfg["duration"].get(), cfg["aspect"].get()))
@@ -2873,7 +3185,7 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
 
     STAGE_FUNCS = {"context": stage_context, "transcribe": stage_transcribe, "characters": stage_characters,
                    "plan": stage_plan, "storyboard": stage_storyboard, "images": stage_images,
-                   "clips": stage_clips, "video": stage_video}
+                   "motion": stage_motion, "clips": stage_clips, "video": stage_video}
 
     # ── control ──
     def ask_on_ui(title, message) -> bool:
@@ -2951,7 +3263,7 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
                     return
                 project["scenes"] = []
                 project.pop("direction", None)
-                for key in ("plan", "images", "clips", "video"):
+                for key in ("plan", "images", "motion", "clips", "video"):
                     project["done"].pop(key, None)
             else:
                 if not messagebox.askyesno("เล่าภาพ", "เปลี่ยนสัดส่วนภาพ ต้องสร้างรูปฉากใหม่ทั้งหมด ต่อไหม?", parent=page):
@@ -2959,7 +3271,7 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
                 for scene in project["scenes"]:
                     scene.pop("image", None)
                     scene.pop("clip", None)
-                for key in ("images", "clips"):
+                for key in ("images", "motion", "clips"):
                     project["done"].pop(key, None)
         new_style = style_var.get() if style_var.get() in STYLES else "ปกติ"
         if (project.get("scenes") and any(s.get("image") for s in project["scenes"])
@@ -2970,7 +3282,7 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
             for scene in project["scenes"]:
                 scene.pop("image", None)
                 scene.pop("clip", None)
-            for key in ("images", "clips"):
+            for key in ("images", "motion", "clips"):
                 project["done"].pop(key, None)
         if video_mode:
             if not attachment_folder():
@@ -2991,7 +3303,7 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
                 return
             project["scenes"] = []
             project.pop("direction", None)
-            for key in ("plan", "images", "clips", "video"):
+            for key in ("plan", "images", "motion", "clips", "video"):
                 project["done"].pop(key, None)
         if video_mode and not project.get("done", {}).get("plan") and project.get("done", {}).get("transcribe"):
             # Dialogue shots are cut at word times; older transcripts have none: listen again (local, free).
@@ -3097,6 +3409,8 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
             if "images" in redo:
                 for key in ("image", "bad", "error"):
                     scene.pop(key, None)
+            if "motion" in redo:
+                scene.pop("motion_image", None)
             if "clips" in redo or "images" in redo:
                 for key in ("clip", "clip_normal", "clip_error", "clip_fallback"):
                     scene.pop(key, None)
@@ -3165,27 +3479,27 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
         """Ask GPT (in this story's history) to rewrite one shot so a seen problem does not happen again."""
         project = state["project"]
         scene = project["scenes"][index]
-        context = project.get("context") or {}
-        details = {c.get("name"): character_description(c) for c in context.get("characters", [])}
-        who = "; ".join(f"{n}: {details.get(n, '')}" for n in scene.get("characters") or []) or "-"
         notes = "; ".join(scene.get("fix_notes") or [])
         what = "วิดีโอ" if video_mode else "รูป"
         return (
             f"ช็อตที่ {index + 1} เจน{what}ออกมามีปัญหา: {problem}. "
             + (f"ปัญหาที่เคยเจอในช็อตนี้แล้ว (ห้ามกลับมาอีก): {notes}. " if notes else "")
-            + f"เขียนคำสั่ง{what}ช็อตนี้ใหม่แบบเข้มงวด ให้ปัญหานี้ไม่เกิดอีกแน่นอน โดยคงเหตุการณ์ อารมณ์ ขนาดภาพ มุมกล้อง "
-            "และความต่อเนื่องกับช็อตก่อน/หลังไว้. หลักการ: "
-            "1) บอกรูปร่างที่ถูกต้องชัดเจนในทางบวกตั้งแต่ประโยคแรก และย้ำอีกครั้งตอนกลาง (เช่น 'พญานาคเป็นงูยักษ์ ลำตัวยาวมีเกล็ด ไม่มีแขน ไม่มีขา ไม่มีมือ'); "
-            "2) ตัดการกระทำที่ทำให้เกิดปัญหาออกทั้งหมด แทนด้วยการกระทำที่ไม่มีทางทำให้เกิดปัญหานั้น "
-            "(เช่น ถือดาบ → ฟาดหาง ฉกด้วยเขี้ยว พลังพุ่งออกจากร่าง); ใช้การเคลื่อนไหวน้อยลงและชัดขึ้น 1 อย่าง; "
-            "3) forbid = รายการสิ่งที่ห้ามปรากฏเด็ดขาดตลอดคลิป สั้นๆ คั่นด้วยจุลภาค (เช่น มือ, แขน, นิ้ว, ขา, อาวุธในมือ); "
+            + f"เขียนคำสั่ง{what}ช็อตนี้ใหม่แบบเข้มงวด ให้ปัญหานี้ไม่เกิดอีกแน่นอน แต่ยังเป็นช็อตเดิมของเรื่องเดิม: "
+            "คงเหตุการณ์ตามคำบรรยาย ตัวละครเดิม สถานที่เดิม อารมณ์ และความต่อเนื่องกับช็อตก่อน/หลัง "
+            + ("และคงองค์ประกอบ ขนาดภาพ มุมกล้อง ตำแหน่งตัวละครตามสตอรี่บอร์ด/ภาพแรกเดิมของช็อตนี้ แก้เฉพาะสิ่งที่เป็นปัญหา. "
+               if video_mode else "และคงขนาดภาพ มุมกล้องเดิม แก้เฉพาะสิ่งที่เป็นปัญหา. ")
+            + "หลักการ: "
+            "1) บอกร่างกายที่ถูกต้องของทุกตัวในเฟรมชัดเจนในทางบวกตั้งแต่ประโยคแรก และย้ำอีกครั้งตอนกลาง "
+            "(ตาม 'ร่างกายที่ถูกต้อง' ด้านล่าง เช่น 'พญานาคเป็นงูยักษ์ ไม่มีแขนขา', 'ม้ามีสี่ขา', 'คนมือละ 5 นิ้ว'); "
+            "2) ตัดการกระทำที่ทำให้เกิดปัญหาออกทั้งหมด แทนด้วยการกระทำที่ร่างกายนั้นทำได้จริงและไม่มีทางทำให้เกิดปัญหานั้น "
+            "(เช่น พญานาคถือดาบ → ฟาดหาง ฉกด้วยเขี้ยว); ใช้การเคลื่อนไหวน้อยลงและชัดขึ้น 1 อย่าง; "
+            "3) forbid = รายการสิ่งที่ห้ามปรากฏเด็ดขาดตลอดคลิป สั้นๆ คั่นด้วยจุลภาค ระบุเจ้าของเสมอ เพราะคนในเฟรมยังต้องมีมือ "
+            "(เช่น มือบนตัวพญานาค, ขาบนตัวพญานาค, พญานาคถืออาวุธ — ห้ามเขียนแค่ 'มือ' เฉยๆ); "
             "ภาพสมจริงแบบภาพยนตร์ ไม่มีตัวหนังสือ. "
             "ตอบ JSON เท่านั้น {\"prompt\":\"\",\"video_prompt\":\"\",\"forbid\":\"\",\"change\":\"\"} "
             "prompt = ภาพแรกของช็อต (ใช้เมื่อวาดภาพใหม่), video_prompt = การเคลื่อนไหวตลอดคลิป, change = สรุปสั้นๆ ว่าแก้อะไร.\n\n"
-            f"คำบรรยายเสียงของช็อตนี้: {scene.get('line') or scene.get('text') or '-'}\n"
-            f"ตัวละครในช็อต: {who}\n"
-            + (f"สภาพต่อเนื่องที่ต้องคงไว้ในช็อตนี้: {scene['continuity']}\n" if scene.get("continuity") else "")
-            + f"prompt เดิม: {scene.get('prompt', '')}\n"
+            f"{story_anchor(index)}\n"
+            f"prompt เดิม: {scene.get('prompt', '')}\n"
             + (f"video_prompt เดิม: {scene.get('video_prompt', '')}" if video_mode else "")
         )
 
@@ -3213,6 +3527,7 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
             try:
                 ensure_story_in_history()
                 ensure_continuity()
+                ensure_bodies()
                 redraw = []
                 for i in selected:
                     scene = project["scenes"][i]
@@ -3226,7 +3541,7 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
                     if video_mode and str(reply.get("video_prompt") or "").strip():
                         scene["video_prompt"] = str(reply["video_prompt"]).strip()
                     scene.setdefault("fix_notes", []).append(problem)
-                    forbid = str(reply.get("forbid") or "").strip()
+                    forbid = merge_forbid(reply.get("negative"), reply.get("forbid"))
                     if forbid:  # repeated at the end of every clip request of this shot
                         scene["forbid"] = ", ".join(dict.fromkeys(
                             [w.strip() for w in (scene.get("forbid", "") + "," + forbid).split(",") if w.strip()]))
@@ -3318,11 +3633,24 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
             try:
                 imgmod = runtime.get("_imgmod") or g.get("_imgmod")
                 current = scene["image"]
-                prompt = (f"แก้ไขรูปที่แนบมาเฉพาะจุดนี้: {wish}\n"
-                          "คงองค์ประกอบ ตัวละคร มุมกล้อง แสง และสไตล์เดิมทั้งหมด เปลี่ยนเฉพาะสิ่งที่สั่ง ภาพเดียวเต็มเฟรม ไม่มีตัวหนังสือ")
+                ensure_bodies()
+                # Image 1 = the picture to change; image 2 = its storyboard panel (layout); then identities.
+                board = scene.get("board") if scene.get("board") and os.path.isfile(scene["board"]) else None
+                refs = [p for p in (attachments_for(scene) if video_mode else
+                                    [character_refs().get(c) for c in scene.get("characters") or []]) if p][:3]
+                prompt = (f"แก้ไขรูปที่ 1 (รูปเดิมของช็อตนี้) เฉพาะจุดนี้: {wish}\n"
+                          "คงองค์ประกอบ ตัวละคร มุมกล้อง แสง และสไตล์เดิมทั้งหมด เปลี่ยนเฉพาะสิ่งที่สั่ง ภาพเดียวเต็มเฟรม ไม่มีตัวหนังสือ.\n"
+                          "รูปนี้ต้องยังเป็นช็อตเดิมของเรื่องเดิม: ตัวละครเป็นคน/สิ่งมีชีวิตเดิม หน้าตาและรูปร่างเดิม "
+                          "ห้ามแปลงร่างเป็นสิ่งอื่น ห้ามเพิ่มตัวละครใหม่ เหตุการณ์ยังตรงกับคำบรรยาย.\n"
+                          f"{story_anchor(index)}\nภาพนี้คือ: {scene.get('prompt', '')}"
+                          + ("\nรูปที่ 2: สตอรี่บอร์ดของช็อตนี้ — คงองค์ประกอบ ขนาดภาพ มุมกล้อง และตำแหน่งตัวละครตามนี้"
+                             if board else "")
+                          + ("\n" + "\n".join(f"รูปที่ {k}: หน้าตา/รูปร่าง/ชุดของ {Path(p).stem} เท่านั้น"
+                                               for k, p in enumerate(refs, 3 if board else 2)) if refs else ""))
                 out = with_retries(f"แก้ฉาก {index + 1}", lambda: imgmod.generate_image(
                     prompt, output_dir=str(Path(current).parent), name_hint=f"scene_{index + 1:03d}_edit", is_edit=True,
-                    ref_images=[base64.b64encode(Path(current).read_bytes()).decode("ascii")],
+                    ref_images=[base64.b64encode(Path(p).read_bytes()).decode("ascii")
+                                for p in [current, *([board] if board else []), *refs]],
                     aspect_ratio=project["aspect"], save_sidecar=False,
                     conversation_state=project.setdefault("conversation", {}), conversation_save_fn=save_project))
                 target = Path(current).with_suffix(Path(out).suffix or ".png")

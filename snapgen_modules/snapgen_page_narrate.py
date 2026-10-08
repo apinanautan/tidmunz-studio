@@ -117,6 +117,13 @@ def run(force_cpu, compute_types=None, gpu_only=False):
         emit({"start": s.start, "end": s.end, "text": s.text, "words": words})
         sent[0] += 1
 # Order on every machine: NVIDIA CUDA -> (int8 on CUDA) -> Vulkan GPU -> CPU.
+vram = V._nvidia_vram_mb()
+if 0 < vram < 6000:
+    # large-v3 does not fit a 4 GB laptop card: Windows spills it into shared
+    # system memory and the GPU becomes many times slower than the CPU.
+    log(f"การ์ดจอมีหน่วยความจำ {vram} MB ไม่พอสำหรับโมเดลตัวใหญ่ — ใช้ CPU ซึ่งเร็วกว่า")
+    run(True)
+    sys.exit(0)
 if WV is not None and WV.wanted() and try_vulkan():
     sys.exit(0)  # AMD / Intel: Vulkan first
 done = False

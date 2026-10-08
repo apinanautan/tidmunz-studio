@@ -17,6 +17,34 @@ try:
 except Exception:
     _HAS_PA = False
 _AVAILABLE = _HAS_SR and _HAS_PA
+
+
+def _patch_pyav_open():
+    """faster-whisper calls av.open(..., metadata_errors="ignore"), which
+    PyAV 15+ rejects.  Drop that one argument so any code path that still
+    hands faster-whisper a file name keeps working."""
+    try:
+        import av
+    except Exception:
+        return
+    original = getattr(av, "open", None)
+    if not callable(original) or getattr(original, "_snapgen_patched", False):
+        return
+
+    def open_compat(*args, **kwargs):
+        try:
+            return original(*args, **kwargs)
+        except TypeError as exc:
+            if "metadata_errors" not in kwargs or "metadata_errors" not in str(exc):
+                raise
+            kwargs.pop("metadata_errors", None)
+            return original(*args, **kwargs)
+
+    open_compat._snapgen_patched = True
+    av.open = open_compat
+
+
+_patch_pyav_open()
 _MIC_INDEX = None
 
 def is_available():
@@ -294,6 +322,7 @@ def _get_whisper_model(log_fn=None, force_cpu=False, compute_types=None):
         return _WHISPER_MODEL, _WHISPER_BACKEND
 
     _ensure_faster_whisper(log_fn)
+    _patch_pyav_open()
     from faster_whisper import WhisperModel
     if callable(log_fn):
         cached = _whisper_cache_path(_WHISPER_MODEL_NAME).is_dir()

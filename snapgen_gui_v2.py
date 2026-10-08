@@ -15978,6 +15978,24 @@ def _install_image_bridge_status():
             with urllib.request.urlopen(usage_request, timeout=30) as response:
                 usage = json.loads(response.read().decode("utf-8", "replace"))
             accounts = usage.get("accounts", []) if isinstance(usage, dict) else []
+            # With several accounts the Bridge's "auto" strategy draws images
+            # from whichever account still has quota, so one account's number
+            # (account-1) never moved. Show the total of every account instead.
+            totals = []
+            for row in accounts:
+                if not isinstance(row, dict):
+                    continue
+                value = row.get("features", {}).get("image_gen", {}).get("remaining")
+                if isinstance(value, (int, float)):
+                    totals.append(int(value))
+            if len(totals) > 1:
+                quota_status_cache["remaining"] = sum(totals)
+                quota_status_cache["plan"] = f"รวม {len(totals)} บัญชี"
+                quota_status_cache["account"] = account_key
+                return {
+                    "remaining": quota_status_cache["remaining"],
+                    "plan": quota_status_cache["plan"],
+                }
             entry = next(
                 (row for row in accounts if isinstance(row, dict) and str(row.get("account") or "") == account_key),
                 None,
@@ -16064,7 +16082,7 @@ def _install_image_bridge_status():
                         # only changes labels and can never block Tk.
                         if isinstance(quota_info, dict) and quota_info.get("remaining") is not None:
                             plan = str(quota_info.get("plan") or "").strip()
-                            plan_text = f" · {plan.capitalize()}" if plan else ""
+                            plan_text = f" · {plan if plan.startswith('รวม') else plan.capitalize()}" if plan else ""
                             quota_var.set(f"โควตารูปคงเหลือ: {quota_info['remaining']}{plan_text}")
                         if prompt:
                             set_light("#4CAF50", f"Bridge: พร้อม | GPT: {account} | Tailscale: พร้อม")

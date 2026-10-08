@@ -15963,6 +15963,7 @@ def _install_image_bridge_status():
             return {
                 "remaining": quota_status_cache.get("remaining"),
                 "plan": quota_status_cache.get("plan", ""),
+                "account": quota_status_cache.get("account", ""),
             }
         quota_status_cache["at"] = now
         try:
@@ -15978,24 +15979,6 @@ def _install_image_bridge_status():
             with urllib.request.urlopen(usage_request, timeout=30) as response:
                 usage = json.loads(response.read().decode("utf-8", "replace"))
             accounts = usage.get("accounts", []) if isinstance(usage, dict) else []
-            # With several accounts the Bridge's "auto" strategy draws images
-            # from whichever account still has quota, so one account's number
-            # (account-1) never moved. Show the total of every account instead.
-            totals = []
-            for row in accounts:
-                if not isinstance(row, dict):
-                    continue
-                value = row.get("features", {}).get("image_gen", {}).get("remaining")
-                if isinstance(value, (int, float)):
-                    totals.append(int(value))
-            if len(totals) > 1:
-                quota_status_cache["remaining"] = sum(totals)
-                quota_status_cache["plan"] = f"รวม {len(totals)} บัญชี"
-                quota_status_cache["account"] = account_key
-                return {
-                    "remaining": quota_status_cache["remaining"],
-                    "plan": quota_status_cache["plan"],
-                }
             entry = next(
                 (row for row in accounts if isinstance(row, dict) and str(row.get("account") or "") == account_key),
                 None,
@@ -16015,6 +15998,7 @@ def _install_image_bridge_status():
         return {
             "remaining": quota_status_cache.get("remaining"),
             "plan": quota_status_cache.get("plan", ""),
+            "account": quota_status_cache.get("account", ""),
         }
 
     def refresh_image_bridge_status():
@@ -16035,7 +16019,14 @@ def _install_image_bridge_status():
                 image_running = int(queue_info.get("running", 0) or 0)
                 active_in_worker = max(int(data.get("active_operations", 0) or 0), image_running)
                 if active_in_worker == 0 and port:
-                    quota_info = fetch_quota_in_worker(port, api_key, data.get("account") or "")
+                    # Images go to the account bound to the story history
+                    # (account_alias), not necessarily the Bridge default
+                    # ("Use"). Show the quota of the account really in use.
+                    story_state = globals().get("_prompt_ref_conversation")
+                    used_account = ""
+                    if isinstance(story_state, dict):
+                        used_account = str(story_state.get("account_alias") or "").strip()
+                    quota_info = fetch_quota_in_worker(port, api_key, used_account or data.get("account") or "")
             def done():
                 bridge_status_refreshing[0] = False
                 bridge_status_ready[0] = True
@@ -16082,7 +16073,10 @@ def _install_image_bridge_status():
                         # only changes labels and can never block Tk.
                         if isinstance(quota_info, dict) and quota_info.get("remaining") is not None:
                             plan = str(quota_info.get("plan") or "").strip()
-                            plan_text = f" · {plan if plan.startswith('รวม') else plan.capitalize()}" if plan else ""
+                            plan_text = f" · {plan.capitalize()}" if plan else ""
+                            shown_account = str(quota_info.get("account") or "").strip()
+                            if shown_account and shown_account != current_account_key[0]:
+                                plan_text += f" ({shown_account})"
                             quota_var.set(f"โควตารูปคงเหลือ: {quota_info['remaining']}{plan_text}")
                         if prompt:
                             set_light("#4CAF50", f"Bridge: พร้อม | GPT: {account} | Tailscale: พร้อม")

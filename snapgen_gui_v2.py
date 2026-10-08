@@ -2073,8 +2073,18 @@ def _silent_check_snapgen_api_status():
         try:
             result["credit"] = fetch()
             result["ok"] = True
-        except Exception:
+        except Exception as exc:
             result["ok"] = False
+            # The "?" light alone never said why a teammate's PC cannot reach
+            # api.snapgen.ai. Print the reason (keys masked) to the console log.
+            reason = re.sub(r"[A-Za-z0-9_\-]{24,}", "***", f"{type(exc).__name__}: {exc}")[:400]
+            g["snapgen_api_last_error"] = reason
+            print(f"[SnapGen API] ติดต่อ api.snapgen.ai ไม่ได้: {reason}", flush=True)
+            try:
+                if _error_reporter is not None:
+                    _error_reporter.report_log("ERROR: SnapGen API " + reason, "SnapGen API")
+            except Exception:
+                pass
         finally:
             result["done"] = True
     def poll():

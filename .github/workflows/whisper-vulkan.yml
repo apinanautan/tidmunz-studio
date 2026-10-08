@@ -1,0 +1,71 @@
+# Build whisper.cpp with Vulkan for Windows so speech-to-text can use AMD /
+# Intel / NVIDIA GPUs (faster-whisper only runs on NVIDIA CUDA).
+# Run by hand (Actions -> Whisper Vulkan -> Run workflow).  The zip goes to a
+# pre-release that the program downloads; a pre-release never becomes the
+# "latest" release, so the in-app updater is not affected.
+name: Whisper Vulkan
+
+on:
+  workflow_dispatch:
+    inputs:
+      whisper_ref:
+        description: "whisper.cpp tag to build"
+        required: true
+        default: "v1.9.5"
+
+permissions:
+  contents: write
+
+env:
+  VULKAN_VERSION: 1.4.313.2
+  WHISPER_REF: ${{ inputs.whisper_ref }}
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Get whisper.cpp
+        shell: pwsh
+        run: git clone --depth 1 --branch $env:WHISPER_REF https://github.com/ggml-org/whisper.cpp.git whisper-src
+
+      - name: Install Vulkan SDK
+        shell: pwsh
+        run: |
+          curl.exe -L -o "$env:RUNNER_TEMP\VulkanSDK-Installer.exe" "https://sdk.lunarg.com/sdk/download/$env:VULKAN_VERSION/windows/vulkansdk-windows-X64-$env:VULKAN_VERSION.exe"
+          & "$env:RUNNER_TEMP\VulkanSDK-Installer.exe" --accept-licenses --default-answer --confirm-command install
+          Add-Content $env:GITHUB_ENV "VULKAN_SDK=C:\VulkanSDK\$env:VULKAN_VERSION"
+          Add-Content $env:GITHUB_PATH "C:\VulkanSDK\$env:VULKAN_VERSION\bin"
+
+      - name: Build
+        shell: pwsh
+        run: |
+          cmake -S whisper-src -B build -DGGML_VULKAN=ON -DGGML_NATIVE=OFF -DBUILD_SHARED_LIBS=OFF -DWHISPER_BUILD_TESTS=OFF -DWHISPER_BUILD_EXAMPLES=ON -DWHISPER_SDL2=OFF
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          cmake --build build --config Release --target whisper-cli -j 4
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+
+      - name: Package
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem build -Recurse -Filter whisper-cli.exe | Select-Object -First 1
+          if (-not $exe) { throw "whisper-cli.exe not built" }
+          New-Item -ItemType Directory -Force out | Out-Null
+          Copy-Item $exe.FullName out\
+          Get-ChildItem $exe.DirectoryName -Filter *.dll | Copy-Item -Destination out\
+          Compress-Archive -Path out\* -DestinationPath whisper-vulkan-win-x64.zip -Force
+
+      - name: Publish pre-release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = "whisper-vulkan-$env:WHISPER_REF"
+          gh release view $tag 2>$null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $tag whisper-vulkan-win-x64.zip --clobber
+          } else {
+            gh release create $tag whisper-vulkan-win-x64.zip --target "${{ github.sha }}" --prerelease --latest=false --title "Whisper Vulkan $env:WHISPER_REF" --notes "whisper.cpp $env:WHISPER_REF built with Vulkan for AMD/Intel/NVIDIA GPUs on Windows. Used by the program; not a program update."
+          }
+          if ($LASTEXITCODE -ne 0) { exit 1 }

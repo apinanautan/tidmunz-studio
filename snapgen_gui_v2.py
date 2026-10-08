@@ -2078,6 +2078,17 @@ def _silent_check_snapgen_api_status():
             # The "?" light alone never said why a teammate's PC cannot reach
             # api.snapgen.ai. Print the reason (keys masked) to the console log.
             reason = re.sub(r"[A-Za-z0-9_\-]{24,}", "***", f"{type(exc).__name__}: {exc}")[:400]
+            # Key fingerprint (never the key): compare it with a working PC.
+            try:
+                key = str(g["api_key_var"].get() or "").strip()
+            except Exception:
+                key = ""
+            if not key:
+                reason += " | ยังไม่ได้ใส่ API Key — ใส่ใน ⚙ Settings > SnapGen API แล้วกด Save"
+            else:
+                reason += f" | key ที่ส่ง: {key[:4]}…{key[-4:]} (ยาว {len(key)} ตัว)"
+                if key == str(g.get("DEFAULT_API_KEY") or ""):
+                    reason += " = key ตั้งต้นในโปรแกรม ไม่ใช่ key ของคุณ — ใส่ key ใน ⚙ Settings > SnapGen API แล้วกด Save"
             g["snapgen_api_last_error"] = reason
             print(f"[SnapGen API] ติดต่อ api.snapgen.ai ไม่ได้: {reason}", flush=True)
             try:

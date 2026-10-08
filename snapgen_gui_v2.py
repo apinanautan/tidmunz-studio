@@ -640,6 +640,37 @@ def _bridge_health():
     except Exception:
         return False
 
+def _running_bridge_sees_local_accounts():
+    """False when the Bridge already running (e.g. started earlier from an
+    empty chatgpt-api folder) does not serve the accounts saved in BRIDGE_DIR.
+    Unknown states return True so a working Bridge is never stopped by guess."""
+    try:
+        accounts_root = BRIDGE_DIR / "secrets" / "accounts"
+        local = {p.name for p in accounts_root.iterdir() if p.is_dir() and not p.name.startswith(".")}
+    except Exception:
+        return True
+    if not local:
+        return True
+    try:
+        import urllib.request
+        req = urllib.request.Request(
+            f"http://{BRIDGE_HOST}:{BRIDGE_PORT}/v1/chatgpt/admin/accounts",
+            headers={"Authorization": f"Bearer {BRIDGE_API_KEY}"},
+        )
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            payload = json.loads(resp.read().decode("utf-8", "replace"))
+        rows = payload.get("accounts") if isinstance(payload, dict) else None
+        if not isinstance(rows, list):
+            return True
+        remote = {
+            str(row.get("account") or "") for row in rows
+            if isinstance(row, dict) and (row.get("capture_exists") or row.get("settings_exists") or row.get("stored"))
+        }
+        return bool(local & remote)
+    except Exception:
+        return True
+
+
 def _bridge_startup_sync():
     """Start this workstation's private local Bridge."""
     contract_ready = False
@@ -671,8 +702,13 @@ def _bridge_startup_sync():
             print(f"[SnapGen] ERROR: ติดตั้ง Bridge มาตรฐานไม่สำเร็จ: {_contract_error}")
             return False
     if _bridge_health():
-        _snapgen_startup_detail("[SnapGen] Bridge ready ✓")
-        return True
+        if _running_bridge_sees_local_accounts():
+            _snapgen_startup_detail("[SnapGen] Bridge ready ✓")
+            return True
+        # A Bridge from another chatgpt-api folder is still running and shows
+        # no accounts: restart it from the folder that holds the captures.
+        print(f"[SnapGen] Bridge ที่รันอยู่ไม่เห็นบัญชีใน {BRIDGE_DIR} — เปิด Bridge ใหม่จากโฟลเดอร์ที่มีบัญชี")
+        _snapgen_stop_bridge_for_dir(BRIDGE_DIR, BRIDGE_PORT)
     _snapgen_startup_detail("[SnapGen] Cleaning bridge state...")
     try:
         out = subprocess.check_output(

@@ -16010,10 +16010,11 @@ def _install_image_bridge_status():
                 entry = next((row for row in accounts if isinstance(row, dict)), {})
             remain = entry.get("features", {}).get("image_gen", {}).get("remaining")
             plan = str(entry.get("plan_type") or entry.get("plan_bucket") or "").strip()
-            if remain is not None:
-                quota_status_cache["remaining"] = remain
-                quota_status_cache["plan"] = plan
-                quota_status_cache["account"] = str(entry.get("account") or account_key)
+            quota_status_cache["plan"] = plan
+            quota_status_cache["account"] = str(entry.get("account") or account_key)
+            # Some plans (e.g. Go) get no usage numbers from ChatGPT at all:
+            # say so instead of leaving a bare "—".
+            quota_status_cache["remaining"] = remain if remain is not None else "ไม่ทราบ (ChatGPT ไม่บอกยอดของบัญชีนี้)"
         except Exception:
             pass
         return {

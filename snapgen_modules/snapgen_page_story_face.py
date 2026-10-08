@@ -146,6 +146,45 @@ _INJURY_SOFTEN = (
 )
 
 
+# Words that make a ข้อมูลชุด row an object/vehicle/place (made on the Prop page), not a person.
+_PROP_ROW_WORDS = ("พร็อพ", "พร๊อพ", "prop", "ไม่ต้องสร้างใบหน้า", "รถยนต์", "รถ", "มอเตอร์ไซค์", "จักรยาน",
+                   "เรือ", "เครื่องบิน", "บ้าน", "อาคาร", "สิ่งของ", "อาวุธ", "ปืน", "ดาบ", "มีด", "กระเป๋า",
+                   "โทรศัพท์", "ของใช้", "เฟอร์นิเจอร์")
+_PERSON_ROW_WORDS = ("คนที่", "ชาย", "หญิง", "สาว", "หนุ่ม", "เด็ก", "ผู้", "นาย", "นาง", "แม่", "พ่อ", "ลุง",
+                     "ป้า", "ตา", "ยาย", "ญาติ", "เพื่อน", "ตำรวจ", "ทหาร", "หมอ", "พยาบาล", "กู้ภัย", "พระ",
+                     "ครู", "นักเรียน", "นักศึกษา", "วัย", "อายุ", "ปี")
+
+
+def dataset_row_is_prop(line: str) -> bool:
+    """A ข้อมูลชุด row GPT did not turn into a character: object/vehicle (Prop page) or a person?
+
+    Only rows whose name part names an object count as props; anything that
+    reads like a person (คนที่, ชาย, หญิง, ตำรวจ, วัย ...) stays a person.
+    """
+    text = str(line or "").replace("**", "").strip()
+    name = text.split("//")[0]
+    head = re.split(r"[(（]", name, maxsplit=1)[0]
+    if any(word in text for word in ("พร็อพ", "พร๊อพ", "ไม่ต้องสร้างใบหน้า")) or "prop" in text.casefold():
+        return True
+    if any(word in head for word in _PERSON_ROW_WORDS):
+        return False
+    return any(word in head for word in _PROP_ROW_WORDS)
+
+
+def dataset_row_character(number: str, line: str) -> dict:
+    """A character made straight from a ข้อมูลชุด row (name (who/age) // version) when GPT skipped it."""
+    text = str(line or "").replace("**", "").strip()
+    name_part, _sep, variant = text.partition("//")
+    match = re.match(r"\s*([^(（]+?)\s*[(（](.*)[)）]\s*$", name_part)
+    name, detail = (match.group(1), match.group(2)) if match else (name_part.strip(), "")
+    character = {"name": name.strip(), "variant": variant.strip(), "role": detail.strip(),
+                 "_dataset_number": number, "_from_dataset_row": True}
+    age = re.search(r"(?:อายุ\s*(?:ประมาณ)?\s*)?(\d{1,3}\s*(?:[-–]\s*\d{1,3})?\s*ปี)", detail)
+    if age:
+        character["age"] = age.group(1)
+    return character
+
+
 def soften_injury_text(value: str) -> str:
     """Replace graphic injury words with non-graphic film-makeup wording."""
     result = str(value or "")
@@ -1604,13 +1643,16 @@ def install(g: dict, root: tk.Misc) -> tk.Misc:
                         if isinstance(c, dict):
                             c["_dataset_number"] = _numbers._dataset_number(
                                 str(c.get("name") or ""), str(c.get("variant") or ""), numbered)
-                    # Numbered items that are not people (vehicles, objects) stay
-                    # in the list too; they are created on the Prop page.
+                    # Rows GPT did not turn into characters: objects/vehicles go to the
+                    # Prop page; people GPT skipped are still made here from the row itself.
                     used = {str(c.get("_dataset_number") or "") for c in chars if isinstance(c, dict)}
                     for number, line in numbered:
                         if number not in used and not any(u.startswith(number + ".") for u in used):
-                            chars = list(chars) + [{"_prop_line": True, "_dataset_number": number,
-                                                    "name": line.replace("**", "").strip()}]
+                            if dataset_row_is_prop(line):
+                                chars = list(chars) + [{"_prop_line": True, "_dataset_number": number,
+                                                        "name": line.replace("**", "").strip()}]
+                            else:
+                                chars = list(chars) + [dataset_row_character(number, line)]
                     chars = sorted(chars, key=lambda c: _numbers._number_key(str(c.get("_dataset_number") or "")))
                     wording = _numbers._dataset_variant_labels(
                         [c for c in chars if isinstance(c, dict) and not c.get("_prop_line")], numbered)
@@ -1646,6 +1688,8 @@ def install(g: dict, root: tk.Misc) -> tk.Misc:
                     summ = " | ".join(x for x in (variant, age, role) if x)
                 if ch.get("_prop_line"):
                     summ = "ไม่ใช่คน → กดเพื่อสร้างที่หน้า Prop"
+                elif ch.get("_from_dataset_row"):
+                    summ = (summ + "  " if summ else "") + "(สร้างจากข้อมูลชุด — GPT ไม่ได้วิเคราะห์ตัวนี้)"
                 lbl = n + ("  " + summ if summ else "")
                 bg2 = "#FEF2F2" if imp else "#F9FAFB"
                 fg2 = "#991B1B" if imp else "#111827"

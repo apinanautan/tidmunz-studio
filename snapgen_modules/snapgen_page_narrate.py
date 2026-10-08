@@ -83,6 +83,24 @@ def emit(item):
     sys.stdout.write(json.dumps(item, ensure_ascii=False) + "\n"); sys.stdout.flush()
 import snapgen_voice_input as V
 sent = [0]
+vulkan_segments = None
+try:
+    import snapgen_whisper_vulkan as WV
+    use_vulkan = WV.wanted()
+except Exception:
+    use_vulkan = False
+if use_vulkan:
+    # AMD / Intel GPUs: whisper.cpp + Vulkan with the same large-v3 model.
+    try:
+        vulkan_segments = WV.transcribe(sys.argv[2], sys.argv[3], sys.argv[4] == "1",
+                                        log=lambda m: emit({"log": str(m)}))
+    except Exception as exc:
+        emit({"log": f"ถอดเสียงด้วยการ์ดจอ (Vulkan) ไม่ได้ ({exc}) — ใช้ CPU"})
+if vulkan_segments is not None:
+    emit({"backend": "GPU Vulkan"})
+    for item in vulkan_segments:
+        emit(item)
+    sys.exit(0)
 def run(force_cpu):
     model, backend = V._get_whisper_model(log_fn=lambda m: emit({"log": str(m)}), force_cpu=force_cpu)
     emit({"backend": backend})

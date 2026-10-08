@@ -77,7 +77,20 @@ def _patch_transport(source: str) -> str:
             if limit_notice:
                 raise ProviderError("ChatGPT image rate limit: " + limit_notice)
 '''
-    source = _replace_once(source, poll_old, poll_new, "image poll rate limit")
+    # Bridge 1.0.1 (shipped to every workstation) has no terminal-error check
+    # in its poll loop; anchor after its asset check instead.
+    plain_old = '''            assets = _image_asset_pointers_from_value(data, exclude=input_assets)
+            if assets:
+                return assets
+'''
+    plain_new = plain_old + '''            limit_notice = _snapgen_rate_limit_notice(data)
+            if limit_notice:
+                raise ProviderError("ChatGPT image rate limit: " + limit_notice)
+'''
+    if poll_old in source or poll_new in source:
+        source = _replace_once(source, poll_old, poll_new, "image poll rate limit")
+    else:
+        source = _replace_once(source, plain_old, plain_new, "image poll rate limit")
 
     final_old = '''        if not assets:
             raise ProviderError("ChatGPT image generation returned no image asset")

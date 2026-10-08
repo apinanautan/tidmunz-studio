@@ -456,7 +456,12 @@ def install(bridge_dir, log=print) -> bool:
     from snapgen_bridge_vision_cursor_patch import install as _install_vision_cursor
     vision_cursor_changed = _install_vision_cursor(bridge_dir, log)
     from snapgen_bridge_rate_limit_patch import install as _install_rate_limit
-    vision_cursor_changed = _install_rate_limit(bridge_dir, log) or vision_cursor_changed
+    try:
+        vision_cursor_changed = _install_rate_limit(bridge_dir, log) or vision_cursor_changed
+    except Exception as rate_limit_error:
+        # Optional nicer rate-limit message: a Bridge with a different layout
+        # must still start, or every update leaves the team with no Bridge.
+        log(f"[Bridge] ข้ามการแจ้งลิมิตรูปแบบละเอียด: {rate_limit_error}")
     path = Path(bridge_dir) / "chatgpt_api" / "api" / "openai_compat.py"
     if not path.is_file():
         raise RuntimeError(f"ไม่พบ Bridge source: {path}")

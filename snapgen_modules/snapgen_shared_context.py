@@ -16,16 +16,19 @@ import time
 from pathlib import Path
 
 SUFFIX = ".tidmunz-context.json"
+# นิทาน builds its own character-batch Context from the same story file. It
+# must never overwrite (or be loaded as) the main Prompt-Ref Context.
+STORY_FACE_SUFFIX = ".tidmunz-story-face-context.json"
 FORMAT = "tidmunz-shared-context"
 
 
-def sidecar_path(story_path) -> Path | None:
+def sidecar_path(story_path, suffix=SUFFIX) -> Path | None:
     if not story_path:
         return None
     path = Path(str(story_path))
     if not path.name:
         return None
-    return path.with_name(path.stem + SUFFIX)
+    return path.with_name(path.stem + suffix)
 
 
 def story_hash(text) -> str:
@@ -42,9 +45,9 @@ def is_usable_context(context) -> bool:
     )
 
 
-def save(story_path, context, story_text="") -> str:
+def save(story_path, context, story_text="", suffix=SUFFIX) -> str:
     """Write the sidecar atomically.  Returns "" on success or an error text."""
-    target = sidecar_path(story_path)
+    target = sidecar_path(story_path, suffix)
     if target is None or not target.parent.is_dir():
         return "ไม่พบโฟลเดอร์ของไฟล์บท"
     if not is_usable_context(context):
@@ -70,9 +73,9 @@ def save(story_path, context, story_text="") -> str:
         return str(exc)
 
 
-def load(story_path) -> dict | None:
+def load(story_path, suffix=SUFFIX) -> dict | None:
     """Return the sidecar payload (with a usable ``context``) or None."""
-    target = sidecar_path(story_path)
+    target = sidecar_path(story_path, suffix)
     if target is None or not target.is_file():
         return None
     try:

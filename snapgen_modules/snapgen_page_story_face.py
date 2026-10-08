@@ -389,13 +389,15 @@ def install(g: dict, root: tk.Misc) -> tk.Misc:
         def worker():
             try:
                 import snapgen_shared_context as _shared
-                shared = _shared.load(path)
+                # นิทาน's own sidecar: the main Prompt-Ref sidecar belongs to
+                # Prompt-Ref/Ref and is never read or written from this page.
+                shared = _shared.load(path, _shared.STORY_FACE_SUFFIX)
                 if shared:
                     context = shared["context"]
                     root.after(0, lambda: _new_log("[บท] ใช้ Context ที่ทีมแตกไว้แล้ว ไม่ต้องให้ GPT วิเคราะห์ใหม่"))
                 else:
                     context = _face_story_context_via_gpt(script)
-                    _shared.save(path, context, script)
+                    _shared.save(path, context, script, _shared.STORY_FACE_SUFFIX)
                 face_context_path.write_text(json.dumps(context, ensure_ascii=False, indent=2), encoding="utf-8")
                 names = [c.get("name") for c in context.get("characters", []) if isinstance(c, dict) and c.get("name")]
                 places = [l.get("name") for l in context.get("locations", []) if isinstance(l, dict) and l.get("name")]

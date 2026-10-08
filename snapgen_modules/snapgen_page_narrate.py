@@ -101,11 +101,14 @@ if vulkan_segments is not None:
     for item in vulkan_segments:
         emit(item)
     sys.exit(0)
+samples = []
 def run(force_cpu, compute_types=None):
     model, backend = V._get_whisper_model(log_fn=lambda m: emit({"log": str(m)}), force_cpu=force_cpu,
                                           compute_types=compute_types)
     emit({"backend": backend})
-    segments, _info = model.transcribe(sys.argv[2], language="th", vad_filter=True, beam_size=1, temperature=0.0,
+    if not samples:
+        samples.append(V.load_audio(sys.argv[2]))  # FFmpeg, not PyAV
+    segments, _info = model.transcribe(samples[0], language="th", vad_filter=True, beam_size=1, temperature=0.0,
                                        initial_prompt=sys.argv[3] or None, word_timestamps=sys.argv[4] == "1")
     for s in segments:
         words = [[round(w.start, 2), round(w.end, 2), w.word] for w in (s.words or [])]

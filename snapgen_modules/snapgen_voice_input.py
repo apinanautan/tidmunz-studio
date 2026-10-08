@@ -158,6 +158,46 @@ def _ensure_faster_whisper(log_fn=None):
         log_fn("ติดตั้ง faster-whisper เสร็จ")
 
 
+def _ffmpeg_path():
+    try:
+        from ai_slow2x import _ffmpeg_bin, ensure_ffmpeg_tool
+        found = Path(str(_ffmpeg_bin()))
+        if found.is_file():
+            return str(found)
+        installed = ensure_ffmpeg_tool(lambda _m: None)
+        if installed and Path(str(installed)).is_file():
+            return str(installed)
+    except Exception:
+        pass
+    return shutil.which("ffmpeg") or "ffmpeg"
+
+
+def load_audio(path):
+    """16 kHz mono float32 samples decoded with FFmpeg.
+
+    faster-whisper decodes files with PyAV, and PyAV 15+ removed the
+    ``metadata_errors`` argument it passes ("open() got an unexpected keyword
+    argument 'metadata_errors'").  Handing it samples skips PyAV entirely.
+    """
+    import subprocess
+    import numpy as np
+    result = subprocess.run(
+        [_ffmpeg_path(), "-hide_banner", "-loglevel", "error", "-i", str(path),
+         "-vn", "-ac", "1", "-ar", "16000", "-f", "f32le", "-"],
+        capture_output=True, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    if result.returncode != 0 or not result.stdout:
+        detail = result.stderr.decode("utf-8", errors="replace").strip().splitlines()
+        raise RuntimeError("อ่านไฟล์เสียงไม่ได้: " + (detail[-1] if detail else f"exit {result.returncode}"))
+    return np.frombuffer(result.stdout, dtype=np.float32).copy()
+
+
+def pcm16_to_audio(raw_bytes):
+    """Raw 16-bit mono PCM at 16 kHz -> float32 samples for faster-whisper."""
+    import numpy as np
+    return np.frombuffer(raw_bytes, dtype=np.int16).astype(np.float32) / 32768.0
+
+
 def _nvidia_gpu_count():
     try:
         import ctranslate2
@@ -352,15 +392,8 @@ def listen_once(on_text=None, on_error=None, on_status=None, on_log=None, lang="
             text = None
             try:
                 model, _backend = _get_whisper_model(log_fn=on_log)
-                import io, wave
-                buf = io.BytesIO()
-                with wave.open(buf, "wb") as wf:
-                    wf.setnchannels(1)
-                    wf.setsampwidth(2)
-                    wf.setframerate(16000)
-                    wf.writeframes(audio.get_wav_data())
-                buf.seek(0)
-                segments, _ = model.transcribe(buf, language="th", beam_size=3, vad_filter=True)
+                samples = pcm16_to_audio(audio.get_raw_data(convert_rate=16000, convert_width=2))
+                segments, _ = model.transcribe(samples, language="th", beam_size=3, vad_filter=True)
                 text = " ".join(s.text for s in segments).strip()
             except Exception as local_error:
                 if callable(on_log):

@@ -34,6 +34,8 @@ REQUIRED_APP_PACKAGES = (
     ("PIL", "Pillow"),
     ("qcloud_cos", "cos-python-sdk-v5"),
     ("tkinterdnd2", "tkinterdnd2"),
+    # Whisper for เล่าภาพ / Slot ออโต้ (its model downloads itself on first use).
+    ("faster_whisper", "faster-whisper"),
 )
 
 

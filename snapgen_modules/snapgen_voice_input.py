@@ -124,7 +124,94 @@ def delete_whisper_model(model_name):
     return False
 
 
-def _get_whisper_model(log_fn=None):
+def _ensure_faster_whisper(log_fn=None):
+    """Install faster-whisper into this Python on first use.
+
+    It is not part of setup_and_run.bat, so a teammate's machine would only
+    show "No module named faster_whisper" instead of transcribing.
+    """
+    try:
+        import faster_whisper  # noqa: F401
+        return
+    except ImportError:
+        pass
+    import importlib
+    import subprocess
+    import sys
+    python = Path(sys.executable)
+    console = python.with_name("python.exe")
+    if console.is_file():
+        python = console  # pythonw cannot run pip with a usable console
+    if callable(log_fn):
+        log_fn("ยังไม่มีตัวถอดเสียง faster-whisper — กำลังติดตั้ง (ครั้งแรกครั้งเดียว) ...")
+    result = subprocess.run(
+        [str(python), "-m", "pip", "install", "--disable-pip-version-check", "faster-whisper"],
+        capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=1800,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout or "").strip().splitlines()
+        raise RuntimeError("ติดตั้ง faster-whisper ไม่สำเร็จ: " + (detail[-1] if detail else f"exit {result.returncode}"))
+    importlib.invalidate_caches()
+    import faster_whisper  # noqa: F401
+    if callable(log_fn):
+        log_fn("ติดตั้ง faster-whisper เสร็จ")
+
+
+def _nvidia_gpu_count():
+    try:
+        import ctranslate2
+        return int(ctranslate2.get_cuda_device_count())
+    except Exception:
+        return 0
+
+
+_CUDA_PACKAGES = (("nvidia.cublas", "nvidia-cublas-cu12"), ("nvidia.cudnn", "nvidia-cudnn-cu12"))
+
+
+def _prepare_cuda_libraries(log_fn=None):
+    """Make cuBLAS/cuDNN loadable on Windows NVIDIA machines.
+
+    Without these DLLs the model opens on the GPU but the first transcription
+    fails. They come from pip, so no CUDA Toolkit install is needed.
+    """
+    import importlib
+    import importlib.util
+    import subprocess
+    import sys
+    if os.name != "nt":
+        return
+    missing = [package for module, package in _CUDA_PACKAGES if importlib.util.find_spec(module) is None]
+    if missing:
+        python = Path(sys.executable)
+        if python.with_name("python.exe").is_file():
+            python = python.with_name("python.exe")
+        if callable(log_fn):
+            log_fn("กำลังติดตั้งไลบรารี CUDA สำหรับการ์ดจอ NVIDIA (ครั้งแรกครั้งเดียว) ...")
+        result = subprocess.run(
+            [str(python), "-m", "pip", "install", "--disable-pip-version-check", *missing],
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=1800,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        if result.returncode != 0 and callable(log_fn):
+            log_fn("ติดตั้งไลบรารี CUDA ไม่สำเร็จ — อาจต้องใช้ CPU")
+        importlib.invalidate_caches()
+    for module, _package in _CUDA_PACKAGES:
+        try:
+            spec = importlib.util.find_spec(module)
+        except Exception:
+            spec = None
+        for location in (getattr(spec, "submodule_search_locations", None) or []):
+            bin_dir = Path(location) / "bin"
+            if bin_dir.is_dir():
+                try:
+                    os.add_dll_directory(str(bin_dir))
+                except (OSError, AttributeError):
+                    pass
+                os.environ["PATH"] = str(bin_dir) + os.pathsep + os.environ.get("PATH", "")
+
+
+def _get_whisper_model(log_fn=None, force_cpu=False):
     """Load the best local speech model this computer can actually run.
 
     Never hard-code one GPU model here: SnapGen is shared across different
@@ -132,26 +219,47 @@ def _get_whisper_model(log_fn=None):
     GPU transparently falls back to CPU rather than breaking voice input.
     """
     global _WHISPER_MODEL, _WHISPER_BACKEND
+    if force_cpu and _WHISPER_BACKEND not in (None, "CPU"):
+        _WHISPER_MODEL = None
+        _WHISPER_BACKEND = None
     if _WHISPER_MODEL is not None:
         if callable(log_fn):
             log_fn(f"ใช้ Whisper {_WHISPER_MODEL_NAME} • {_WHISPER_BACKEND}")
         return _WHISPER_MODEL, _WHISPER_BACKEND
 
+    _ensure_faster_whisper(log_fn)
     from faster_whisper import WhisperModel
     if callable(log_fn):
         cached = _whisper_cache_path(_WHISPER_MODEL_NAME).is_dir()
-        action = "กำลังเปิด" if cached else "กำลังดาวน์โหลดและเปิด"
+        action = "กำลังเปิด" if cached else "กำลังดาวน์โหลด (ประมาณ 3 GB ครั้งแรกครั้งเดียว) และเปิด"
         log_fn(f"{action} Whisper {_WHISPER_MODEL_NAME}...")
-    try:
-        _WHISPER_MODEL = WhisperModel(
-            _WHISPER_MODEL_NAME, device="cuda", compute_type="float16", num_workers=1,
-        )
-        _WHISPER_BACKEND = "GPU"
-    except Exception as gpu_error:
+    gpu_error = None
+    if force_cpu:
+        gpu_error = "ใช้ CPU ตามที่สั่ง"
+    elif not _nvidia_gpu_count():
+        # faster-whisper (CTranslate2) runs on NVIDIA CUDA only; AMD/Intel GPUs
+        # and machines without a GPU use the CPU with the same large model.
+        gpu_error = "ไม่พบการ์ดจอ NVIDIA (AMD/Intel ใช้ CPU แทน)"
+    else:
+        _prepare_cuda_libraries(log_fn)
+        # float16 needs a recent card; older NVIDIA cards fall through to the
+        # lighter types instead of dropping straight to the slow CPU.
+        for compute_type in ("float16", "int8_float16", "int8", "float32"):
+            try:
+                _WHISPER_MODEL = WhisperModel(
+                    _WHISPER_MODEL_NAME, device="cuda", compute_type=compute_type, num_workers=1,
+                )
+                _WHISPER_BACKEND = f"GPU {compute_type}"
+                gpu_error = None
+                break
+            except Exception as exc:
+                gpu_error = exc
+    if gpu_error is not None:
         if callable(log_fn):
-            log_fn(f"GPU ใช้ไม่ได้ ({gpu_error}) — เปลี่ยนเป็น CPU")
+            log_fn(f"GPU ใช้ไม่ได้ ({gpu_error}) — ใช้ CPU")
         _WHISPER_MODEL = WhisperModel(
-            _WHISPER_MODEL_NAME, device="cpu", compute_type="int8", cpu_threads=4, num_workers=1,
+            _WHISPER_MODEL_NAME, device="cpu", compute_type="int8",
+            cpu_threads=max(1, min(8, (os.cpu_count() or 4) - 1)), num_workers=1,
         )
         _WHISPER_BACKEND = "CPU"
     if callable(log_fn):

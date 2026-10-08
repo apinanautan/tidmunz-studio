@@ -82,13 +82,25 @@ sys.path.insert(0, sys.argv[1])
 def emit(item):
     sys.stdout.write(json.dumps(item, ensure_ascii=False) + "\n"); sys.stdout.flush()
 import snapgen_voice_input as V
-model, backend = V._get_whisper_model(log_fn=lambda m: emit({"log": str(m)}))
-emit({"backend": backend})
-segments, _info = model.transcribe(sys.argv[2], language="th", vad_filter=True, beam_size=1, temperature=0.0,
-                                   initial_prompt=sys.argv[3] or None, word_timestamps=sys.argv[4] == "1")
-for s in segments:
-    words = [[round(w.start, 2), round(w.end, 2), w.word] for w in (s.words or [])]
-    emit({"start": s.start, "end": s.end, "text": s.text, "words": words})
+sent = [0]
+def run(force_cpu):
+    model, backend = V._get_whisper_model(log_fn=lambda m: emit({"log": str(m)}), force_cpu=force_cpu)
+    emit({"backend": backend})
+    segments, _info = model.transcribe(sys.argv[2], language="th", vad_filter=True, beam_size=1, temperature=0.0,
+                                       initial_prompt=sys.argv[3] or None, word_timestamps=sys.argv[4] == "1")
+    for s in segments:
+        words = [[round(w.start, 2), round(w.end, 2), w.word] for w in (s.words or [])]
+        emit({"start": s.start, "end": s.end, "text": s.text, "words": words})
+        sent[0] += 1
+try:
+    run(False)
+except Exception as exc:
+    # A GPU without the CUDA/cuDNN libraries opens the model but fails on the
+    # first transcription; redo the whole file on CPU instead of failing.
+    if sent[0] or V._WHISPER_BACKEND == "CPU":
+        raise
+    emit({"log": f"GPU ถอดเสียงไม่ได้ ({exc}) — เปลี่ยนเป็น CPU"})
+    run(True)
 """
 
 

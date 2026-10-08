@@ -460,8 +460,27 @@ def _snapgen_startup_detail(message):
     """Show routine startup detail only when explicitly requested."""
     if SNAPGEN_VERBOSE_STARTUP:
         print(message)
+def _bridge_account_mtime(bridge_dir):
+    """Newest capture time under bridge_dir/secrets/accounts (0 = no accounts)."""
+    newest = 0.0
+    try:
+        for account in (Path(bridge_dir) / "secrets" / "accounts").iterdir():
+            if account.is_dir():
+                newest = max(newest, account.stat().st_mtime, *(
+                    f.stat().st_mtime for f in account.iterdir() if f.is_file()
+                ))
+    except Exception:
+        pass
+    return newest
+
+
 def _find_bridge_dir():
-    """Prefer a portable bridge location on each Windows user account."""
+    """Pick the Bridge that holds the captured GPT accounts.
+
+    A second, empty chatgpt-api folder (e.g. inside a launcher install) must
+    never win over the user's folder that already has accounts, or every
+    update/restart looks like the accounts were deleted.
+    """
     candidates = []
     if "SNAPGEN_BRIDGE_DIR" in os.environ:
         candidates.append(Path(os.environ["SNAPGEN_BRIDGE_DIR"]))
@@ -469,12 +488,18 @@ def _find_bridge_dir():
         BASE_ROOT / "chatgpt-api",
         Path.home() / "chatgpt-api",
     ]
+    existing = []
     for p in candidates:
         try:
-            if str(p) and p.exists():
-                return p
+            if str(p) and p.exists() and p not in existing:
+                existing.append(p)
         except Exception:
             pass
+    with_accounts = [p for p in existing if _bridge_account_mtime(p) > 0]
+    if with_accounts:
+        return max(with_accounts, key=_bridge_account_mtime)
+    if existing:
+        return existing[0]
     return Path.home() / "chatgpt-api"
 
 BRIDGE_DIR = _find_bridge_dir()

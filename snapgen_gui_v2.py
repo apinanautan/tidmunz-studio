@@ -8437,12 +8437,35 @@ def _invalidate_prompt_ref_for_account(active_account):
 g["invalidate_prompt_ref_for_account"] = _invalidate_prompt_ref_for_account
 
 
-def _sync_persisted_histories_to_account(active_account):
-    """Update local routing aliases; account selection never starts a new story."""
+def _sync_persisted_histories_to_account(active_account, move=False):
+    """Update local routing aliases.
+
+    ``move=True`` comes from pressing Use in Bridge Manager: the user wants the
+    work on that account (often because the old one lost its login, HTTP 401),
+    so every history bound to another account starts a new chat there.  A
+    ChatGPT chat exists only in its own account, so it cannot be carried over.
+    The periodic status refresh calls this without ``move`` and never re-owns.
+    """
     active = str(active_account or "").strip()
     if not active or active.casefold() in {"free", "default"}:
         return []
     rebound = []
+    if move:
+        bound = str(_prompt_ref_conversation.get("account_alias") or "").strip()
+        if bound and bound.casefold() != active.casefold():
+            _reset_prompt_ref_conversation()
+            rebound.append(f"ประวัติเรื่องหลัก (เดิม {bound} → เริ่มใหม่ใน {active})")
+        try:
+            import snapgen_image_gen as _hist
+            for label in _hist.invalidate_histories_for_account(active):
+                rebound.append(f"ประวัติ {label} (เริ่มใหม่ใน {active})")
+        except Exception:
+            pass
+        move_face = g.get("story_face_move_to_account")
+        if callable(move_face):
+            moved = move_face(active)
+            if moved:
+                rebound.append(f"ประวัตินิทาน {moved} เรื่อง (เริ่มใหม่ใน {active})")
     invalidate_prompt = g.get("invalidate_prompt_ref_for_account")
     if callable(invalidate_prompt) and invalidate_prompt(active):
         rebound.append("ประวัติเรื่องหลัก")
@@ -15335,11 +15358,11 @@ def _install_better_bridge_manager():
                     log_to(log_box, f"กำลังสลับไปใช้ account: {account}")
                     ok = start_bridge(log_box, account)
                     if ok:
-                        rebound = _sync_persisted_histories_to_account(account)
+                        rebound = _sync_persisted_histories_to_account(account, move=True)
                         if rebound:
                             log_to(
                                 log_box,
-                                "ใช้ account ที่เลือกกับประวัติเดิมแล้ว: "
+                                "ย้ายงานมาที่ account ที่เลือกแล้ว: "
                                 + ", ".join(dict.fromkeys(rebound)),
                             )
                         log_to(log_box, f"✅ ใช้ account แล้ว: {account}")

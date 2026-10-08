@@ -297,6 +297,23 @@ def install(g: dict, root: tk.Misc) -> tk.Misc:
             print("[นิทาน] แชตเดิมอยู่ในบัญชี ChatGPT อื่น — เริ่มแชตใหม่ของเรื่องนี้ในบัญชีปัจจุบัน")
             return request_fn()
 
+    def _move_face_histories_to_account(active):
+        """Bridge Manager 'Use': stories whose chat lives in another account start a new chat there."""
+        active = str(active or "").strip().casefold()
+        moved = 0
+        for history in (face_store.get("histories") or {}).values():
+            bound = str((history or {}).get("account_alias") or "").strip().casefold()
+            if isinstance(history, dict) and bound and active and bound != active:
+                history.clear()
+                moved += 1
+        if moved:
+            _save_face_store()
+        return moved
+
+    g["story_face_move_to_account"] = _move_face_histories_to_account
+    if isinstance(g.get("g"), dict):  # page env -> the main program's g, read by Bridge Manager Use
+        g["g"]["story_face_move_to_account"] = _move_face_histories_to_account
+
     def _load_face_context_text():
         try:
             return face_context_path.read_text(encoding="utf-8")

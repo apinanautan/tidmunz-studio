@@ -474,13 +474,45 @@ def _bridge_account_mtime(bridge_dir):
     return newest
 
 
+_BRIDGE_DIR_MEMORY = BASE / "meta" / "bridge_dir.json"
+
+
+def _remembered_bridge_dir():
+    """This machine's Bridge folder saved last time (snapgen_data is never
+    touched by Update/Restore, so the choice survives every update)."""
+    try:
+        saved = json.loads(_BRIDGE_DIR_MEMORY.read_text(encoding="utf-8")).get("path")
+        path = Path(str(saved or ""))
+        if str(saved or "").strip() and _bridge_account_mtime(path) > 0:
+            return path
+    except Exception:
+        pass
+    return None
+
+
+def _remember_bridge_dir(path):
+    try:
+        _BRIDGE_DIR_MEMORY.parent.mkdir(parents=True, exist_ok=True)
+        _BRIDGE_DIR_MEMORY.write_text(
+            json.dumps({"path": str(Path(path).resolve())}, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+    except Exception:
+        pass
+
+
 def _find_bridge_dir():
     """Pick the Bridge that holds the captured GPT accounts.
 
-    A second, empty chatgpt-api folder (e.g. inside a launcher install) must
-    never win over the user's folder that already has accounts, or every
-    update/restart looks like the accounts were deleted.
+    Each machine remembers its folder in snapgen_data/meta/bridge_dir.json and
+    uses it directly. Only when that folder is gone or has no accounts does it
+    search again: a second, empty chatgpt-api folder (e.g. inside a launcher
+    install) must never win over the folder that already has accounts.
     """
+    if "SNAPGEN_BRIDGE_DIR" not in os.environ:
+        remembered = _remembered_bridge_dir()
+        if remembered is not None:
+            return remembered
     candidates = []
     if "SNAPGEN_BRIDGE_DIR" in os.environ:
         candidates.append(Path(os.environ["SNAPGEN_BRIDGE_DIR"]))
@@ -497,7 +529,9 @@ def _find_bridge_dir():
             pass
     with_accounts = [p for p in existing if _bridge_account_mtime(p) > 0]
     if with_accounts:
-        return max(with_accounts, key=_bridge_account_mtime)
+        chosen = max(with_accounts, key=_bridge_account_mtime)
+        _remember_bridge_dir(chosen)
+        return chosen
     if existing:
         return existing[0]
     return Path.home() / "chatgpt-api"

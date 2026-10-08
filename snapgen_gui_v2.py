@@ -16012,9 +16012,11 @@ def _install_image_bridge_status():
             plan = str(entry.get("plan_type") or entry.get("plan_bucket") or "").strip()
             quota_status_cache["plan"] = plan
             quota_status_cache["account"] = str(entry.get("account") or account_key)
-            # Some plans (e.g. Go) get no usage numbers from ChatGPT at all:
-            # say so instead of leaving a bare "—".
-            quota_status_cache["remaining"] = remain if remain is not None else "ไม่ทราบ (ChatGPT ไม่บอกยอดของบัญชีนี้)"
+            # No usage numbers usually means this account's ChatGPT login has
+            # expired (seen: 401 invalidated token); say so instead of a bare "—".
+            quota_status_cache["remaining"] = (
+                remain if remain is not None
+                else f"ไม่ทราบ — {quota_status_cache['account'] or 'บัญชีนี้'} อาจหลุดล็อกอิน: ล็อกอินใหม่ใน Bridge หรือกด Use บัญชีอื่น")
         except Exception:
             pass
         return {

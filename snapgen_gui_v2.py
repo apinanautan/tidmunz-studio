@@ -15971,7 +15971,11 @@ def _install_image_bridge_status():
                 f"http://127.0.0.1:{port}/v1/chatgpt/usage",
                 headers={"Authorization": f"Bearer {api_key}"},
             )
-            with urllib.request.urlopen(usage_request, timeout=3) as response:
+            # The Bridge asks ChatGPT live for every saved account before it
+            # answers (several seconds with 6 accounts). A 3 s limit always
+            # timed out, so the label kept its first value forever. This runs
+            # in a worker thread, so waiting longer never blocks the UI.
+            with urllib.request.urlopen(usage_request, timeout=30) as response:
                 usage = json.loads(response.read().decode("utf-8", "replace"))
             accounts = usage.get("accounts", []) if isinstance(usage, dict) else []
             entry = next(

@@ -1037,8 +1037,12 @@ def analyze_story_face_dataset(
     continue_history = bool(
         state.get("conversation_id") and state.get("parent_message_id")
     )
-    if not continue_history:
+    if not continue_history and not external_state:
         raise RuntimeError("ยังไม่มีประวัติเรื่องหลักจาก Prompt-Ref")
+    if not continue_history and log_fn:
+        # นิทาน owns its story history: the first analysis opens it (also after
+        # Use moved the story to another account).
+        log_fn("[ข้อมูลชุด] เปิดประวัตินิทานใหม่ของเรื่องนี้ในบัญชีที่ใช้อยู่")
     if not external_state and existing_hash and existing_hash != source_hash:
         raise RuntimeError("ข้อมูลชุดนิทานไม่ตรงกับประวัติ Story Face เดิม — กด เปลี่ยนเรื่อง ก่อนวิเคราะห์ใหม่")
     return _ingest_story_file_into(

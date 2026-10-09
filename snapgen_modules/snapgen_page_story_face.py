@@ -2372,6 +2372,7 @@ def install(g: dict, root: tk.Misc) -> tk.Misc:
                     item["reference_from"] = "" if item is master else item["identity_group"]
                 subjects.extend([master] + [item for item in members if item is not master])
             design_page = str(parsed.get("design_page") or "").strip()
+            batch_cache["gpt_error"] = ""
             if not design_page:
                 design_page = "Character Bible รวม: " + "; ".join(
                     f"{item['name']} {item.get('variant', '')}: {item.get('face_design') or item.get('appearance') or item.get('role')}"
@@ -2379,6 +2380,7 @@ def install(g: dict, root: tk.Misc) -> tk.Misc:
                 )
         except Exception as error:
             _new_log(f"[ข้อมูลชุด] GPT แยกไม่สำเร็จ ใช้รายการเลขแทน: {error}")
+            batch_cache["gpt_error"] = str(error)
             subjects = _fallback_batch_characters(source)
             design_page = (
                 "Character Bible รวมจากรายการต้นฉบับ: ตัวละครแต่ละคนต้องมีโครงหน้า "
@@ -2889,6 +2891,8 @@ def install(g: dict, root: tk.Misc) -> tk.Misc:
                         _persist_batch_state()
                         _load_outfit_characters()
                         message = f"วิเคราะห์แล้ว: จะสร้าง {len(subjects)} รูป"
+                        if batch_cache.get("gpt_error"):
+                            message += " (GPT แยกไม่สำเร็จ ใช้รายการเลขแทน: " + str(batch_cache["gpt_error"])[:160] + ")"
                         batch_status_var.set(message)
                         dialog_status.set(message + " — ตรวจรายการก่อนกดสร้างทั้งหมด")
                     except Exception:

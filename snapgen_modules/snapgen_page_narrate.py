@@ -1362,6 +1362,19 @@ def motion_request(items: list, era: str, horror: bool = False) -> str:
     )
 
 
+def same_person_request(names: list) -> str:
+    """Once per story: characters that are another form of another character (same face)."""
+    return (
+        "จากบทในประวัตินี้ ตัวละครในรายชื่อด้านล่าง ตัวไหนเป็น 'คนเดียวกัน' กับอีกตัวแต่อยู่ในอีกร่าง "
+        "เช่น ผีหรือวิญญาณของคนที่ตายไปแล้ว ร่างที่ถูกสิง หรือร่างที่แปลงไป (ไม่นับคนละคนที่แค่เกี่ยวข้องกัน). "
+        "form = ชื่อร่างอื่น, person = ชื่อตัวละครร่างปกติของคนนั้น (ต้องเป็นชื่อในรายชื่อตรงตัว), "
+        "how = ร่างนี้ต่างจากร่างปกติอย่างไรสั้นๆ (เช่น วิญญาณหลังตายจากรถชน ร่างซีดโปร่ง). "
+        "ถ้าบทไม่บอกชัดว่าเป็นของใคร ให้เลือกตัวที่บทบอกว่าตายหรือกลายร่างตรงกับร่างนี้ที่สุด. "
+        f"รายชื่อ: {', '.join(names)}. "
+        "ตอบ JSON เท่านั้น: {\"forms\":[{\"form\":\"\",\"person\":\"\",\"how\":\"\"}]} ถ้าไม่มีให้ตอบ {\"forms\":[]}"
+    )
+
+
 def bodies_request(names: list, era: str) -> str:
     """Once per story: how every character's body is built, moves, and what must never appear on it."""
     return (
@@ -1950,7 +1963,7 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
             message = "".join(str(p.get("text") or "") if isinstance(p, dict) else str(p) for p in message)
         return str(message)
 
-    def make_image(prompt, refs, out_dir, name, aspect, board=None):
+    def make_image(prompt, refs, out_dir, name, aspect, board=None, identity=False):
         imgmod = runtime.get("_imgmod") or g.get("_imgmod")
         if imgmod is None:
             raise RuntimeError("ระบบสร้างรูปยังไม่พร้อม")
@@ -1969,6 +1982,10 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
                 "No panel borders, no shot numbers, no text."
                 + ("\nOther attached images are ONLY each character's identity (face, body, outfit):\n"
                    + "\n".join(f"Image {i}: {Path(p).stem}" for i, p in enumerate(refs[1:], 2)) if len(refs) > 1 else ""))
+        elif refs and identity:
+            # A character's other form (e.g. their ghost): a reference picture of the same person.
+            prompt += ("\n\nThe attached image is the SAME PERSON in normal form: keep the exact face, facial "
+                       "structure, body, height and hair; change only what the prompt says this form changes.")
         elif refs:
             prompt += (
                 "\n\nATTACHED REFERENCES are ONLY for each character's identity (face, body, outfit):\n"
@@ -2251,29 +2268,79 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
             style = REALISM_NOTE + ". " + style
         return (f"สไตล์: {style}. ยุค/บรรยากาศ: {era}." if era else f"สไตล์: {style}.") + thai
 
+    def ensure_same_person():
+        """Once per story: which characters are another form (ghost, spirit, transformed) of another one."""
+        project = state["project"]
+        if project.get("same_person") is not None:
+            return project["same_person"]
+        names = [c.get("name") for c in (project.get("context") or {}).get("characters", [])
+                 if c.get("name") and not is_group_character(c)]
+        found = {}
+        if len(names) > 1:
+            ensure_story_in_history()
+            try:
+                reply = with_retries("หาร่างอื่นของตัวละคร", lambda: parse_json_reply(chat(same_person_request(names))),
+                                     attempts=2)
+                for item in reply.get("forms") or []:
+                    form, person = str(item.get("form") or "").strip(), str(item.get("person") or "").strip()
+                    if form in names and person in names and form != person:
+                        found[form] = {"person": person, "how": str(item.get("how") or "").strip()}
+            except (Stopped, HistoryLost, RateLimited):
+                raise
+            except Exception as exc:
+                log(f"หาร่างอื่นของตัวละครไม่สำเร็จ ({str(exc)[:120]}) — ทำรูปตัวละครแยกกันตามเดิม")
+        project["same_person"] = found
+        save_project()
+        if found:
+            log("คนเดียวกันคนละร่าง: " + ", ".join(f"{f} = {v['person']}" for f, v in found.items()))
+        return found
+
+    def forms_to_remake(existing) -> list:
+        """Form pictures (e.g. a ghost) drawn before they were tied to their person: draw them again from the person."""
+        project = state["project"]
+        same = project.get("same_person") or {}
+        tied = set(project.get("form_refs") or [])
+        return [f for f, v in same.items() if f in existing and f not in tied and v["person"] in existing]
+
     def stage_characters():
         project = state["project"]
         ensure_story_in_history()
+        same = ensure_same_person()
         refs_dir = Path(state["folder"]) / "refs"
         needed = characters_needing_refs(project.get("context") or {}, project.get("scenes") or [])
         characters = [c for c, _count in needed]
         existing = character_refs()
+        for form in forms_to_remake(existing):
+            # Keep the old picture as a backup; the new one is drawn from the person's own picture.
+            old = Path(existing.pop(form))
+            old.replace(old.with_name(old.stem + "_สำรอง" + old.suffix))
+            log(f"ทำรูป {form} ใหม่จากหน้าของ {same[form]['person']} (รูปเดิมเก็บเป็น _สำรอง)")
         todo = [c for c in characters if c["name"] not in existing]
+        todo.sort(key=lambda c: c["name"] in same)  # each person before their other forms
         for n, character in enumerate(todo, 1):
             check_stop()
             name = character["name"]
             set_progress("characters", (n - 1) / max(1, len(todo)), f"ทำรูปตัวละคร {n}/{len(todo)}: {name}")
+            base = same.get(name)
+            base_ref = character_refs().get(base["person"]) if base else None
             prompt = (
                 f"ภาพอ้างอิงตัวละคร '{name}': {character_description(character)}. "
+                + (f"'{name}' คือ '{base['person']}' คนเดียวกันในอีกร่าง ({base['how'] or 'ร่างผี/วิญญาณ'}): "
+                   f"ใช้หน้าตา โครงหน้า รูปร่าง ส่วนสูง และทรงผมของ '{base['person']}' จากรูปที่แนบให้เหมือนเดิมทุกจุด "
+                   "เปลี่ยนเฉพาะสิ่งที่ร่างนี้ต่างไป. " if base_ref else "")
                 + "".join(f"ลักษณะผีตามความเชื่อไทย (ต้องวาดตามนี้): {look}. "
                           for _n, look in find_ghosts(name, project.get("ghosts") or []))
-                + 
+                +
                 "ภาพเต็มตัวยืนตรง หันหน้าเข้ากล้อง เห็นหน้าชัด พื้นหลังสีเทาเรียบ แสงสม่ำเสมอ ไม่มีวัตถุอื่น "
                 + style_text()
             )
             with_retries(f"รูปตัวละคร {name}",
-                         lambda p=prompt, nm=safe_name(name): make_image(p, [], refs_dir, nm, "1:1"))
-            log(f"✓ รูปตัวละคร {name}")
+                         lambda p=prompt, nm=safe_name(name), r=base_ref: make_image(
+                             p, [r] if r else [], refs_dir, nm, "1:1", identity=bool(r)))
+            if base_ref:
+                project.setdefault("form_refs", []).append(name)
+                save_project()
+            log(f"✓ รูปตัวละคร {name}" + (f" (หน้าเดียวกับ {base['person']})" if base_ref else ""))
         log(f"✓ รูปตัวละครครบ {len(characters)} ตัว ตามที่ปรากฏในฉาก (เปลี่ยนรูปได้ที่ {refs_dir})")
 
     def check_script_matches_audio():
@@ -2387,6 +2454,11 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
         bodies, forbid = shot_bodies(scene)
         body_note = (f"\nร่างกายที่ถูกต้อง (ห้ามผิด): {bodies}" if bodies else "") + \
                     (f"\nสิ่งที่ห้ามมีในภาพ: {forbid}" if forbid else "")
+        same = state["project"].get("same_person") or {}
+        forms = [f"{c} คือ {same[c]['person']} คนเดียวกัน (หน้าตาเดิม) ในร่าง {same[c]['how'] or 'ผี/วิญญาณ'}"
+                 for c in scene.get("characters") or [] if c in same]
+        if forms:
+            location += "\nคนเดียวกันคนละร่าง: " + "; ".join(forms) + "."
         narration = (f"\nภาพนี้ประกอบคำบรรยายช่วงนี้เท่านั้น (ห้ามเพิ่มสิ่งที่บทไม่ได้พูดถึง): {scene['text']}"
                      if not video_mode and scene.get("text") else "")
         return (f"{scene['prompt']}{location}" + narration + (f"\nตัวละครในภาพ — {who}" if who else "") + state_note + ghost_note
@@ -2618,7 +2690,11 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
             if video_mode:
                 ref_paths = attachments_for(scene)
             else:
-                ref_paths = [refs[c] for c in scene.get("characters") or [] if c in refs][:4]
+                same = project.get("same_person") or {}
+                shown = list(scene.get("characters") or [])
+                # A ghost form also gets its person's picture, so the face stays the same person.
+                shown += [same[c]["person"] for c in shown if c in same and same[c]["person"] not in shown]
+                ref_paths = [refs[c] for c in shown if c in refs][:4]
             try:
                 board = scene.get("board") if scene.get("board") and os.path.isfile(scene["board"]) else None
                 scene["image"] = with_retries(f"ฉาก {i + 1}", lambda: make_image(
@@ -3295,8 +3371,10 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
                 + (f"สตอรี่ชีต {sheets} รูป (ตามซีเควนซ์ ชีตละไม่เกิน 9 ช็อต) + " if sheets else "")
                 + f"รูปฉาก {missing} รูป + คลิปวิดีโอ {len(todo)} คลิป (vela = ตัวถูก ถ้าเจนไม่ได้จะเปลี่ยนเป็น grok-lower เอง)\n"
                 f"   {clip_summary(todo)}\n   (สโลว์×2 = ทำ AI Slow 2x หลังได้คลิป)\n\nเริ่มเลยไหม?")
+        ensure_same_person()  # text only: a ghost of a known person is drawn from that person's face
+        remake = set(forms_to_remake(existing))
         new_refs = [(c, n) for c, n in characters_needing_refs(project.get("context") or {}, project.get("scenes") or [])
-                    if c["name"] not in existing]
+                    if c["name"] not in existing or c["name"] in remake]
         scenes = project.get("scenes") or []
         missing = sum(1 for s in scenes if not (s.get("image") and os.path.isfile(s["image"])))
         sheets = sum(1 for grp in board_groups(scenes, project.get("direction"))

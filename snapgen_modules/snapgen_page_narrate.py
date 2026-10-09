@@ -2004,6 +2004,11 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
             shutil.move(str(out), str(target))
         return str(target)
 
+    def refused(exc) -> bool:
+        """ChatGPT declined to draw this prompt (policy), as opposed to a network or quota error."""
+        text = str(exc)
+        return "GPT said:" in text or "safety policy" in text.lower() or "content policy" in text.lower() or "นโยบาย" in text
+
     def with_retries(label, action, attempts=3):
         last = None
         for attempt in range(1, attempts + 1):
@@ -2547,10 +2552,40 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
                          [people[c] for c in scenes[i].get("characters") or [] if c in people])
                 refs += [p for p in found if p not in refs]
             name = f"sheet_{first:03d}-{last:03d}"
-            sheet = with_retries(f"สตอรี่ชีต ช็อต {first}–{last}", lambda grp=grp, refs=refs, name=name: make_image(
-                board_request([(i + 1, scenes[i]) for i in grp], project["aspect"], live_action=video_mode)
-                + "\n" + style_text(),
-                refs[:6], board_dir, name, project["aspect"]))
+
+            def draw(grp=grp, refs=refs, name=name):
+                return with_retries(f"สตอรี่ชีต ช็อต {first}–{last}", lambda: make_image(
+                    board_request([(i + 1, scenes[i]) for i in grp], project["aspect"], live_action=video_mode)
+                    + "\n" + style_text(),
+                    refs[:6], board_dir, name, project["aspect"]))
+            try:
+                sheet = draw()
+            except (Stopped, HistoryLost, RateLimited):
+                raise
+            except Exception as exc:
+                if not refused(exc):
+                    raise
+                # ChatGPT refused the sheet: GPT rewrites these shots' prompts once
+                # (same rules as a refused scene picture), then the sheet is drawn again right away.
+                log(f"สตอรี่ชีต ช็อต {first}–{last} ถูกปฏิเสธ — ให้ GPT แก้ prompt ของช็อตในชีตนี้แล้ววาดใหม่ทันที")
+                for i in grp:
+                    if not scenes[i].get("prompt_before_refine"):
+                        set_progress("storyboard", (k - 1) / len(groups), f"GPT แก้ prompt ช็อต {i + 1} (สตอรี่ชีตถูกปฏิเสธ)")
+                        try:
+                            log(f"ช็อต {i + 1} prompt ใหม่: {refine_scene_prompt(i)[:160]}")
+                        except Stopped:
+                            raise
+                        except Exception as fix_exc:
+                            log(f"GPT แก้ prompt ช็อต {i + 1} ไม่สำเร็จ ({str(fix_exc)[:120]}) — ใช้ prompt เดิม")
+                try:
+                    sheet = draw()
+                except (Stopped, HistoryLost, RateLimited):
+                    raise
+                except Exception as again:
+                    if not refused(again):
+                        raise
+                    log(f"⚠ สตอรี่ชีต ช็อต {first}–{last} ยังถูกปฏิเสธ — ข้ามชีตนี้ รูปฉากของช่วงนี้จะวาดโดยไม่มีสตอรี่ชีต")
+                    continue
             panels = [board_dir / f"panel_{i + 1:03d}.png" for i in grp]
             crop_board(sheet, len(grp), panels)
             for i, panel in zip(grp, panels):

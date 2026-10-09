@@ -1110,7 +1110,7 @@ def refs_note(refs) -> str:
 CONTINUITY_RULES = (
     "continuity = บันทึกความต่อเนื่องของหนัง (เหมือนฝ่ายคุมความต่อเนื่องในกองถ่าย): ไล่ทั้งเรื่องแล้วบันทึกทุกสภาพที่เปลี่ยนไป "
     "ของตัวละครแต่ละตัว ที่ต้องเห็นต่อเนื่องในช็อตถัดๆ ไป เช่น บาดแผล (ตำแหน่งบนร่างกาย ขนาด) เลือด เกล็ด/เสื้อผ้าขาด "
-    "ความเปียก ฝุ่นโคลน ความอ่อนแรง ร่างที่แปลงไป ของที่ถืออยู่. from_shot = ช็อตที่สภาพนั้นเริ่มเกิด, "
+    "ความเปียก ฝุ่นโคลน ความอ่อนแรง อวัยวะที่ขาดหรือพิการจากเหตุการณ์ในเรื่อง ร่างที่แปลงไป ของที่ถืออยู่. from_shot = ช็อตที่สภาพนั้นเริ่มเกิด, "
     "to_shot = ช็อตสุดท้ายที่ยังต้องเห็น (ถึงตอนจบเรื่องถ้าไม่หาย); ถ้าสภาพเปลี่ยนอีก (เช่น แผลหนักขึ้น แปลงร่าง) ให้เริ่มรายการใหม่. "
     "character = ชื่อตัวละครตรงตามรายชื่อ. state = คำบรรยายภาพที่ต้องเห็นจริง สั้นและชัด (เช่น 'แผลฉีกยาวจากดาบที่ลำตัวด้านซ้าย "
     "เกล็ดสีนิลแตก มีเลือดซึม เคลื่อนไหวอ่อนแรง'). ")
@@ -1359,6 +1359,19 @@ def motion_request(items: list, era: str, horror: bool = False) -> str:
         "ตอบ JSON เท่านั้น: {\"shots\":[{\"shot\":1,\"seen\":\"\",\"video_prompt\":\"\",\"anatomy\":\"\",\"negative\":\"\"}]} "
         "seen = สิ่งที่เห็นในรูปสั้นๆ.\n\n"
         + "\n\n".join(blocks)
+    )
+
+
+def base_looks_request(described: list) -> str:
+    """Once per story: every character's look at their first appearance, without changes that come later."""
+    lines = "\n".join(f"- {name}: {look}" for name, look in described)
+    return (
+        "คำบรรยายตัวละครด้านล่างอาจปนสภาพที่เกิดทีหลังในเรื่อง (เช่น ขาขาดตอนท้าย แผลจากเหตุการณ์ ร่างเละหลังตาย "
+        "ผมหงอกตอนแก่) ทำให้รูปช่วงต้นเรื่องผิด. ตามบทในประวัตินี้ เขียนรูปลักษณ์ของแต่ละตัว 'ตอนปรากฏตัวครั้งแรกในเรื่อง' ใหม่: "
+        "ตัดทุกอย่างที่เกิดขึ้นทีหลังออก (สิ่งนั้นจะใส่เองเฉพาะช่วงที่เกิดแล้ว) แต่คงสิ่งที่เป็นมาตั้งแต่ต้นเรื่องไว้ "
+        "(เช่น พิการแต่กำเนิด แผลเป็นเก่า หรือเป็นผีตั้งแต่แรก). เขียนสั้นและชัดสำหรับวาดภาพ ชื่อตรงตามรายชื่อ. "
+        "ตอบ JSON เท่านั้น: {\"looks\":[{\"name\":\"\",\"look\":\"\",\"later\":\"\"}]} "
+        "later = สิ่งที่ตัดออกเพราะเกิดทีหลัง (ว่างได้).\n\n" + lines
     )
 
 
@@ -2268,6 +2281,40 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
             style = REALISM_NOTE + ". " + style
         return (f"สไตล์: {style}. ยุค/บรรยากาศ: {era}." if era else f"สไตล์: {style}.") + thai
 
+    def ensure_base_looks():
+        """Once per story: each character's look at first appearance (later injuries come from continuity)."""
+        project = state["project"]
+        if project.get("base_looks") is not None:
+            return
+        described = [(c["name"], character_description(c)) for c in (project.get("context") or {}).get("characters", [])
+                     if c.get("name") and character_description(c)]
+        looks = {}
+        if described:
+            ensure_story_in_history()
+            try:
+                reply = with_retries("รูปลักษณ์ตอนต้นเรื่อง", lambda: parse_json_reply(chat(base_looks_request(described))),
+                                     attempts=2)
+                names = {n for n, _l in described}
+                for item in reply.get("looks") or []:
+                    name, look = str(item.get("name") or "").strip(), str(item.get("look") or "").strip()
+                    if name in names and look:
+                        looks[name] = look
+                        if str(item.get("later") or "").strip():
+                            log(f"{name}: ไม่ใส่ในรูปตั้งแต่ต้นเรื่อง (เกิดทีหลัง) — {str(item['later']).strip()[:120]}")
+                            # The later change now lives only in the continuity record: build it again (text only).
+                            project["continuity_done"] = False
+            except (Stopped, HistoryLost, RateLimited):
+                raise
+            except Exception as exc:
+                log(f"ทำรูปลักษณ์ตอนต้นเรื่องไม่สำเร็จ ({str(exc)[:120]}) — ใช้คำบรรยายตัวละครเดิม")
+        project["base_looks"] = looks
+        save_project()
+
+    def look_of(character) -> str:
+        """How a character looks before anything in the story changes them."""
+        looks = state["project"].get("base_looks") or {}
+        return looks.get(character.get("name")) or character_description(character)
+
     def ensure_same_person():
         """Once per story: which characters are another form (ghost, spirit, transformed) of another one."""
         project = state["project"]
@@ -2305,6 +2352,7 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
     def stage_characters():
         project = state["project"]
         ensure_story_in_history()
+        ensure_base_looks()
         same = ensure_same_person()
         refs_dir = Path(state["folder"]) / "refs"
         needed = characters_needing_refs(project.get("context") or {}, project.get("scenes") or [])
@@ -2324,7 +2372,7 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
             base = same.get(name)
             base_ref = character_refs().get(base["person"]) if base else None
             prompt = (
-                f"ภาพอ้างอิงตัวละคร '{name}': {character_description(character)}. "
+                f"ภาพอ้างอิงตัวละคร '{name}' ตอนปรากฏตัวครั้งแรกในเรื่อง: {look_of(character)}. "
                 + (f"'{name}' คือ '{base['person']}' คนเดียวกันในอีกร่าง ({base['how'] or 'ร่างผี/วิญญาณ'}): "
                    f"ใช้หน้าตา โครงหน้า รูปร่าง ส่วนสูง และทรงผมของ '{base['person']}' จากรูปที่แนบให้เหมือนเดิมทุกจุด "
                    "เปลี่ยนเฉพาะสิ่งที่ร่างนี้ต่างไป. " if base_ref else "")
@@ -2442,7 +2490,7 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
 
     def scene_prompt(scene):
         context = state["project"].get("context") or {}
-        details = {c.get("name"): character_description(c) for c in context.get("characters", [])}
+        details = {c.get("name"): look_of(c) for c in context.get("characters", [])}
         who = "; ".join(f"{n}: {details.get(n, '')}" for n in scene.get("characters") or [])
         location = f" สถานที่: {scene['location']}." if scene.get("location") else ""
         text = " ".join([scene.get("prompt", ""), " ".join(scene.get("characters") or []), scene.get("location", ""),
@@ -2495,6 +2543,7 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
     def ensure_bodies():
         """Once per story: GPT writes every character's body sheet (kind, body, moves, negative)."""
         project = state["project"]
+        ensure_base_looks()
         if project.get("bodies") is not None or state.get("bodies_failed"):
             return
         names = [c.get("name") for c in (project.get("context") or {}).get("characters", []) if c.get("name")]
@@ -2528,7 +2577,7 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
 
     def who_in(scene) -> str:
         context = state["project"].get("context") or {}
-        details = {c.get("name"): character_description(c) for c in context.get("characters", [])}
+        details = {c.get("name"): look_of(c) for c in context.get("characters", [])}
         return "; ".join(f"{n}: {details.get(n, '')}".rstrip(": ") for n in scene.get("characters") or [])
 
     def ensure_scene_text():
@@ -2572,6 +2621,8 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
         """Plans made before the continuity record: ask GPT for it once (text only, story history)."""
         project = state["project"]
         scenes = project.get("scenes") or []
+        if scenes:
+            ensure_base_looks()  # may hand later changes (e.g. a lost leg) over to the continuity record
         if not scenes or project.get("continuity_done"):
             return
         set_progress("plan", 1.0, "GPT กำลังทำบันทึกความต่อเนื่อง (บาดแผล เลือด ร่างที่เปลี่ยน) ของทั้งเรื่อง ...")

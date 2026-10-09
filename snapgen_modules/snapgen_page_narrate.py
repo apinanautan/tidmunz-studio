@@ -2357,7 +2357,8 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
         if len(scenes) > target:
             scenes = limit_scenes(scenes, target, float(project["duration"]))
             project["scenes"] = scenes
-            save_project()
+        project["continuity_done"] = False  # a new plan needs its own continuity record
+        save_project()
         log(f"✓ วางแผน {len(scenes)} ฉาก (ไม่เกิน {target} รูป)")
 
     def scene_prompt(scene):
@@ -2408,7 +2409,7 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
     def ensure_bodies():
         """Once per story: GPT writes every character's body sheet (kind, body, moves, negative)."""
         project = state["project"]
-        if not video_mode or project.get("bodies") is not None or state.get("bodies_failed"):
+        if project.get("bodies") is not None or state.get("bodies_failed"):
             return
         names = [c.get("name") for c in (project.get("context") or {}).get("characters", []) if c.get("name")]
         names += [n for n in attachment_names() if n not in names]
@@ -2472,10 +2473,17 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
         """Plans made before the continuity record: ask GPT for it once (text only, story history)."""
         project = state["project"]
         scenes = project.get("scenes") or []
-        if not video_mode or not scenes or project.get("continuity_done"):
+        if not scenes or project.get("continuity_done"):
             return
         set_progress("plan", 1.0, "GPT กำลังทำบันทึกความต่อเนื่อง (บาดแผล เลือด ร่างที่เปลี่ยน) ของทั้งเรื่อง ...")
         ensure_story_in_history()
+        transcript = Path(state["folder"]) / "transcript.json"
+        if not any(sc.get("text") for sc in scenes) and transcript.is_file():
+            # เล่าภาพ plans keep only start times: give each picture its narration for the record.
+            segments = json.loads(transcript.read_text(encoding="utf-8"))
+            ends = [sc["start"] for sc in scenes[1:]] + [float("inf")]
+            for sc, end in zip(scenes, ends):
+                sc["text"] = " ".join(s["text"] for s in segments if sc["start"] <= s["start"] < end)[:400]
         names = [c.get("name") for c in (project.get("context") or {}).get("characters", []) if c.get("name")]
         names += [n for n in attachment_names() if n not in names]
         reply = with_retries("บันทึกความต่อเนื่อง", lambda: parse_json_reply(

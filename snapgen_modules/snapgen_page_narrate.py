@@ -2636,11 +2636,14 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
             except (Stopped, HistoryLost, RateLimited):
                 raise
             except Exception as exc:
-                if not scene.get("prompt_before_refine"):
-                    # Usually a refused prompt (e.g. a child in danger): let GPT soften it once and try again.
+                if scene.get("refine_count", 0) < 2:
+                    # Usually a refused prompt (e.g. violence, a child in danger): GPT softens it (up to
+                    # twice per scene) and the picture is drawn again right away.
                     try:
-                        log(f"ฉาก {i + 1} เจนไม่ได้ — ให้ GPT แก้ prompt ให้เจนได้แล้วลองใหม่")
+                        log(f"ฉาก {i + 1} เจนไม่ได้ ({str(exc)[:120]}) — ให้ GPT แก้ prompt ให้เจนได้แล้วลองใหม่")
                         refine_scene_prompt(i)
+                        if scene.get("refine_count", 0) >= 2:
+                            board = None  # the panel itself may carry what was refused
                         scene["image"] = make_image(scene_prompt(scene), ref_paths, images_dir, f"scene_{i + 1:03d}",
                                                     project["aspect"], board=board)
                         scene.pop("error", None)
@@ -2661,6 +2664,11 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
             save_project()
             ui(refresh_table)
         missing = [i + 1 for i, s in enumerate(scenes) if not (s.get("image") and os.path.isfile(s["image"]))]
+        if missing and indices is None:
+            # One more pass by itself over the scenes that failed (their prompts were already softened).
+            log(f"ลองสร้างฉากที่ยังขาดอีกรอบอัตโนมัติ: {', '.join(map(str, missing[:15]))}")
+            stage_images([n - 1 for n in missing])
+            missing = [i + 1 for i, s in enumerate(scenes) if not (s.get("image") and os.path.isfile(s["image"]))]
         if missing:
             raise RuntimeError(f"ยังขาดรูปฉาก {', '.join(map(str, missing[:15]))} — กดเริ่มอีกครั้งเพื่อลองใหม่")
         log(f"✓ รูปครบ {len(scenes)} ฉาก")
@@ -2703,6 +2711,7 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
             raise RuntimeError("GPT ไม่ได้ส่ง prompt ใหม่กลับมา")
         scene.setdefault("prompt_before_refine", scene.get("prompt", ""))
         scene["prompt"] = new
+        scene["refine_count"] = scene.get("refine_count", 0) + 1
         save_project()
         return new
 

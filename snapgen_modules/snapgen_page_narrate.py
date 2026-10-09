@@ -2004,11 +2004,6 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
             shutil.move(str(out), str(target))
         return str(target)
 
-    def refused(exc) -> bool:
-        """ChatGPT declined to draw this prompt (policy), as opposed to a network or quota error."""
-        text = str(exc)
-        return "GPT said:" in text or "safety policy" in text.lower() or "content policy" in text.lower() or "นโยบาย" in text
-
     def with_retries(label, action, attempts=3):
         last = None
         for attempt in range(1, attempts + 1):
@@ -2538,7 +2533,8 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
         people = {} if video_mode else character_refs()  # เล่าภาพ: the story's own character pictures
         groups = [grp for grp in board_groups(scenes, project.get("direction"))
                   if any(not (scenes[i].get("image") and os.path.isfile(scenes[i]["image"])) for i in grp)]
-        groups = [grp for grp in groups if not all(scenes[i].get("board") and os.path.isfile(scenes[i]["board"]) for i in grp)]
+        groups = [grp for grp in groups if not all(scenes[i].get("board") and os.path.isfile(scenes[i]["board"]) for i in grp)
+                  and not any(scenes[i].get("board_skipped") for i in grp)]
         if not groups:
             log("สตอรี่ชีต: ไม่มีช็อตที่ต้องวาดรูปใหม่ — ข้าม")
             return
@@ -2563,11 +2559,10 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
             except (Stopped, HistoryLost, RateLimited):
                 raise
             except Exception as exc:
-                if not refused(exc):
-                    raise
-                # ChatGPT refused the sheet: GPT rewrites these shots' prompts once
-                # (same rules as a refused scene picture), then the sheet is drawn again right away.
-                log(f"สตอรี่ชีต ช็อต {first}–{last} ถูกปฏิเสธ — ให้ GPT แก้ prompt ของช็อตในชีตนี้แล้ววาดใหม่ทันที")
+                # Usually ChatGPT refused the sheet (a violent beat): GPT rewrites these shots' prompts
+                # once (same rules as a failed scene picture), then the sheet is drawn again right away.
+                log(f"สตอรี่ชีต ช็อต {first}–{last} สร้างไม่ได้ ({str(exc)[:160]}) — "
+                    "ให้ GPT แก้ prompt ของช็อตในชีตนี้แล้ววาดใหม่ทันที")
                 for i in grp:
                     if not scenes[i].get("prompt_before_refine"):
                         set_progress("storyboard", (k - 1) / len(groups), f"GPT แก้ prompt ช็อต {i + 1} (สตอรี่ชีตถูกปฏิเสธ)")
@@ -2582,9 +2577,12 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
                 except (Stopped, HistoryLost, RateLimited):
                     raise
                 except Exception as again:
-                    if not refused(again):
-                        raise
-                    log(f"⚠ สตอรี่ชีต ช็อต {first}–{last} ยังถูกปฏิเสธ — ข้ามชีตนี้ รูปฉากของช่วงนี้จะวาดโดยไม่มีสตอรี่ชีต")
+                    # A sheet is only a layout guide: never stop the story for it.
+                    for i in grp:
+                        scenes[i]["board_skipped"] = True
+                    save_project()
+                    log(f"⚠ สตอรี่ชีต ช็อต {first}–{last} ยังสร้างไม่ได้ ({str(again)[:120]}) — "
+                        "ข้ามชีตนี้ รูปฉากของช่วงนี้จะวาดโดยไม่มีสตอรี่ชีต")
                     continue
             panels = [board_dir / f"panel_{i + 1:03d}.png" for i in grp]
             crop_board(sheet, len(grp), panels)
@@ -3479,6 +3477,7 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
         for scene in project.get("scenes") or []:
             if "storyboard" in redo:
                 scene.pop("board", None)
+                scene.pop("board_skipped", None)
             if "images" in redo:
                 for key in ("image", "bad", "error"):
                     scene.pop(key, None)

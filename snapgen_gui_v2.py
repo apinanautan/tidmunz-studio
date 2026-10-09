@@ -7786,6 +7786,28 @@ def _normalize_prompt_ref_ai_output(text, available_refs=None):
     return "\n\n".join(out).strip() + "\n"
 
 
+def _account_login_expired(account):
+    """Short reason when ChatGPT rejects this account's saved login (401), else ""."""
+    import urllib.error
+    body = {"model": "auto", "temporary_chat": True, "chatgpt_account": account,
+            "messages": [{"role": "user", "content": "ตอบคำเดียว: OK"}]}
+    request = urllib.request.Request(
+        _chatgpt_api_base() + "/chat/completions", data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
+        headers={"Authorization": "Bearer local-dev-key", "Content-Type": "application/json; charset=utf-8"},
+        method="POST")
+    try:
+        with urllib.request.urlopen(request, timeout=90) as response:
+            response.read()
+        return ""
+    except urllib.error.HTTPError as exc:
+        text = exc.read().decode("utf-8", errors="replace")
+        if "401" in text or "invalidated oauth" in text.lower():
+            return "401"
+        return ""
+    except Exception:
+        return ""  # Bridge busy or offline: not a login problem
+
+
 def _chatgpt_api_base():
     fn = g.get("_api_base")
     if callable(fn):
@@ -15365,7 +15387,19 @@ def _install_better_bridge_manager():
                                 "ย้ายงานมาที่ account ที่เลือกแล้ว: "
                                 + ", ".join(dict.fromkeys(rebound)),
                             )
-                        log_to(log_box, f"✅ ใช้ account แล้ว: {account}")
+                        dead = _account_login_expired(account)
+                        if dead:
+                            # Use only picks the account; a revoked ChatGPT login cannot be revived
+                            # from the saved capture, and Bridge would quietly fall back to another account.
+                            log_to(log_box, f"⚠ {account} ใช้ไม่ได้: ChatGPT ยกเลิกการล็อกอินของบัญชีนี้แล้ว ({dead}) "
+                                            "— งานจะไปใช้บัญชีอื่นแทน ต้องล็อกอินบัญชีนี้ใหม่ใน Bridge")
+                            root.after(0, lambda: messagebox.showwarning(
+                                "บัญชีนี้หลุดล็อกอิน",
+                                f"กด Use {account} แล้ว แต่ ChatGPT ยกเลิกการล็อกอินของ {account} ไปแล้ว\n"
+                                "(ข้อมูลล็อกอินที่เก็บไว้ใช้ไม่ได้อีก — ChatGPT ออกจากระบบให้เอง เช่น ล็อกอินที่อื่น "
+                                "เปลี่ยนรหัส หรือหมดอายุ)\n\nงานจะถูกส่งไปบัญชีอื่นแทน ถ้าจะใช้บัญชีนี้ต้องล็อกอินใหม่ใน Bridge"))
+                        else:
+                            log_to(log_box, f"✅ ใช้ account แล้ว: {account}")
                     def refresh_after_use():
                         try:
                             clear_cache = g.get("clear_bridge_account_cache")

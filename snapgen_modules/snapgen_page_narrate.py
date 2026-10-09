@@ -3292,7 +3292,8 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
         missing = sum(1 for s in scenes if not (s.get("image") and os.path.isfile(s["image"])))
         sheets = sum(1 for grp in board_groups(scenes, project.get("direction"))
                      if any(not (scenes[i].get("image") and os.path.isfile(scenes[i]["image"])) for i in grp)
-                     and not all(scenes[i].get("board") and os.path.isfile(scenes[i]["board"]) for i in grp))
+                     and not all(scenes[i].get("board") and os.path.isfile(scenes[i]["board"]) for i in grp)
+                     and not any(scenes[i].get("board_skipped") for i in grp))
         total = len(new_refs) + sheets + missing
         if total == 0:
             return True

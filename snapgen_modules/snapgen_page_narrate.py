@@ -859,7 +859,8 @@ def characters_needing_refs(context: dict, scenes: list) -> list:
 
 def character_description(character: dict) -> str:
     keys = ("อายุ", "เพศ", "รูปร่าง", "สีผิว", "ทรงผม", "ใบหน้า", "เสื้อผ้า", "ลักษณะเด่น", "visual_identity")
-    parts = [str(character.get(k) or "").strip() for k in keys]
+    # Context marks guessed details "(สมมุติเพื่อภาพ)"; the note itself is noise in a picture prompt.
+    parts = [str(character.get(k) or "").replace("(สมมุติเพื่อภาพ)", "").strip() for k in keys]
     return " ".join(p for p in parts if p and p not in ("ไม่ระบุ", "-"))
 
 
@@ -871,8 +872,9 @@ PACING_NOTE = (
     "ห้ามวาดคนเล่าเรื่อง/ผู้บรรยาย/เจ้าของช่อง ไมโครโฟน หรือห้องอัดเสียง — ช่วงเปิดเรื่อง ทักทาย หรือปิดท้าย "
     "ให้ใช้ภาพจากในเรื่องแทน: เปิดเรื่องเป็นภาพเหตุการณ์/สถานที่ที่ชวนสงสัยของเรื่อง ปิดท้ายเป็นภาพฉากสำคัญหรือภาพสรุปของเรื่อง. ")
 HORROR_NOTE = (
-    "เรื่องนี้เป็นเรื่องผี ต้องขายความสยอง: ใส่ภาพแทรกสร้างความหลอน เช่น เงาที่มุมห้อง มือโผล่ งูเลื้อยออกจากซอกมุม "
-    "ดวงตาในความมืด ประตูแง้มเอง และโคลสอัพสีหน้าตกใจ ในจุดที่บทกำลังเข้มข้น. ")
+    "เรื่องนี้เป็นเรื่องผี ต้องขายความสยอง: ใส่ภาพแทรกสร้างความหลอน เช่น เงาที่มุมห้อง ดวงตาในความมืด ประตูแง้มเอง "
+    "และโคลสอัพสีหน้าตกใจ ในจุดที่บทกำลังเข้มข้น — ภาพแทรกต้องมาจากผี สิ่งของ และสถานที่ที่มีในบทเท่านั้น "
+    "ห้ามเพิ่มสัตว์ ผีตัวอื่น หรือสิ่งที่บทไม่ได้พูดถึง (เช่น งู ถ้าบทไม่มีงู). ")
 
 
 def plan_request(window: list, count: int, names: list, previous: str, era: str, clip_seconds: float = 0,
@@ -1112,6 +1114,8 @@ CONTINUITY_RULES = (
     "ของตัวละครแต่ละตัว ที่ต้องเห็นต่อเนื่องในช็อตถัดๆ ไป เช่น บาดแผล (ตำแหน่งบนร่างกาย ขนาด) เลือด เกล็ด/เสื้อผ้าขาด "
     "ความเปียก ฝุ่นโคลน ความอ่อนแรง อวัยวะที่ขาดหรือพิการจากเหตุการณ์ในเรื่อง ร่างที่แปลงไป ของที่ถืออยู่. from_shot = ช็อตที่สภาพนั้นเริ่มเกิด, "
     "to_shot = ช็อตสุดท้ายที่ยังต้องเห็น (ถึงตอนจบเรื่องถ้าไม่หาย); ถ้าสภาพเปลี่ยนอีก (เช่น แผลหนักขึ้น แปลงร่าง) ให้เริ่มรายการใหม่. "
+    "ช็อตที่เล่าย้อนเหตุการณ์ก่อนสภาพนั้นจะเกิด (ภาพย้อนอดีต คนอื่นเล่าเหตุการณ์ก่อนหน้า) ต้องไม่อยู่ในช่วง from–to "
+    "ให้แยกเป็นหลายรายการเว้นช็อตนั้นไว้ เช่น คนที่ตายแล้วแต่ช็อตนี้เล่าตอนเขายังมีชีวิต ต้องเป็นร่างคนปกติ. "
     "character = ชื่อตัวละครตรงตามรายชื่อ. state = คำบรรยายภาพที่ต้องเห็นจริง สั้นและชัด (เช่น 'แผลฉีกยาวจากดาบที่ลำตัวด้านซ้าย "
     "เกล็ดสีนิลแตก มีเลือดซึม เคลื่อนไหวอ่อนแรง'). ")
 
@@ -2530,8 +2534,8 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
             fact = f"{name}" + (f" ({entry['kind']})" if entry.get("kind") else "") + f": {entry.get('body', '')}"
             if entry.get("moves"):
                 fact += f" — เคลื่อนไหว: {entry['moves']}"
-            if entry.get("forms"):
-                fact += f" — ร่างตามช่วงเรื่อง: {entry['forms']}"
+            # "forms" (e.g. a leg lost near the end) is not added here: every shot would show it from
+            # the start. The continuity record puts a change only on the shots after it happens.
             facts.append(fact)
             never.append(entry.get("negative"))
         if missing:
@@ -2547,7 +2551,8 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
         if project.get("bodies") is not None or state.get("bodies_failed"):
             return
         names = [c.get("name") for c in (project.get("context") or {}).get("characters", []) if c.get("name")]
-        names += [n for n in attachment_names() if n not in names]
+        if video_mode:  # เล่าภาพ never uses the Image AI attachment folder (it may hold another story)
+            names += [n for n in attachment_names() if n not in names]
         if not names:
             return
         ensure_story_in_history()
@@ -2629,7 +2634,8 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
         ensure_story_in_history()
         ensure_scene_text()
         names = [c.get("name") for c in (project.get("context") or {}).get("characters", []) if c.get("name")]
-        names += [n for n in attachment_names() if n not in names]
+        if video_mode:  # เล่าภาพ never uses the Image AI attachment folder (it may hold another story)
+            names += [n for n in attachment_names() if n not in names]
         reply = with_retries("บันทึกความต่อเนื่อง", lambda: parse_json_reply(
             chat(continuity_request(list(enumerate(scenes, 1)), names))))
         apply_continuity(scenes, reply.get("continuity"))

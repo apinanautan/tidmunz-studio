@@ -187,7 +187,8 @@ STAGES = (
     ("transcribe", "ฟังเสียง", 10),
     ("plan", "วางแผนฉาก", 10),
     ("characters", "รูปตัวละคร", 10),
-    ("images", "สร้างรูปฉาก", 50),
+    ("storyboard", "สตอรี่ชีต", 5),
+    ("images", "สร้างรูปฉาก", 45),
     ("video", "ตัดต่อ", 15),
 )
 # Slot 2 auto mode: the same pipeline, plus one AI video clip per scene.
@@ -201,6 +202,10 @@ VIDEO_STAGES = (
     ("clips", "สร้างคลิปวิดีโอ", 45),
     ("video", "ตัดต่อ", 10),
 )
+# Every plan, storyboard and fix: the picture shows only what the script says at that moment.
+SCOPE_RULE = ("ขอบเขต (ห้ามออกนอกบท): ภาพต้องแสดงเฉพาะสิ่งที่คำบรรยาย/บทช่วงนั้นพูดถึง — ตัวละคร สถานที่ เวลา "
+              "เหตุการณ์ และสิ่งของตามบทเท่านั้น ห้ามแต่งเหตุการณ์ คน สัตว์ สิ่งของ หรือสถานที่ที่บทไม่ได้กล่าวถึง "
+              "ห้ามข้ามไปเล่าเหตุการณ์ของช่วงอื่นของเรื่อง ถ้าบทไม่ได้บอกรายละเอียด ให้เลือกแบบเรียบง่ายที่สอดคล้องกับบท. ")
 # ออโต้ writes each clip's video prompt from this many finished pictures per GPT look.
 MOTION_BATCH = 4
 # Slot 2 ออโต้ makes a film: pictures must look like live-action footage, never drawn.
@@ -877,7 +882,7 @@ def plan_request(window: list, count: int, names: list, previous: str, era: str,
         f"วางแผนภาพประกอบเสียงบรรยายช่วง {fmt_time(window[0]['start'])}–{fmt_time(window[-1]['end'])} "
         f"ประมาณ {count} ภาพ จากประโยคที่ถอดจากเสียงพร้อมเวลาเริ่ม (วินาที) ด้านล่าง. "
         "เลือกจุดเปลี่ยนภาพที่เหตุการณ์ สถานที่ หรือผู้พูดเปลี่ยน ภาพติดกันห้ามซ้ำมุมกล้องเดิม. "
-        + PACING_NOTE + (HORROR_NOTE if horror else "") +
+        + PACING_NOTE + (HORROR_NOTE if horror else "") + SCOPE_RULE +
         f"ยุค/บรรยากาศ: {era}. ตัวละครที่ใช้ได้ (ใช้ชื่อตรงตัวเท่านั้น): {', '.join(names) or '-'}. "
         + (f"ภาพก่อนหน้าคือ: {previous}. " if previous else "")
         + "ตอบ JSON เท่านั้น: {\"scenes\":[{\"start\":0.0,\"characters\":[],\"location\":\"\",\"prompt\":\"\",\"motion\":\"\",\"highlight\":false}]} "
@@ -1191,9 +1196,12 @@ def crop_board(sheet_path, count: int, out_paths: list, inset: float = 0.03) -> 
             sheet.crop(box).save(out_paths[k])
 
 
-def board_request(numbered: list, aspect: str) -> str:
-    """One storyboard sheet: a 3 x 3 grid, panel k = the k-th listed shot, in story order."""
-    shape = "แนวตั้ง 9:16" if aspect == "9:16" else "แนวนอน 16:9"
+def board_request(numbered: list, aspect: str, live_action: bool = True) -> str:
+    """One storyboard sheet: a 3 x 3 grid, panel k = the k-th listed shot, in story order.
+
+    ``live_action`` False (เล่าภาพ): the sheet follows the story's chosen style instead of film realism.
+    """
+    shape = {"9:16": "แนวตั้ง 9:16", "1:1": "สี่เหลี่ยมจัตุรัส 1:1"}.get(aspect, "แนวนอน 16:9")
     lines = "\n".join(
         f"ช่อง {k}: ช็อต {n} — {str(s.get('prompt') or '')[:260]}"
         + (f" | สภาพต่อเนื่อง: {s['continuity']}" if s.get("continuity") else "")
@@ -1204,7 +1212,9 @@ def board_request(numbered: list, aspect: str) -> str:
         f"แต่ละช่องเป็นภาพ{shape} คั่นด้วยเส้นขาวบางๆ เรียงช่องจากซ้ายไปขวา บนลงล่าง ตามลำดับช็อตด้านล่าง "
         "ทุกช่องเป็นช็อตต่อเนื่องของหนังเรื่องเดียวกัน: ตัวละครหน้าตาเหมือนกันทุกช่อง สภาพตัวละคร (บาดแผล เลือด ความเปียก ร่างที่เปลี่ยน) "
         "ต่อเนื่องจากช่องก่อน แสงและโทนสีต่อเนื่องกัน ทิศทางจอสอดคล้องกัน. "
-        "ภาพสมจริงแบบภาพนิ่งจากภาพยนตร์ไลฟ์แอ็กชัน ไม่ใช่การ์ตูน ไม่มีตัวหนังสือ ไม่มีตัวเลขในภาพ. "
+        + ("ภาพสมจริงแบบภาพนิ่งจากภาพยนตร์ไลฟ์แอ็กชัน ไม่ใช่การ์ตูน ไม่มีตัวหนังสือ ไม่มีตัวเลขในภาพ. " if live_action
+           else "ทุกช่องใช้สไตล์ภาพเดียวกันตามที่ระบุท้ายคำสั่ง ไม่มีตัวหนังสือ ไม่มีตัวเลขในภาพ. ")
+        + SCOPE_RULE
         + (f"ช่องท้ายสุด {empty} ช่องที่ไม่มีช็อต ให้เป็นสีดำล้วน. " if empty > 0 else "")
         + "รูปที่แนบมาใช้เป็นหน้าตา/รูปร่างของตัวละครและสถานที่เท่านั้น.\n\n" + lines
     )
@@ -1953,7 +1963,9 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
             prompt += (
                 "\n\nImage 1 is the STORYBOARD PANEL of this shot: follow its composition, camera angle, framing, "
                 "character positions, action and each character's condition (wounds, blood, wet, transformed) exactly, "
-                "but redraw it as a full-resolution photorealistic live-action film frame with real detail. "
+                + ("but redraw it as a full-resolution photorealistic live-action film frame with real detail. "
+                   if video_mode else "but redraw it as a full-resolution finished picture in the style stated above. ")
+                +
                 "No panel borders, no shot numbers, no text."
                 + ("\nOther attached images are ONLY each character's identity (face, body, outfit):\n"
                    + "\n".join(f"Image {i}: {Path(p).stem}" for i, p in enumerate(refs[1:], 2)) if len(refs) > 1 else ""))
@@ -2375,7 +2387,9 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
         bodies, forbid = shot_bodies(scene)
         body_note = (f"\nร่างกายที่ถูกต้อง (ห้ามผิด): {bodies}" if bodies else "") + \
                     (f"\nสิ่งที่ห้ามมีในภาพ: {forbid}" if forbid else "")
-        return (f"{scene['prompt']}{location}" + (f"\nตัวละครในภาพ — {who}" if who else "") + state_note + ghost_note
+        narration = (f"\nภาพนี้ประกอบคำบรรยายช่วงนี้เท่านั้น (ห้ามเพิ่มสิ่งที่บทไม่ได้พูดถึง): {scene['text']}"
+                     if not video_mode and scene.get("text") else "")
+        return (f"{scene['prompt']}{location}" + narration + (f"\nตัวละครในภาพ — {who}" if who else "") + state_note + ghost_note
                 + body_note + f"\n{style_text()}")
 
     def shot_bodies(scene):
@@ -2445,8 +2459,21 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
         details = {c.get("name"): character_description(c) for c in context.get("characters", [])}
         return "; ".join(f"{n}: {details.get(n, '')}".rstrip(": ") for n in scene.get("characters") or [])
 
+    def ensure_scene_text():
+        """เล่าภาพ plans keep only start times: give each picture the narration it covers (once)."""
+        scenes = state["project"].get("scenes") or []
+        transcript = Path(state["folder"]) / "transcript.json"
+        if not scenes or any(sc.get("text") for sc in scenes) or not transcript.is_file():
+            return
+        segments = json.loads(transcript.read_text(encoding="utf-8"))
+        ends = [sc["start"] for sc in scenes[1:]] + [float("inf")]
+        for sc, end in zip(scenes, ends):
+            sc["text"] = " ".join(s["text"] for s in segments if sc["start"] <= s["start"] < end)[:400]
+        save_project()
+
     def story_anchor(index) -> str:
         """What this shot is in the story: narration, people, continuity, neighbours — keeps redraws on the script."""
+        ensure_scene_text()
         scenes = state["project"]["scenes"]
         scene = scenes[index]
         rows = [f"ช็อต {index + 1} ของเรื่อง — คำบรรยาย: {scene.get('text') or '-'}"]
@@ -2477,13 +2504,7 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
             return
         set_progress("plan", 1.0, "GPT กำลังทำบันทึกความต่อเนื่อง (บาดแผล เลือด ร่างที่เปลี่ยน) ของทั้งเรื่อง ...")
         ensure_story_in_history()
-        transcript = Path(state["folder"]) / "transcript.json"
-        if not any(sc.get("text") for sc in scenes) and transcript.is_file():
-            # เล่าภาพ plans keep only start times: give each picture its narration for the record.
-            segments = json.loads(transcript.read_text(encoding="utf-8"))
-            ends = [sc["start"] for sc in scenes[1:]] + [float("inf")]
-            for sc, end in zip(scenes, ends):
-                sc["text"] = " ".join(s["text"] for s in segments if sc["start"] <= s["start"] < end)[:400]
+        ensure_scene_text()
         names = [c.get("name") for c in (project.get("context") or {}).get("characters", []) if c.get("name")]
         names += [n for n in attachment_names() if n not in names]
         reply = with_retries("บันทึกความต่อเนื่อง", lambda: parse_json_reply(
@@ -2509,6 +2530,7 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
         scenes = project["scenes"]
         board_dir = Path(state["folder"]) / "storyboard"
         board_dir.mkdir(exist_ok=True)
+        people = {} if video_mode else character_refs()  # เล่าภาพ: the story's own character pictures
         groups = [grp for grp in board_groups(scenes, project.get("direction"))
                   if any(not (scenes[i].get("image") and os.path.isfile(scenes[i]["image"])) for i in grp)]
         groups = [grp for grp in groups if not all(scenes[i].get("board") and os.path.isfile(scenes[i]["board"]) for i in grp)]
@@ -2521,10 +2543,13 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
             set_progress("storyboard", (k - 1) / len(groups), f"วาดสตอรี่ชีต {k}/{len(groups)} (ช็อต {first}–{last})")
             refs = []
             for i in grp:
-                refs += [p for p in attachments_for(scenes[i]) if p not in refs]
+                found = (attachments_for(scenes[i]) if video_mode else
+                         [people[c] for c in scenes[i].get("characters") or [] if c in people])
+                refs += [p for p in found if p not in refs]
             name = f"sheet_{first:03d}-{last:03d}"
             sheet = with_retries(f"สตอรี่ชีต ช็อต {first}–{last}", lambda grp=grp, refs=refs, name=name: make_image(
-                board_request([(i + 1, scenes[i]) for i in grp], project["aspect"]) + "\n" + style_text(),
+                board_request([(i + 1, scenes[i]) for i in grp], project["aspect"], live_action=video_mode)
+                + "\n" + style_text(),
                 refs[:6], board_dir, name, project["aspect"]))
             panels = [board_dir / f"panel_{i + 1:03d}.png" for i in grp]
             crop_board(sheet, len(grp), panels)
@@ -2562,7 +2587,7 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
             else:
                 ref_paths = [refs[c] for c in scene.get("characters") or [] if c in refs][:4]
             try:
-                board = scene.get("board") if video_mode and scene.get("board") and os.path.isfile(scene["board"]) else None
+                board = scene.get("board") if scene.get("board") and os.path.isfile(scene["board"]) else None
                 scene["image"] = with_retries(f"ฉาก {i + 1}", lambda: make_image(
                     scene_prompt(scene), ref_paths, images_dir, f"scene_{i + 1:03d}", project["aspect"], board=board))
                 if ref_paths and looks_like_reference_sheet(scene["image"]):
@@ -2633,7 +2658,7 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
             "เขียน prompt ใหม่ภาษาไทยให้สร้างรูปได้ โดยยังเป็นช็อตเดิมของเรื่องเดิม: ตัวละครเดิม (หน้าตา รูปร่าง ชุด) "
             "สถานที่เดิม เหตุการณ์เดิมตามคำบรรยาย และต่อเนื่องกับช็อตก่อน/หลัง — ห้ามเปลี่ยนเป็นเรื่องอื่น ห้ามแปลงร่างตัวละคร "
             "ห้ามเพิ่มตัวละครใหม่ คงองค์ประกอบ มุมกล้อง และตำแหน่งตัวละครเดิม (ตามสตอรี่บอร์ด) "
-            "แก้เฉพาะวิธีเล่าภาพที่ทำให้ถูกปฏิเสธ. หลักการ: "
+            "แก้เฉพาะวิธีเล่าภาพที่ทำให้ถูกปฏิเสธ. " + SCOPE_RULE + "หลักการ: "
             "ถ้ามีเด็ก ห้ามให้เด็กดูตกอยู่ในอันตรายหรือถูกคุกคาม — ให้สิ่งน่ากลัวอยู่ห่าง เห็นแค่บางส่วน ถ่ายเด็กจากด้านหลังหรือไกลๆ "
             "อารมณ์เด็กเป็นสงสัย/ชะงักแทนหวาดกลัว หรือทำเป็นภาพแทรกที่ไม่มีเด็กในเฟรม; "
             "ความรุนแรง เลือด บาดแผล ให้เปลี่ยนเป็นนัยหรือเอฟเฟกต์ภาพยนตร์; ฉากและชุดเป็นแบบไทย; ภาพเดียวเต็มเฟรม ไม่มีตัวหนังสือ; "
@@ -3230,8 +3255,12 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
                 f"   {clip_summary(todo)}\n   (สโลว์×2 = ทำ AI Slow 2x หลังได้คลิป)\n\nเริ่มเลยไหม?")
         new_refs = [(c, n) for c, n in characters_needing_refs(project.get("context") or {}, project.get("scenes") or [])
                     if c["name"] not in existing]
-        missing = sum(1 for s in project.get("scenes") or [] if not (s.get("image") and os.path.isfile(s["image"])))
-        total = len(new_refs) + missing
+        scenes = project.get("scenes") or []
+        missing = sum(1 for s in scenes if not (s.get("image") and os.path.isfile(s["image"])))
+        sheets = sum(1 for grp in board_groups(scenes, project.get("direction"))
+                     if any(not (scenes[i].get("image") and os.path.isfile(scenes[i]["image"])) for i in grp)
+                     and not all(scenes[i].get("board") and os.path.isfile(scenes[i]["board"]) for i in grp))
+        total = len(new_refs) + sheets + missing
         if total == 0:
             return True
         people = "\n".join(f"   • {c['name']} — อยู่ใน {n} ฉาก" for c, n in new_refs[:20]) or "   (มีครบแล้ว)"
@@ -3245,6 +3274,7 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
             f"วางแผนเสร็จแล้ว จะสร้างรูปทั้งหมด {total} รูป\n\n"
             f"รูปตัวละคร {len(new_refs)} รูป (เฉพาะตัวละครที่ปรากฏในฉาก):\n{people}\n"
             + (f"   ไม่ทำรูปให้กลุ่มคน: {', '.join(groups)}\n" if groups else "")
+            + (f"\nสตอรี่ชีต {sheets} รูป (ชีตละ 9 ฉาก ให้ภาพติดกันต่อเนื่อง)" if sheets else "")
             + f"\nรูปฉาก {missing} รูป (เปลี่ยนภาพเฉลี่ยทุก {project['duration'] / max(1, len(project.get('scenes') or [1])):.0f} วินาที)\n"
             + (f"คลิปวิดีโอ {sum(1 for x in project.get('scenes') or [] if not (x.get('clip') and os.path.isfile(x['clip'])))} คลิป "
                f"ด้วย {project.get('video_model')} คลิปละ {project.get('clip_seconds'):g} วินาที (ใช้เครดิตวิดีโอตามโมเดล)\n"
@@ -3503,8 +3533,9 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
             "(เช่น พญานาคถือดาบ → ฟาดหาง ฉกด้วยเขี้ยว); ใช้การเคลื่อนไหวน้อยลงและชัดขึ้น 1 อย่าง; "
             "3) forbid = รายการสิ่งที่ห้ามปรากฏเด็ดขาดตลอดคลิป สั้นๆ คั่นด้วยจุลภาค ระบุเจ้าของเสมอ เพราะคนในเฟรมยังต้องมีมือ "
             "(เช่น มือบนตัวพญานาค, ขาบนตัวพญานาค, พญานาคถืออาวุธ — ห้ามเขียนแค่ 'มือ' เฉยๆ); "
-            "ภาพสมจริงแบบภาพยนตร์ ไม่มีตัวหนังสือ. "
-            "ตอบ JSON เท่านั้น {\"prompt\":\"\",\"video_prompt\":\"\",\"forbid\":\"\",\"change\":\"\"} "
+            "4) " + SCOPE_RULE + "แก้เฉพาะปัญหาที่แจ้ง ห้ามเปลี่ยนเรื่องหรือเพิ่มสิ่งใหม่ที่บทไม่มี; "
+            + ("ภาพสมจริงแบบภาพยนตร์ ไม่มีตัวหนังสือ. " if video_mode else "คงสไตล์ภาพเดิมของเรื่อง ไม่มีตัวหนังสือ. ")
+            + "ตอบ JSON เท่านั้น {\"prompt\":\"\",\"video_prompt\":\"\",\"forbid\":\"\",\"change\":\"\"} "
             "prompt = ภาพแรกของช็อต (ใช้เมื่อวาดภาพใหม่), video_prompt = การเคลื่อนไหวตลอดคลิป, change = สรุปสั้นๆ ว่าแก้อะไร.\n\n"
             f"{story_anchor(index)}\n"
             f"prompt เดิม: {scene.get('prompt', '')}\n"

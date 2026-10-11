@@ -1354,8 +1354,8 @@ def motion_request(items: list, era: str, horror: bool = False) -> str:
             rows.append(f"แผนการเคลื่อนไหวเดิม (ร่างก่อนมีรูป): {it['planned']}")
         if it.get("continuity"):
             rows.append(f"สภาพต่อเนื่องที่ต้องคงไว้: {it['continuity']}")
-        if it.get("dialogue"):
-            rows.append(f"บทพูด: {it['dialogue']}")
+        # Always stated: a shot without a script line is silent, so the writer never invents speech.
+        rows.append(f"บทพูด: {it['dialogue']}" if it.get("dialogue") else "บทพูด: ไม่มีบทพูด — ห้ามใครพูดหรือขยับปาก")
         if it.get("bodies"):
             rows.append(f"ร่างกาย: {it['bodies']}")
         if it.get("notes"):
@@ -1375,6 +1375,9 @@ def motion_request(items: list, era: str, horror: bool = False) -> str:
         "ห้ามเขียนแค่ 'ต่อสู้กัน'; "
         "[ร่างกาย] ทุกตัวในเฟรม (คน สัตว์ สิ่งมีชีวิตในตำนาน ผี หุ่น) ขยับได้เฉพาะแบบที่ร่างกายของตัวนั้นทำได้จริงตาม 'ร่างกาย' "
         "ที่ให้ไว้ — ตัวที่ไม่มีมือ/ขาห้ามทำท่าที่ต้องใช้มือ/ขา, สัตว์สี่ขาเดินสี่ขา, คนมี 2 แขน 2 ขา มือละ 5 นิ้ว; "
+        "[บทพูด] เขียนทุกช็อต: 'ไม่มีบทพูด — ทุกคนปากปิด' หรือ 'มีบทพูด: ชื่อ พูดว่า …' ตามข้อมูลบทพูดของช็อตนั้นเท่านั้น; "
+        "[การหันหน้า] เขียนทุกช็อตจากรูปจริง: แต่ละคนหันหน้าเข้ากล้อง หันข้าง หรือหันหลัง และคงทิศนั้นตลอดคลิป "
+        "(คนที่หันหลังห้ามหันหน้ามา); "
         "[กล้อง] ขนาดภาพ มุม และการเคลื่อนกล้อง (นิ่ง/ดอลลี่/แพน/แทร็ก/ถือกล้อง); "
         "[บรรยากาศ] สิ่งรอบตัวที่ขยับ (น้ำ ลม ฝุ่น ไฟ ผม ผ้า) แสงและอารมณ์. "
         "anatomy = เฉพาะเรื่องร่างกายที่ต้องระวังในเฟรมนี้ (ท่าตอนเริ่ม ส่วนที่เห็น/ถูกบัง ส่วนที่ต้องขยับ) "
@@ -3341,12 +3344,11 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
         anatomy = "; ".join(x for x in (bodies, f"ในช็อตนี้: {note}" if note and note[:40] not in bodies else "") if x)
         if anatomy:  # stated early: video models weigh the opening words most
             prompt = f"ร่างกายที่ต้องคงไว้ตลอดคลิป: {anatomy}\n{prompt}"
-        prompt = ONE_SHOT_RULE + "\n" + prompt
-        if scene.get("dialogue"):
-            prompt += (f"\n{scene['dialogue']} พูดว่า “{scene.get('line', '')}” ขยับปากพูดด้วยความเร็วปกติตลอดคลิป "
-                       "ไม่มีตัวหนังสือในภาพ ตัวละครหน้าตาเหมือนในภาพเริ่มต้นตลอดคลิป")
-        else:
-            prompt += f"\n{NO_TALK_LINE}\nไม่มีตัวหนังสือในภาพ ตัวละครหน้าตาเหมือนในภาพเริ่มต้นตลอดคลิป"
+        # Speech is stated at the top of every request, both ways: video models weigh the opening lines most.
+        speech = (f"[บทพูด] มีบทพูด: {scene['dialogue']} พูดว่า “{scene.get('line', '')}” ขยับปากพูดด้วยความเร็วปกติ "
+                  "คนอื่นในเฟรมไม่พูด" if scene.get("dialogue") else f"[บทพูด] {NO_TALK_LINE}")
+        prompt = ONE_SHOT_RULE + "\n" + speech + "\n" + prompt
+        prompt += "\nไม่มีตัวหนังสือในภาพ ตัวละครหน้าตาเหมือนในภาพเริ่มต้นตลอดคลิป"
         opening = str(scene.get("video_prompt") or scene.get("prompt") or "")
         if any(word in opening for word in BACK_TURNED_WORDS):
             prompt += ("\nคนที่หันหลังให้กล้องในภาพเริ่มต้นต้องหันหลังตลอดคลิป ห้ามหันหน้ามาทางกล้อง "

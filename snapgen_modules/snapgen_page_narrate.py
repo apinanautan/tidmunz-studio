@@ -1386,7 +1386,8 @@ def motion_request(items: list, era: str, horror: bool = False) -> str:
         + (HORROR_NOTE if horror else "")
         + f"ยุค/บรรยากาศ: {era}. "
         "ตอบ JSON เท่านั้น: {\"shots\":[{\"shot\":1,\"seen\":\"\",\"video_prompt\":\"\",\"anatomy\":\"\",\"negative\":\"\"}]} "
-        "seen = สิ่งที่เห็นในรูปสั้นๆ.\n\n"
+        "seen = สิ่งที่เห็นในรูปจริงตามตาเห็น (ไม่ใช่ตามบท) 1–2 ประโยค: มีใครบ้าง อยู่ตรงไหน หันหน้า/หันข้าง/หันหลัง "
+        "ทำอะไร ถืออะไร มุมกล้อง สถานที่ — ใช้ตรวจว่าคำสั่งตรงกับรูปก่อนส่งเจน.\n\n"
         + "\n\n".join(blocks)
     )
 
@@ -1462,6 +1463,10 @@ PROMPT_CHECK = (
     "ซึ่งถูกบรรยายไว้ในส่วน [เปิดภาพ] ของคำสั่ง). "
     "AI วิดีโอทำทุกอย่างที่อ่านเจอ: ถ้าคำสั่งเอ่ยถึงกิจกรรม สถานที่ หรือเหตุการณ์อื่น มันจะตัดฉากไปทำสิ่งนั้นเองกลางคลิป. "
     "ตรวจคำสั่งทั้งหมดด้านล่าง (ทุกบรรทัด รวมบรรทัดร่างกาย ความต่อเนื่อง และ Negative) ตามเช็กลิสต์: "
+    "0) [เปิดภาพ] ต้องตรงกับ 'ภาพเริ่มต้นจริง' ในข้อมูลช็อต (คน จำนวนคน หันหน้า/หันข้าง/หันหลัง สิ่งที่ถือ มุมกล้อง สถานที่) "
+    "— ถ้าไม่ตรง เช่น คำสั่งบอกหันหลังแต่ในรูปหันข้าง หรือบอกว่าถือของที่ในรูปไม่มี ถือว่าไม่ผ่านร้ายแรง "
+    "ให้เขียนคำสั่งใหม่ทั้งหมดจาก 'ภาพเริ่มต้นจริง' + คำบรรยายของช็อตนี้ "
+    "(AI วิดีโอเห็นรูปจริง ถ้าคำสั่งบรรยายรูปอื่น มันจะเปลี่ยนคน/ฉากกลางคลิปเพื่อให้ตรงคำสั่ง); "
     "1) เป็นช็อตเดียวต่อเนื่อง สถานที่เดียว เวลาเดียว ตรงกับภาพเริ่มต้น; "
     "2) ทุกการกระทำมาจากคำบรรยายของช็อตนี้ ไม่มีกิจกรรม เหตุการณ์ หรือคนจากช่วงอื่นของเรื่อง (เช่น ทำไร่ อุ้มลูก ฟันไม้ ถ้าช็อตนี้ไม่ได้เล่า); "
     "3) ตัวละครและตำแหน่งตรงกับ [เปิดภาพ] และรายชื่อตัวละครของช็อต; "
@@ -3260,7 +3265,7 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
                 "bodies": bodies, "notes": "; ".join(scene.get("fix_notes") or [])})
         return items
 
-    def stage_motion(indices=None):
+    def stage_motion(indices=None, force=False):
         """After the pictures: GPT looks at each finished first frame with the script and writes its video prompt.
 
         A shot is written again only when its picture changed since (or never had one).
@@ -3271,7 +3276,7 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
         pool = indices if indices is not None else [
             i for i, sc in enumerate(scenes) if not (sc.get("clip") and os.path.isfile(sc["clip"]))]
         todo = [i for i in pool if scenes[i].get("image") and os.path.isfile(scenes[i]["image"])
-                and scenes[i].get("motion_image") != file_digest(scenes[i]["image"])]
+                and (force or scenes[i].get("motion_image") != file_digest(scenes[i]["image"]))]
         if not todo:
             return
         ensure_story_in_history()
@@ -3317,6 +3322,8 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
                 scene["video_prompt"] = prompt
                 scene["anatomy"] = str(item.get("anatomy") or "").strip()
                 scene["forbid"] = merge_forbid(scene.get("forbid"), item.get("negative"), item.get("forbid"))
+                # What GPT saw in the real first frame: the checker compares the request against it.
+                scene["seen"] = str(item.get("seen") or "").strip() if not state.get("motion_text_only") else ""
                 scene["motion_image"] = file_digest(scene["image"])
             missed = [i + 1 for i in batch if scenes[i].get("motion_image") != file_digest(scenes[i]["image"])]
             if missed:
@@ -3381,8 +3388,10 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
             try:
                 # Text only: every attached picture uses ChatGPT's file-upload quota (80 per few hours),
                 # which the story's own pictures need.
-                reply = gpt_look(PROMPT_CHECK.format(seconds=scene.get("clip_seconds") or "", anchor=story_anchor(index),
-                                                     request=clip_prompt(scene)))
+                seen = (f"\nภาพเริ่มต้นจริง (บรรยายโดยผู้ที่ดูรูปนี้แล้ว): {scene['seen']}" if scene.get("seen")
+                        else "\nภาพเริ่มต้นจริง: ไม่มีคำบรรยายจากรูป — ใช้คำสั่งรูป: " + str(scene.get("prompt") or "")[:300])
+                reply = gpt_look(PROMPT_CHECK.format(seconds=scene.get("clip_seconds") or "",
+                                                     anchor=story_anchor(index) + seen, request=clip_prompt(scene)))
             except (Stopped, HistoryLost, RateLimited):
                 raise
             except Exception as exc:
@@ -3556,6 +3565,12 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
         before = {str(f): f.stat().st_mtime for f in out_dir.glob("*.mp4")} if out_dir.is_dir() else {}
         started = time.time()
         errors = []
+        if not scene.get("seen") and not state.get("motion_text_only"):
+            # Written before the request was tied to its own picture (shots used to share one GPT look):
+            # look at this shot's real first frame once, so the checker can compare against it.
+            log(f"ช็อต {index + 1}: เขียนพรอมต์วิดีโอใหม่จากรูปจริงของช็อตนี้ก่อนตรวจ")
+            scene.pop("prompt_review", None)
+            stage_motion([index], force=True)
         review_clip_prompt(scene, index)  # checker 1: a second GPT passes or rewrites the request first
         prompt = clip_prompt(scene)
         review = scene.get("prompt_review") or {}

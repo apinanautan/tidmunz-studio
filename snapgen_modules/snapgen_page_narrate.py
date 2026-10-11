@@ -3069,6 +3069,37 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
         raise RuntimeError(f"รูปฉาก {', '.join(map(str, left))} ยังใช้ไม่ได้หลังเจนใหม่ {rounds} รอบ — "
                            "เลือกฉากแล้วกดสร้างรูปใหม่ หรือกดเริ่มอีกครั้ง")
 
+    def relink_or_report_missing_clips(scenes, folder):
+        """Before cutting: every shot needs a clip. Clips still in clips/ but no longer linked
+        (e.g. after "redo from stage") can be used again if the user says so."""
+        missing = [i for i, sc in enumerate(scenes) if not (sc.get("clip") and os.path.isfile(sc["clip"]))]
+        if not missing:
+            return
+        clips_dir = folder / "clips"
+        found = {}
+        for i in missing:
+            for name in (f"clip_{i + 1:03d}_สโลว์.mp4", f"clip_{i + 1:03d}.mp4"):
+                if (clips_dir / name).is_file():
+                    found[i] = clips_dir / name
+                    break
+        if found and ask_on_ui(
+                "ใช้คลิปเดิมไหม?",
+                f"ช็อต {', '.join(str(i + 1) for i in sorted(found))} ยังไม่ได้ผูกคลิปกับโปรเจกต์ "
+                "แต่ยังมีไฟล์คลิปเดิมอยู่ในโฟลเดอร์ clips\n\nใช้คลิปเดิมเหล่านี้ตัดต่อไหม?\n"
+                "(ตอบ 'ไม่' = หยุด แล้วกด ▶ ทำต่อ เพื่อเจนช็อตเหล่านี้ใหม่)"):
+            for i, path in found.items():
+                scenes[i]["clip"] = str(path)
+                scenes[i]["clip_slow"] = path.stem.endswith("_สโลว์")
+                for key in ("clip_review", "clip_use_until", "clip_cuts", "clip_error"):
+                    scenes[i].pop(key, None)
+            save_project()
+            ui(refresh_table)
+            log(f"ใช้คลิปเดิม: ช็อต {', '.join(str(i + 1) for i in sorted(found))}")
+            missing = [i for i in missing if i not in found]
+        if missing:
+            raise RuntimeError(f"ยังไม่มีคลิปช็อต {', '.join(str(i + 1) for i in missing[:20])} — "
+                               "กด ▶ ทำต่อ เพื่อเจนคลิปที่ขาดก่อน แล้วค่อยตัดต่อ")
+
     def stage_video():
         if not state["project"].get("images_verified"):
             verify_images()
@@ -3076,6 +3107,8 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
         ffmpeg = ffmpeg_path()
         width, height = SIZES.get(project["aspect"], SIZES["16:9"])
         scenes = project["scenes"]
+        if video_mode:
+            relink_or_report_missing_clips(scenes, folder)
         work = folder / "_render"
         shutil.rmtree(work, ignore_errors=True)
         work.mkdir()

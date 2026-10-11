@@ -3625,11 +3625,22 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
         import ai_slow2x
         scenes = project.get("scenes") or []
         chosen = sorted(int(i) for i in table.selection())
-        pool = [i for i in (chosen or range(len(scenes)))
-                if scenes[i].get("clip_slow") and scenes[i].get("clip") and normal_clip_of(scenes[i], i)]
-        if not pool:
-            messagebox.showinfo("ทำสโลว์ใหม่", "ไม่มีช็อตสโลว์ที่มีไฟล์ความเร็วปกติ (clip_XXX_ปกติ.mp4) ให้ทำใหม่", parent=page)
+        slow_shots = [i for i in range(len(scenes))
+                      if scenes[i].get("clip_slow") and scenes[i].get("clip") and normal_clip_of(scenes[i], i)]
+        if not slow_shots:
+            messagebox.showinfo("ทำสโลว์ใหม่", "โปรเจกต์นี้ไม่มีช็อตสโลว์ที่มีไฟล์ความเร็วปกติ (clip_XXX_ปกติ.mp4) ให้ทำใหม่", parent=page)
             return
+        pool = [i for i in chosen if i in slow_shots]
+        if chosen and not pool:
+            # A row picked just to look at it is still selected: say so instead of "nothing to do".
+            if not messagebox.askyesno(
+                    "ทำสโลว์ใหม่", f"ช็อตที่เลือก ({', '.join(str(i + 1) for i in chosen)}) ไม่ใช่ช็อตสโลว์\n"
+                    f"ช็อตสโลว์ในเรื่องนี้: {', '.join(str(i + 1) for i in slow_shots)}\n\n"
+                    "ตรวจช็อตสโลว์ทั้งหมดแล้วทำใหม่เฉพาะที่เป็นลายเส้นแทนไหม?", parent=page):
+                return
+            chosen = []
+        if not chosen:
+            pool = slow_shots
         free = ai_slow2x._free_vram_mb()
         vram = f"\n\nการ์ดจอว่างตอนนี้ {free:,} MB" if free is not None else ""
         if free is not None and free < ai_slow2x.LOW_VRAM_MB:

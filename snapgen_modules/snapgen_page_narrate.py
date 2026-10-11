@@ -1365,6 +1365,7 @@ def motion_request(items: list, era: str, horror: bool = False) -> str:
         "video_prompt เขียนเป็นหัวข้อตามลำดับนี้ทุกช็อต: "
         "[เปิดภาพ] ตรงกับที่เห็นจริงในรูป: ใครอยู่ตรงไหนของจอ หันทางไหน ท่าทางตอนเริ่ม ฉากหลัง แสง — คลิปเริ่มจากภาพนี้พอดี "
         "ห้ามเปลี่ยนองค์ประกอบ มุมกล้อง หรือตำแหน่งตัวละครไปจากภาพนี้; "
+        + BACK_TURNED_RULE + NO_TALK_RULE +
         "[จังหวะ] แบ่งตามเวลาให้เต็มความยาวคลิป เช่น '0–2 วิ: … / 2–5 วิ: … / 5–8 วิ: …' "
         "การกระทำต้องเล่าเหตุการณ์ของคำบรรยายช็อตนี้ ต่อจากช็อตก่อน และพาไปสู่ช็อตถัดไป มีการกระทำหลัก 1 อย่างที่เห็นชัด "
         "บอกว่าใครทำอะไร ด้วยส่วนไหนของร่างกาย ไปทางไหน (ซ้าย/ขวา/เข้าหากล้อง) และผลที่เกิด; "
@@ -1439,6 +1440,17 @@ ONE_SHOT_RULE = ("ช็อตเดียวต่อเนื่องตล�
                  "เริ่มจากภาพเริ่มต้นและอยู่ในฉากนั้นจนจบคลิป ห้ามตัดฉาก ห้ามตัดไปช็อตอื่น ห้ามเปลี่ยนสถานที่ "
                  "ห้ามเพิ่มคนหรือกิจกรรมที่ไม่ได้สั่ง ทำเฉพาะการกระทำที่เขียนไว้ด้านล่าง.")
 CONTINUITY_VERSION = 2  # rules changed: records made before this are built again (text only)
+# Someone seen from behind in the first frame has no face there: when AI video turns them round
+# it invents a face that is not the character's.
+BACK_TURNED_RULE = ("คนที่หันหลังให้กล้องในภาพเริ่มต้น (เห็นแผ่นหลัง ท้ายทอย หรือเป็นไหล่ในมุมข้ามไหล่) ให้เขียนชื่อไว้ใน [เปิดภาพ] "
+                    "ว่าหันหลัง และใน [จังหวะ] ว่าคงหันหลังให้กล้องตลอดคลิป ห้ามหันหน้ามาทางกล้อง (หน้าจะไม่ตรงกับตัวละคร); ")
+# Narration stories: only a script line `ชื่อ : “…”` is speech; everyone else stays silent on screen.
+NO_TALK_RULE = ("ช็อตที่ไม่มีบทพูด ห้ามเขียนให้ใครพูด เปิดปากพูด คุยกัน หรือตะโกน — สื่อด้วยสีหน้า สายตา และท่าทางแทน "
+                "(เขียน 'นั่งฟังกันเงียบๆ' แทน 'นั่งพูดคุย'); ")
+NO_TALK_LINE = ("ไม่มีบทพูด: ทุกคนในคลิปไม่พูด ปากปิดตลอด ไม่ขยับปากพูด ไม่คุยกัน สื่ออารมณ์ด้วยสีหน้า สายตา ท่าทางเท่านั้น "
+                "(NO dialogue, nobody talks, mouths stay closed, no lip movement)")
+NO_TALK_NEGATIVE = "คนพูด, ขยับปากพูด, เปิดปากพูด, คุยกัน, ตะโกน, ลิปซิงก์"
+BACK_TURNED_WORDS = ("หันหลัง", "ข้ามไหล่", "แผ่นหลัง", "ด้านหลังให้กล้อง", "ท้ายทอย", "over-the-shoulder", "from behind")
 # A jump to another scene inside a clip: mean pixel change over half a second (64x36 frames).
 # Measured on real grok-lower clips: single continuous shots stay under ~25, scene jumps reach 45-90.
 CUT_THRESHOLD = 30
@@ -1452,7 +1464,11 @@ PROMPT_CHECK = (
     "2) ทุกการกระทำมาจากคำบรรยายของช็อตนี้ ไม่มีกิจกรรม เหตุการณ์ หรือคนจากช่วงอื่นของเรื่อง (เช่น ทำไร่ อุ้มลูก ฟันไม้ ถ้าช็อตนี้ไม่ได้เล่า); "
     "3) ตัวละครและตำแหน่งตรงกับ [เปิดภาพ] และรายชื่อตัวละครของช็อต; "
     "4) บรรทัดร่างกายและความต่อเนื่องมีแต่รูปลักษณ์ที่มองเห็นบนตัว ไม่มีประวัติ ความสัมพันธ์ นิสัย หรือการกระทำ; "
-    "5) ทำได้จริงในเวลาที่มี ไม่ยัดหลายเหตุการณ์. "
+    "5) ทำได้จริงในเวลาที่มี ไม่ยัดหลายเหตุการณ์; "
+    "6) ถ้าช็อตนี้ไม่มีบทพูด (ไม่มีบรรทัด 'บทพูดของ …' ในข้อมูลช็อต) ต้องไม่มีใครพูด คุยกัน เปิดปากพูด หรือตะโกน "
+    "(คำอย่าง 'พูดคุย' 'อธิบาย' 'บอก' 'ถาม' ต้องเปลี่ยนเป็นท่าทาง/สีหน้า เช่น 'นั่งฟังกันเงียบๆ'); "
+    "7) ถ้า [เปิดภาพ] มีคนหันหลังให้กล้อง เห็นแผ่นหลัง หรือเป็นไหล่ในมุมข้ามไหล่ คำสั่งต้องระบุชื่อคนนั้นว่าคงหันหลังตลอดคลิป "
+    "ห้ามหันหน้ามาทางกล้อง และห้ามมีจังหวะที่ให้คนนั้นหันมา (หน้าจะไม่ตรงกับตัวละคร) — ถ้าไม่มี ถือว่าไม่ผ่านและเพิ่มให้. "
     "ถ้าผ่านทุกข้อ ตอบ pass=true. ถ้าไม่ผ่าน ใส่ problems และเขียนใหม่: video_prompt = ส่วนหลักของคำสั่ง "
     "(รูปแบบเดิม [เปิดภาพ] [จังหวะ] [ร่างกาย] [กล้อง] [บรรยากาศ] เฉพาะช็อตนี้), anatomy = ร่างกายของคนในเฟรมนี้สั้นๆ (รูปลักษณ์เท่านั้น), "
     "continuity = สภาพที่มองเห็นบนตัวที่ต้องคงไว้ (ว่างได้). "
@@ -1464,7 +1480,8 @@ CLIP_CHECK = (
     "(เฟรมที่ k เริ่มนับ 0 = วินาทีที่ k×{step}); รูปที่สองคือภาพเริ่มต้นที่ตั้งใจไว้. "
     "โปรแกรมตรวจพบภาพกระโดดที่วินาที: {cuts}. "
     "ตัดสินคลิปนี้: pass = เป็นช็อตเดียวต่อเนื่อง (หรือตัดมุมกล้องในฉากเดิมกับคนเดิมแบบหนังทั่วไป) ตรงกับคำบรรยาย ตัวละครหน้าเดิม ร่างกายถูก; "
-    "trim = ช่วงแรกใช้ได้ แต่หลังจากนั้นตัดไปฉาก/สถานที่/เหตุการณ์อื่น หรือร่างกายพัง — ใส่ use_until = วินาทีสุดท้ายที่ยังใช้ได้; "
+    "trim = ช่วงแรกใช้ได้ แต่หลังจากนั้นตัดไปฉาก/สถานที่/เหตุการณ์อื่น ร่างกายพัง หรือคนที่หันหลังในภาพเริ่มต้นหันหน้ามา"
+    "เป็นหน้าคนอื่น — ใส่ use_until = วินาทีสุดท้ายที่ยังใช้ได้; "
     "redo = ใช้ไม่ได้ตั้งแต่ต้น หรือส่วนที่ใช้ได้สั้นเกิน 2 วินาที. reason = เหตุผลสั้นๆ ภาษาไทย. "
     "ตอบ JSON เท่านั้น: {{\"verdict\":\"pass\",\"use_until\":0,\"reason\":\"\"}}\n\n"
     "ช็อตนี้ในเรื่อง:\n{anchor}\n\nคำสั่งที่ใช้สร้าง:\n{request}")
@@ -3315,13 +3332,20 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
             prompt += (f"\n{scene['dialogue']} พูดว่า “{scene.get('line', '')}” ขยับปากพูดด้วยความเร็วปกติตลอดคลิป "
                        "ไม่มีตัวหนังสือในภาพ ตัวละครหน้าตาเหมือนในภาพเริ่มต้นตลอดคลิป")
         else:
-            prompt += "\nไม่มีบทพูด ไม่มีตัวหนังสือในภาพ ตัวละครหน้าตาเหมือนในภาพเริ่มต้นตลอดคลิป"
+            prompt += f"\n{NO_TALK_LINE}\nไม่มีตัวหนังสือในภาพ ตัวละครหน้าตาเหมือนในภาพเริ่มต้นตลอดคลิป"
+        opening = str(scene.get("video_prompt") or scene.get("prompt") or "")
+        if any(word in opening for word in BACK_TURNED_WORDS):
+            prompt += ("\nคนที่หันหลังให้กล้องในภาพเริ่มต้นต้องหันหลังตลอดคลิป ห้ามหันหน้ามาทางกล้อง "
+                       "(keep anyone seen from behind facing away for the whole clip; never turn them toward the camera)")
         prompt += "\nภาพสมจริงแบบภาพยนตร์ไลฟ์แอ็กชัน ไม่ใช่การ์ตูนหรืออนิเมะ"
         continuity = scene.get("clip_continuity") if scene.get("clip_continuity") is not None else scene.get("continuity")
         if continuity:  # wounds, blood, wet, transformed ... carried from earlier shots
             prompt += f"\nความต่อเนื่อง (สภาพที่เห็นบนตัว คงไว้ตลอดคลิป): {continuity}"
         # Negative prompt: this shot's (GPT + 🛠 problems seen) + each body's + what AI video always breaks.
-        prompt += f"\nNegative — ห้ามปรากฏเด็ดขาดตลอดทั้งคลิป: {merge_forbid(scene.get('forbid'), body_forbid, VIDEO_NEGATIVE)}"
+        silent = "" if scene.get("dialogue") else NO_TALK_NEGATIVE
+        turned = "คนที่หันหลังหันหน้ามาทางกล้อง" if any(word in opening for word in BACK_TURNED_WORDS) else ""
+        prompt += ("\nNegative — ห้ามปรากฏเด็ดขาดตลอดทั้งคลิป: "
+                   f"{merge_forbid(scene.get('forbid'), body_forbid, silent, turned, VIDEO_NEGATIVE)}")
         return prompt
 
     def gpt_look(text: str, images=()) -> dict:
@@ -3535,6 +3559,9 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
                             str(scene.get("clip_seconds") or GROK_CLIP_SECONDS[0]),
                             state["project"].get("aspect") or "16:9")
             runtime["_ai_slow2x_override"] = bool(scene.get("clip_slow"))
+            dialogue_var = cfg.get("dialogue")
+            if hasattr(dialogue_var, "set") and not scene.get("dialogue"):
+                dialogue_var.set("")  # the Slot's own "มีบทพูด" switch off: narration shots are silent
             runtime["slot_images"][slot_index].set(scene["image"])
             box = runtime["slot_prompts"][slot_index]
             box.delete("1.0", tk.END)

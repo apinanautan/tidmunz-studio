@@ -35,6 +35,8 @@ def _is_conversation_lost(text):
         "conversation_not_found", "conversation not found", "conversation was not found",
         "conversation_inaccessible",
         "บัญชีที่ถูกต้อง", "correct account",
+        # The account this chat was bound to is no longer in Bridge (removed or captured again).
+        "unknown chatgpt account alias",
     ))
 
 # ── State ─────────────────────────────────────────────────────────
@@ -1384,21 +1386,34 @@ def generate_image(prompt, *, output_dir=None, name_hint=None,
             _temporary_chat_unsupported[0] = True
             log("[image-gen] บัญชีนี้ใช้แชตชั่วคราวไม่ได้ — สร้างในแชตใหม่แยกแทน")
             return True
+        # Every page's own history, not only a caller-owned one: Prop kept failing with
+        # "unknown ChatGPT account alias" after its account was captured again.
+        # The main story / Ref histories are excluded on purpose: they only restart from an explicit
+        # new-story action (or pressing Use), because a new chat there loses the story.
+        save_fn = {
+            id(_story_face_conversation): _save_story_face_conversation,
+            id(_prop_conversation): _save_prop_conversation,
+        }.get(id(current_history)) or (conversation_save_fn if current_history is conversation_state else None)
         if (
             lost_history_reset
-            or not isinstance(conversation_state, dict)
-            or current_history is not conversation_state
+            or not isinstance(current_history, dict)
+            or save_fn is None
             or not expected_conversation_id
             or not _is_conversation_lost(text)
         ):
             return False
-        # The chat lives in another ChatGPT account (account switched), so
-        # this story continues in a new chat on the active account.
+        # The chat lives in another ChatGPT account (account switched or removed), so
+        # this page continues in a new chat on the active account.
         lost_history_reset = retry_fresh_chat = True
         for key in ("conversation_id", "parent_message_id", "account_alias", "story_context_parent_message_id"):
-            conversation_state.pop(key, None)
-        if callable(conversation_save_fn):
-            conversation_save_fn()
+            if key in ("conversation_id", "parent_message_id"):
+                current_history[key] = None
+            else:
+                current_history[key] = ""
+        payload.pop("metadata", None)
+        payload.pop("chatgpt_account", None)
+        if callable(save_fn):
+            save_fn()
         log("[image-gen] แชตเดิมอยู่ในบัญชี ChatGPT อื่น — เริ่มแชตใหม่ของเรื่องนี้ในบัญชีปัจจุบัน")
         return True
 

@@ -607,6 +607,13 @@ VELA_CLIP_SECONDS = 5  # vela-ai-video only makes 5 s
 VIDEO_AUTO_AVG_SECONDS = 8  # average shot length used to size the plan
 SHOT_LIMIT = 12.0  # longer shots are split into continuing shots
 CLIP_STRETCH = 1.15  # a clip may be slowed this much unnoticed to fill its shot
+# Economy (Slow 2x on every shot): fewer, longer shots — one clip (grok 10 s + Slow 2x) covers up to 20 s.
+ECONOMY_TARGET = 14.0
+ECONOMY_LIMIT = 20.0
+ECONOMY_NOTE = (". โหมดประหยัด: ทุกช็อตเล่นสโลว์ 2 เท่าและยาวประมาณ 12–20 วินาที — เขียนแต่ละช็อตเป็นภาพเดียวต่อเนื่องที่เล่าได้ทั้งช่วง "
+                "(เช่น บรรยากาศ ตัวละครทำสิ่งหนึ่งอย่างช้าๆ กล้องเคลื่อนช้า) ภาพไม่ต้องตรงทุกประโยค ขอให้สอดคล้องกับเรื่องช่วงนั้น; "
+                "ช็อตติดกันที่ยังอยู่ในเหตุการณ์/สถานที่เดิม ให้อยู่ฉากเดิมกับคนเดิมต่อเนื่องกัน ห้ามสลับฉากไปมา "
+                "เปลี่ยนฉากเฉพาะเมื่อเรื่องย้ายสถานที่หรือเวลาจริง")
 
 
 def pick_clip(length: float, slow_ok: bool, cheap_ok: bool = False, stretch: float = CLIP_STRETCH) -> tuple:
@@ -629,15 +636,19 @@ def clip_limit(scene: dict) -> float:
     return 20.0 if scene.get("slow") else SHOT_LIMIT
 
 
-def assign_clips(scenes: list, duration: float) -> None:
-    """Store each shot's model, clip length and Slow 2x choice from its narration length."""
+def assign_clips(scenes: list, duration: float, economy: bool = False) -> None:
+    """Store each shot's model, clip length and Slow 2x choice from its narration length.
+
+    ``economy``: every shot without a spoken line buys a short clip and plays it Slow 2x
+    (about half the video credit), not only the shots GPT marked slow.
+    """
     for scene, length in zip(scenes, segment_durations([s["start"] for s in scenes], duration)):
         if scene.get("clip_fallback"):  # vela already failed here: stay on grok-lower
             scene["cheap"] = False
         scene["shot_seconds"] = length
         spoken = bool(scene.get("dialogue"))  # dialogue: real speed, clip only trimmed, never slowed
         scene["clip_model"], scene["clip_seconds"], scene["clip_slow"] = pick_clip(
-            length, bool(scene.get("slow")) and not spoken, bool(scene.get("cheap")) and not spoken,
+            length, (economy or bool(scene.get("slow"))) and not spoken, bool(scene.get("cheap")) and not spoken,
             1.0 if spoken else CLIP_STRETCH)
 
 
@@ -1020,14 +1031,19 @@ def video_shots(segments: list, target: float = 8.0, limit: float = SHOT_LIMIT) 
 
 def plan_video(segments: list, duration: float, names: list, era: str, ask, horror: bool = False,
                progress=None, out: list | None = None, batch: int = 20, script: str = "",
-               direction: dict | None = None, refs: list | None = None, aspect: str = "16:9") -> list:
+               direction: dict | None = None, refs: list | None = None, aspect: str = "16:9",
+               economy: bool = False) -> list:
     """Video mode plan: program-cut shots, GPT writes each one, every shot gets a clip choice.
 
     ``ask(prompt) -> dict`` talks to GPT.  Shots GPT skipped are asked again
     once; any still missing reuse the narration text so nothing is left blank.
     Spoken lines of ``script`` become their own shots (no slow motion).
+    ``economy``: longer shots (about 14 s, up to 20 s = grok 10 s Slow 2x), fewer cuts, all slowed.
     """
-    shots = video_shots(split_dialogue(segments, script) if script else segments)
+    lines = split_dialogue(segments, script) if script else segments
+    shots = video_shots(lines, ECONOMY_TARGET, ECONOMY_LIMIT) if economy else video_shots(lines)
+    if economy:
+        era = era + ECONOMY_NOTE
     scenes = out if out is not None else []
     # Director pass first: the whole story as film sequences, so shots are directed, not illustrated.
     # ``direction`` is filled in place (the page saves it); a filled one is reused.
@@ -1079,9 +1095,12 @@ def plan_video(segments: list, duration: float, names: list, era: str, ask, horr
         if progress:
             progress(min(len(shots), first + batch), len(shots), group[0]["start"])
     apply_continuity(scenes, direction.get("continuity"))  # one scene per shot here: numbers match
+    if economy:
+        for scene in scenes:
+            scene["slow"] = not scene.get("dialogue")
     split = split_long_scenes(scenes, duration, 0, limit_for=clip_limit)
     scenes[:] = split
-    assign_clips(scenes, duration)
+    assign_clips(scenes, duration, economy)
     return scenes
 
 
@@ -1576,7 +1595,11 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
     subtitle_var = tk.BooleanVar(value=False)
     style_var = tk.StringVar(value="ปกติ")
     review_var = tk.BooleanVar(value=False)
+    economy_var = tk.BooleanVar(value=True)  # ออโต้: Slow 2x on every shot, longer shots, about half the credit
     stage_var = tk.StringVar(value="พร้อม")
+
+    def economy_on() -> bool:
+        return bool(video_mode and (state.get("project") or {}).get("economy", economy_var.get()))
     detail_var = tk.StringVar(value="")
 
     def slot_settings():
@@ -1654,6 +1677,13 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
         tk.Label(options, text="ภาพ", bg=bg).pack(side="left")
         ttk.Combobox(options, textvariable=aspect_var, values=list(SIZES), width=6, state="readonly").pack(side="left", padx=(4, 10))
         tk.Label(options, textvariable=clip_info_var, bg=bg, fg="#1E3A8A").pack(side="left", padx=(0, 14))
+
+        def economy_changed():
+            if state.get("project") is not None:
+                state["project"]["economy"] = bool(economy_var.get())
+                save_project()
+        tk.Checkbutton(options, text="สโลว์ประหยัด (ทุกช็อตสโลว์ 2x ช็อตยาว ตัดน้อย)", variable=economy_var,
+                       command=economy_changed, bg=bg).pack(side="left", padx=(0, 10))
     else:
         tk.Label(options, text="ภาพ", bg=bg).pack(side="left")
         ttk.Combobox(options, textvariable=aspect_var, values=list(SIZES), width=6, state="readonly").pack(side="left", padx=(4, 14))
@@ -1822,6 +1852,8 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
         aspect_var.set(project.get("aspect", aspect_var.get()))
         count_var.set(str(project.get("image_count", count_var.get())))
         subtitle_var.set(bool(project.get("subtitles", subtitle_var.get())))
+        if video_mode:
+            economy_var.set(bool(project.get("economy", True)))
         style_var.set(project.get("style_mode") if project.get("style_mode") in STYLES else "ปกติ")
         save_project()
         refresh_all()
@@ -2478,7 +2510,7 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
             plan_video(segments, float(project["duration"]), names, era, ask,
                        horror=project.get("style_mode") == "เรื่องผี", progress=progress, out=scenes_so_far,
                        script=read_script(project["script"]), direction=project.setdefault("direction", {}),
-                       refs=attachment_names(), aspect=desired_aspect())
+                       refs=attachment_names(), aspect=desired_aspect(), economy=economy_on())
             if project["direction"]:
                 (folder / "director_plan.json").write_text(
                     json.dumps(project["direction"], ensure_ascii=False, indent=2), encoding="utf-8")
@@ -3221,7 +3253,7 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
         ensure_story_in_history()
         ensure_continuity()
         ensure_bodies()
-        assign_clips(scenes, float(project["duration"]))
+        assign_clips(scenes, float(project["duration"]), economy_on())
         era = ((project.get("context") or {}).get("story") or {}).get("era") or "-"
         horror = project.get("style_mode") == "เรื่องผี"
         batches = [todo[k:k + MOTION_BATCH] for k in range(0, len(todo), MOTION_BATCH)]
@@ -3544,7 +3576,7 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
         todo = indices if indices is not None else [
             i for i, sc in enumerate(scenes) if not (sc.get("clip") and os.path.isfile(sc["clip"]))]
         stage_motion(todo)  # pictures changed since (redrawn / edited) get a fresh video prompt first
-        assign_clips(scenes, float(project["duration"]))
+        assign_clips(scenes, float(project["duration"]), economy_on())
         cfg = runtime["slot_cfg_vars"][slot_index]
         saved_slot = run_on_ui(lambda: (cfg["model"].get(), cfg["duration"].get(), cfg["aspect"].get()))
         try:
@@ -3644,7 +3676,7 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
             todo = [sc for sc in scenes if not (sc.get("clip") and os.path.isfile(sc["clip"]))]
             if missing + len(todo) == 0:
                 return True
-            assign_clips(scenes, float(project["duration"]))
+            assign_clips(scenes, float(project["duration"]), economy_on())
             sheets = sum(1 for grp in board_groups(scenes, project.get("direction"))
                          if any(not (scenes[i].get("image") and os.path.isfile(scenes[i]["image"])) for i in grp)
                          and not all(scenes[i].get("board") and os.path.isfile(scenes[i]["board"]) for i in grp))

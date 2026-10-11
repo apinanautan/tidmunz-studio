@@ -1472,7 +1472,11 @@ PROMPT_CHECK = (
     "ถ้าผ่านทุกข้อ ตอบ pass=true. ถ้าไม่ผ่าน ใส่ problems และเขียนใหม่: video_prompt = ส่วนหลักของคำสั่ง "
     "(รูปแบบเดิม [เปิดภาพ] [จังหวะ] [ร่างกาย] [กล้อง] [บรรยากาศ] เฉพาะช็อตนี้), anatomy = ร่างกายของคนในเฟรมนี้สั้นๆ (รูปลักษณ์เท่านั้น), "
     "continuity = สภาพที่มองเห็นบนตัวที่ต้องคงไว้ (ว่างได้). "
-    "ตอบ JSON เท่านั้น: {{\"pass\":true,\"problems\":[],\"video_prompt\":\"\",\"anatomy\":\"\",\"continuity\":\"\"}}\n\n"
+    "english = คำสั่งฉบับสุดท้ายทั้งหมด (ฉบับที่แก้แล้วถ้าไม่ผ่าน) แปลเป็นภาษาอังกฤษสำหรับโมเดลวิดีโอ: ครบทุกส่วนและทุกข้อห้าม "
+    "เขียนกระชับ ชัด เป็นคำสั่งเชิงบวกก่อน (one continuous shot, single location, silent — mouths closed ถ้าไม่มีบทพูด, "
+    "keeps facing away ถ้ามีคนหันหลัง) ชื่อคนไทยเขียนทับศัพท์ และปิดท้ายด้วยบรรทัด 'Negative: ...'; "
+    "ถ้ามีบทพูด ให้คงประโยคที่พูดเป็นภาษาไทยตามเดิมในเครื่องหมายคำพูด. "
+    "ตอบ JSON เท่านั้น: {{\"pass\":true,\"problems\":[],\"video_prompt\":\"\",\"anatomy\":\"\",\"continuity\":\"\",\"english\":\"\"}}\n\n"
     "ช็อตนี้ในเรื่อง:\n{anchor}\n\nคำสั่งที่จะส่งให้ AI วิดีโอ:\n{request}")
 # Checker 2: after the clip, a GPT look at its frames decides whether it can be used.
 CLIP_CHECK = (
@@ -3384,6 +3388,7 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
                 return
             problems = [str(p) for p in reply.get("problems") or [] if str(p).strip()]
             passed = reply.get("pass") is True or str(reply.get("pass")).lower() == "true"
+            english = str(reply.get("english") or "").strip()
             if passed or not str(reply.get("video_prompt") or "").strip():
                 break
             log(f"🔎 ผู้ตรวจ: ช็อต {index + 1} ไม่ผ่าน — {'; '.join(problems)[:300]} → แก้คำสั่งแล้ว")
@@ -3394,8 +3399,9 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
             save_project()
         else:
             passed = False
+        # The English version is what the video model gets (it follows English, and English "never ..." best).
         scene["prompt_review"] = {"key": hashlib.md5((clip_prompt(scene) + str(scene.get("image"))).encode("utf-8")).hexdigest(),
-                                  "pass": passed, "problems": problems}
+                                  "pass": passed, "problems": problems, "english": english}
         save_project()
         if passed:
             log(f"🔎 ผู้ตรวจ: คำสั่งช็อต {index + 1} ผ่าน")
@@ -3549,6 +3555,15 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
         errors = []
         review_clip_prompt(scene, index)  # checker 1: a second GPT passes or rewrites the request first
         prompt = clip_prompt(scene)
+        review = scene.get("prompt_review") or {}
+        import hashlib
+        if review.get("english") and review.get("key") == hashlib.md5(
+                (prompt + str(scene.get("image"))).encode("utf-8")).hexdigest():
+            thai = prompt
+            prompt = review["english"]
+            if "negative" not in prompt.lower() and "\nNegative" in thai:  # never lose the forbidden list
+                prompt += "\nNegative" + thai.rsplit("\nNegative", 1)[1]
+            log(f"ช็อต {index + 1}: ส่งคำสั่งภาษาอังกฤษให้โมเดลวิดีโอ (ฉบับไทยดูได้ในตาราง)")
 
         def submit():
             state["show_error_backup"] = runtime.get("show_error")

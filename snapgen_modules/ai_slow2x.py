@@ -182,6 +182,32 @@ def _probe_video(ffmpeg, path):
     has_audio = any("Audio:" in line for line in text.splitlines())
     return fps, has_audio
 
+def _stripe_ratio(png) -> float:
+    """Vertical / horizontal detail of a frame: broken RIFE frames are horizontal streaks (ratio > 3)."""
+    try:
+        from PIL import Image, ImageChops
+        with Image.open(png) as image:
+            gray = image.convert("L").resize((192, 108))
+        down = ImageChops.difference(gray.crop((0, 1, 192, 108)), gray.crop((0, 0, 192, 107)))
+        across = ImageChops.difference(gray.crop((1, 0, 192, 108)), gray.crop((0, 0, 191, 108)))
+        mean = lambda img: sum(i * n for i, n in enumerate(img.histogram())) / max(1, img.width * img.height)
+        return mean(down) / (mean(across) + 0.01)
+    except Exception:
+        return 0.0
+
+
+def _rife_frames_broken(in_dir, out_dir, samples=12) -> bool:
+    """True when RIFE's output has streak frames that the source frames do not have."""
+    outs = sorted(Path(out_dir).glob("*.png"))
+    ins = sorted(Path(in_dir).glob("*.png"))
+    if len(outs) < 4 or not ins:
+        return False
+    step = max(1, len(outs) // samples)
+    striped = sum(1 for p in outs[::step][:samples] if _stripe_ratio(p) > 3)
+    source = max(_stripe_ratio(p) for p in ins[:: max(1, len(ins) // 4)][:4])
+    return striped >= 3 and source < 2
+
+
 def make_ai_slow2x(input_video, output_video=None, factor=2, log=None, **_kwargs):
     """Create a slowed video.
 
@@ -312,6 +338,19 @@ def make_ai_slow2x(input_video, output_video=None, factor=2, log=None, **_kwargs
                         say(f"[slow2x] FFmpeg minterpolate done: {out.name}")
                         return str(out)
                     raise RuntimeError("FFmpeg minterpolate no output")
+            if _rife_frames_broken(in_dir, out_dir):
+                # Seen on some GPUs/drivers: RIFE "succeeds" but every in-between frame is horizontal
+                # streaks, so the slowed clip flickers garbage on every other frame.
+                say("[slow2x] RIFE GPU ให้เฟรมกลางเสีย (ลายเส้น/ภาพกระพริบ) — ทำใหม่ด้วย RIFE CPU")
+                shutil.rmtree(out_dir, ignore_errors=True)
+                out_dir.mkdir()
+                _proc3 = subprocess.Popen([*rife_command, "-g", "-1"], cwd=str(Path(rife).parent),
+                                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                while _proc3.poll() is None:
+                    _poll_progress()
+                    time.sleep(3)
+                if _proc3.returncode or _rife_frames_broken(in_dir, out_dir):
+                    raise RuntimeError("RIFE ให้เฟรมกลางเสียทั้ง GPU และ CPU")
             output_count = len(list(out_dir.glob("*.png")))
             if output_count < target_count - 2:
                 raise RuntimeError(f"RIFE returned too few frames {output_count}/{target_count}")

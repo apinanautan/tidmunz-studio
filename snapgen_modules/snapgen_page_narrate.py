@@ -1775,6 +1775,8 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
                            command=lambda: remake_clips_selected()).pack(side="right", padx=6)
         make_styled_button(table_tools, "SECONDARY", "🔍 ตรวจคลิป",
                            command=lambda: review_clips_selected()).pack(side="right", padx=6)
+        make_styled_button(table_tools, "SECONDARY", "🐢 ทำสโลว์ใหม่",
+                           command=lambda: reslow_selected()).pack(side="right", padx=6)
     make_styled_button(table_tools, "PRIMARY", "GPT ช่วยแก้ prompt", command=lambda: refine_selected()).pack(side="right", padx=6)
     make_styled_button(table_tools, "DANGER", "เริ่มประวัติ GPT ใหม่", command=lambda: reset_history()).pack(side="right")
     table_frame = tk.Frame(box, bg=bg)
@@ -3601,6 +3603,96 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
                 log(f"❌ ตรวจคลิปไม่สำเร็จ: {exc}")
             finally:
                 project["done"].pop("video", None)
+                save_project()
+                state["busy"] = False
+                ui(refresh_all)
+        threading.Thread(target=worker, daemon=True).start()
+
+    def normal_clip_of(scene, index):
+        """The normal-speed download a slow clip was made from, or None."""
+        for path in (scene.get("clip_normal"),
+                     Path(state["folder"]) / "clips" / f"clip_{index + 1:03d}_ปกติ.mp4"):
+            if path and os.path.isfile(str(path)):
+                return str(path)
+        return None
+
+    def reslow_selected():
+        """Button: make the Slow 2x of chosen shots again from their normal-speed clip — no video credit.
+        Nothing selected: look through every slow clip and redo only the ones with streak frames."""
+        project = state["project"]
+        if not project or state["busy"]:
+            return
+        import ai_slow2x
+        scenes = project.get("scenes") or []
+        chosen = sorted(int(i) for i in table.selection())
+        pool = [i for i in (chosen or range(len(scenes)))
+                if scenes[i].get("clip_slow") and scenes[i].get("clip") and normal_clip_of(scenes[i], i)]
+        if not pool:
+            messagebox.showinfo("ทำสโลว์ใหม่", "ไม่มีช็อตสโลว์ที่มีไฟล์ความเร็วปกติ (clip_XXX_ปกติ.mp4) ให้ทำใหม่", parent=page)
+            return
+        free = ai_slow2x._free_vram_mb()
+        vram = f"\n\nการ์ดจอว่างตอนนี้ {free:,} MB" if free is not None else ""
+        if free is not None and free < ai_slow2x.LOW_VRAM_MB:
+            vram += (f" — น้อยเกินไป (ควรเกิน {ai_slow2x.LOW_VRAM_MB:,} MB) เฟรมอาจเป็นลายเส้นอีก\n"
+                     "ปิดโปรแกรมที่ใช้การ์ดจอก่อน (Character Creator, iClone, เกม, โปรแกรมตัดต่อ)")
+        what = (f"ช็อต {', '.join(str(i + 1) for i in pool)}" if chosen
+                else f"ตรวจคลิปสโลว์ทั้งหมด {len(pool)} ช็อต แล้วทำใหม่เฉพาะช็อตที่เป็นลายเส้น/กระพริบ")
+        if not messagebox.askyesno("ทำสโลว์ใหม่", f"ทำสโลว์ 2x ใหม่: {what}\n"
+                                   "ใช้ไฟล์ความเร็วปกติเดิม ไม่เสียเครดิตวิดีโอ ไฟล์สโลว์เดิมเก็บไว้ที่ clips/_สำรอง" + vram
+                                   + "\n\nทำเลยไหม?", parent=page):
+            return
+        state["busy"], state["stop"] = True, False
+
+        def worker():
+            redone, still_bad = [], []
+            try:
+                todo = pool
+                if not chosen:
+                    todo = []
+                    for n, i in enumerate(pool, 1):
+                        check_stop()
+                        set_progress("clips", (n - 1) / len(pool), f"ตรวจลายเส้นคลิปสโลว์ {n}/{len(pool)} (ช็อต {i + 1})")
+                        if ai_slow2x.video_has_streaks(scenes[i]["clip"], normal_clip_of(scenes[i], i)):
+                            todo.append(i)
+                    if not todo:
+                        log("✓ คลิปสโลว์ทุกช็อตปกติ ไม่มีลายเส้น — ไม่ต้องทำใหม่")
+                        return
+                    log(f"พบคลิปสโลว์เป็นลายเส้น: ช็อต {', '.join(str(i + 1) for i in todo)}")
+                clips_dir = Path(state["folder"]) / "clips"
+                for n, i in enumerate(todo, 1):
+                    check_stop()
+                    scene = scenes[i]
+                    set_progress("clips", (n - 1) / len(todo), f"ทำสโลว์ใหม่ {n}/{len(todo)} (ช็อต {i + 1})")
+                    target = clips_dir / f"clip_{i + 1:03d}_สโลว์.mp4"
+                    fresh = clips_dir / f"clip_{i + 1:03d}_สโลว์_ใหม่.mp4"
+                    fresh.unlink(missing_ok=True)
+                    made = ai_slow2x.make_ai_slow2x(normal_clip_of(scene, i), str(fresh), log=log, recheck=True)
+                    if not (made == str(fresh) and fresh.is_file() and fresh.stat().st_size > 0):
+                        log(f"❌ ช็อต {i + 1}: ทำสโลว์ใหม่ไม่สำเร็จ — คงไฟล์เดิมไว้")
+                        continue
+                    if os.path.isfile(str(scene["clip"])):
+                        backup_dir = clips_dir / "_สำรอง"
+                        backup_dir.mkdir(exist_ok=True)
+                        old = Path(scene["clip"])
+                        shutil.move(str(old), str(backup_dir / f"{old.stem}_ก่อนทำสโลว์ใหม่_{time.strftime('%Y%m%d-%H%M%S')}{old.suffix}"))
+                    shutil.move(str(fresh), str(target))
+                    scene["clip"] = str(target)
+                    for key in ("clip_review", "clip_use_until", "clip_cuts"):
+                        scene.pop(key, None)
+                    (still_bad if ai_slow2x.video_has_streaks(target, normal_clip_of(scene, i)) else redone).append(i + 1)
+                    save_project()
+                    ui(refresh_table)
+                if redone:
+                    log(f"✓ ทำสโลว์ใหม่แล้ว ภาพปกติ: ช็อต {', '.join(map(str, redone))} · กด 'ต่อวิดีโอใหม่' เพื่อใส่ในวิดีโอ")
+                if still_bad:
+                    log(f"⚠ ช็อต {', '.join(map(str, still_bad))} ยังเป็นลายเส้น — ปิดโปรแกรมที่ใช้การ์ดจอแล้วกด 🐢 ทำสโลว์ใหม่ อีกครั้ง")
+            except Stopped:
+                log("⏸ หยุดทำสโลว์ใหม่")
+            except Exception as exc:
+                log(f"❌ ทำสโลว์ใหม่ไม่สำเร็จ: {exc}")
+            finally:
+                if redone or still_bad:
+                    project["done"].pop("video", None)
                 save_project()
                 state["busy"] = False
                 ui(refresh_all)

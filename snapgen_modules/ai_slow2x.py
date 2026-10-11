@@ -241,6 +241,34 @@ def _rife_frames_broken(in_dir, out_dir, samples=12) -> bool:
     return striped >= 3 and source < 2
 
 
+def video_has_streaks(path, source=None, samples=24) -> bool:
+    """True when a finished slow clip has RIFE streak frames (compared with its normal-speed source)."""
+    ffmpeg = ensure_ffmpeg_tool()
+    tmp_dir = Path(tempfile.mkdtemp(prefix="snapgen_streak_"))
+    try:
+        dirs = {}
+        for name, video in (("out", path), ("in", source)):
+            if not video or not _video_ok(video):
+                continue
+            folder = tmp_dir / name
+            folder.mkdir()
+            # Every frame of the first seconds: in-between frames alternate with real ones.
+            subprocess.run([ffmpeg, "-y", "-i", str(video), "-t", "4", "-vf", "scale=384:-2",
+                            str(folder / "%05d.png")], capture_output=True, timeout=300,
+                           creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+            dirs[name] = folder
+        outs = sorted(dirs["out"].glob("*.png")) if "out" in dirs else []
+        if len(outs) < 4:
+            return False
+        step = max(1, len(outs) // samples) | 1  # odd: an even step would land only on real frames
+        striped = sum(1 for p in outs[::step][:samples] if _stripe_ratio(p) > 3)
+        ins = sorted(dirs["in"].glob("*.png")) if "in" in dirs else []
+        source_ratio = max((_stripe_ratio(p) for p in ins[:: max(1, len(ins) // 4)][:4]), default=0.0)
+        return striped >= 3 and source_ratio < 2
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
 def make_ai_slow2x(input_video, output_video=None, factor=2, log=None, **_kwargs):
     """Create a slowed video.
 
@@ -347,6 +375,8 @@ def make_ai_slow2x(input_video, output_video=None, factor=2, log=None, **_kwargs
                 raise RuntimeError("FFmpeg minterpolate no output")
 
             choice = _load_rife_choice(rife)
+            if choice.get("broken") and _kwargs.get("recheck"):
+                choice = {}  # the user freed the card and asked again: try RIFE once more
             if choice.get("broken"):
                 say("[slow2x] เครื่องนี้การ์ดจอทำ RIFE ไม่ได้ (ตรวจไว้แล้ว) — ใช้ FFmpeg สโลว์แทน")
                 return _ffmpeg_slow()
@@ -426,7 +456,7 @@ def make_ai_slow2x(input_video, output_video=None, factor=2, log=None, **_kwargs
             if r.returncode:
                 raise RuntimeError((r.stderr or r.stdout or "ffmpeg encode failed")[-1200:])
             if _video_ok(out):
-                say(f"[slow2x] RIFE {chr(2360)} {out.name}")
+                say(f"[slow2x] RIFE ✓ {out.name}")
                 return str(out)
         finally:
             shutil.rmtree(tmp_dir, ignore_errors=True)

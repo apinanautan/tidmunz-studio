@@ -200,6 +200,21 @@ def _save_rife_choice(rife, data: dict) -> None:
         pass
 
 
+LOW_VRAM_MB = 3000  # below this RIFE (720p, v2.3) may return streak frames instead of failing
+
+
+def _free_vram_mb():
+    """Free memory of the NVIDIA card (MB), or None when nvidia-smi is not there."""
+    try:
+        out = subprocess.run(["nvidia-smi", "--query-gpu=memory.free", "--format=csv,noheader,nounits"],
+                             capture_output=True, text=True, timeout=10,
+                             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)).stdout
+        values = [int(v) for v in out.split() if v.strip().isdigit()]
+        return max(values) if values else None
+    except Exception:
+        return None
+
+
 def _stripe_ratio(png) -> float:
     """Vertical / horizontal detail of a frame: broken RIFE frames are horizontal streaks (ratio > 3)."""
     try:
@@ -343,6 +358,7 @@ def make_ai_slow2x(input_video, output_video=None, factor=2, log=None, **_kwargs
                 (None, "rife-v2.3"), (0, "rife-v2.3"), (1, "rife-v2.3"), (2, "rife-v2.3"),
                 (None, "rife-v4.6"), (0, "rife-v4.6"), (1, "rife-v4.6")]))
             working = None
+            low_vram = []
             for gpu, model in candidates:
                 if not (Path(rife).parent / model).is_dir():
                     continue
@@ -363,10 +379,21 @@ def make_ai_slow2x(input_video, output_video=None, factor=2, log=None, **_kwargs
                     say(f"[slow2x] RIFE {label} ใช้ไม่ได้ — ลองชุดถัดไป")
                     continue
                 if _rife_frames_broken(in_dir, out_dir):
+                    free = _free_vram_mb()
+                    if free is not None and free < LOW_VRAM_MB:
+                        # Seen on a 16 GB card with CC5/iClone open: RIFE gets too little memory and
+                        # returns streaks instead of an error. Not the card's fault — do not mark it broken.
+                        low_vram.append(free)
+                        say(f"[slow2x] ⚠ หน่วยความจำการ์ดจอเหลือ {free} MB — RIFE ได้เฟรมเสีย "
+                            "ปิดโปรแกรมที่ใช้การ์ดจอ (เช่น Character Creator, iClone, เกม) แล้วลองใหม่")
                     say(f"[slow2x] RIFE {label} ให้เฟรมกลางเสีย (ลายเส้น/ภาพกระพริบ) — ลองชุดถัดไป")
                     continue
                 working = (gpu, model)
                 break
+            if working is None and low_vram:
+                say("[slow2x] ⚠ คลิปนี้ใช้ FFmpeg สโลว์แทน เพราะหน่วยความจำการ์ดจอไม่พอ "
+                    "(ไม่จำว่าการ์ดจอเสีย — ปิดโปรแกรมที่ใช้การ์ดจอแล้วคลิปต่อไปจะใช้ RIFE ตามปกติ)")
+                return _ffmpeg_slow()
             if working is None:
                 _save_rife_choice(rife, {"broken": True, "checked": time.time()})
                 say("[slow2x] ⚠ การ์ดจอเครื่องนี้ทำ RIFE ไม่ได้ทุกชุด — ใช้ FFmpeg สโลว์แทน "

@@ -207,7 +207,9 @@ SCOPE_RULE = ("ขอบเขต (ห้ามออกนอกบท): ภา
               "เหตุการณ์ และสิ่งของตามบทเท่านั้น ห้ามแต่งเหตุการณ์ คน สัตว์ สิ่งของ หรือสถานที่ที่บทไม่ได้กล่าวถึง "
               "ห้ามข้ามไปเล่าเหตุการณ์ของช่วงอื่นของเรื่อง ถ้าบทไม่ได้บอกรายละเอียด ให้เลือกแบบเรียบง่ายที่สอดคล้องกับบท. ")
 # ออโต้ writes each clip's video prompt from this many finished pictures per GPT look.
-MOTION_BATCH = 4
+# One: with 4 pictures in one look GPT numbered them wrongly and shots got their neighbour's
+# prompt (shot 23 described shot 22's picture). Same upload count either way.
+MOTION_BATCH = 1
 # Slot 2 ออโต้ makes a film: pictures must look like live-action footage, never drawn.
 REALISM_NOTE = ("ภาพนิ่งจากภาพยนตร์ไลฟ์แอ็กชันสมจริง (photorealistic live-action film still) ถ่ายด้วยกล้องภาพยนตร์ "
                 "นักแสดงจริง ผิว ผ้า น้ำ หิน และพื้นผิวสมจริง แสงและเงาแบบหนังจริง ระยะชัดตื้นแบบเลนส์ภาพยนตร์; "
@@ -3301,9 +3303,10 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
                 text = request + "\n\n(ไม่มีรูปแนบ: ภาพแรกของแต่ละช็อตคือ) " + " | ".join(
                     f"ช็อต {i + 1}: {str(scenes[i].get('prompt') or '')[:300]}" for i in batch)
                 reply = with_retries(f"พรอมต์วิดีโอ ช็อต {shots}", lambda text=text: parse_json_reply(chat(text)))
-            for item in reply.get("shots") or []:
+            items = [item for item in reply.get("shots") or [] if isinstance(item, dict)]
+            for item in items:
                 try:
-                    i = int(item.get("shot")) - 1
+                    i = batch[0] if len(batch) == 1 else int(item.get("shot")) - 1  # one picture: no numbering to get wrong
                 except (TypeError, ValueError, AttributeError):
                     continue
                 prompt = str(item.get("video_prompt") or "").strip()
@@ -3652,10 +3655,12 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
                 if callable(save_slots):
                     save_slots()
             run_on_ui(put_back)
-        missing = [i + 1 for i, sc in enumerate(scenes) if not (sc.get("clip") and os.path.isfile(sc["clip"]))]
+        # Remaking chosen shots only reports those shots; the whole story is checked by its own run.
+        wanted = indices if indices is not None else range(len(scenes))
+        missing = [i + 1 for i in wanted if not (scenes[i].get("clip") and os.path.isfile(scenes[i]["clip"]))]
         if missing:
             raise RuntimeError(f"ยังขาดคลิปฉาก {', '.join(map(str, missing[:15]))} — กดเริ่มอีกครั้งเพื่อลองใหม่")
-        log(f"✓ คลิปครบ {len(scenes)} ฉาก")
+        log(f"✓ คลิปครบ {len(wanted)} ฉาก" if indices is None else f"✓ เจนคลิปเสร็จ: ช็อต {', '.join(str(i + 1) for i in wanted)}")
 
     def make_scene_clip(scene, i):
         """vela first when the plan says cheap; if vela can't make it, the same shot goes to grok-lower."""

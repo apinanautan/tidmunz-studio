@@ -3616,8 +3616,16 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
                 return str(path)
         return None
 
+    def speed_source_of(scene, index):
+        """The normal-speed clip to slow down: the kept _ปกติ file, or the shot's own clip when it is not slow."""
+        clip = scene.get("clip")
+        if clip and os.path.isfile(str(clip)) and not Path(str(clip)).stem.endswith("_สโลว์"):
+            return str(clip)
+        return normal_clip_of(scene, index)
+
     def reslow_selected():
-        """Button: make the Slow 2x of chosen shots again from their normal-speed clip — no video credit.
+        """Button: Slow 2x the chosen shots (again) from their normal-speed clip — no video credit.
+        Any shot works, slow or not; the new slow clip replaces the one in the video.
         Nothing selected: look through every slow clip and redo only the ones with streak frames."""
         project = state["project"]
         if not project or state["busy"]:
@@ -3625,29 +3633,29 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
         import ai_slow2x
         scenes = project.get("scenes") or []
         chosen = sorted(int(i) for i in table.selection())
-        slow_shots = [i for i in range(len(scenes))
-                      if scenes[i].get("clip_slow") and scenes[i].get("clip") and normal_clip_of(scenes[i], i)]
-        if not slow_shots:
-            messagebox.showinfo("ทำสโลว์ใหม่", "โปรเจกต์นี้ไม่มีช็อตสโลว์ที่มีไฟล์ความเร็วปกติ (clip_XXX_ปกติ.mp4) ให้ทำใหม่", parent=page)
-            return
-        pool = [i for i in chosen if i in slow_shots]
-        if chosen and not pool:
-            # A row picked just to look at it is still selected: say so instead of "nothing to do".
-            if not messagebox.askyesno(
-                    "ทำสโลว์ใหม่", f"ช็อตที่เลือก ({', '.join(str(i + 1) for i in chosen)}) ไม่ใช่ช็อตสโลว์\n"
-                    f"ช็อตสโลว์ในเรื่องนี้: {', '.join(str(i + 1) for i in slow_shots)}\n\n"
-                    "ตรวจช็อตสโลว์ทั้งหมดแล้วทำใหม่เฉพาะที่เป็นลายเส้นแทนไหม?", parent=page):
+        if chosen:
+            pool = [i for i in chosen if speed_source_of(scenes[i], i)]
+            no_clip = [i + 1 for i in chosen if i not in pool]
+            if not pool:
+                messagebox.showinfo("ทำสโลว์ใหม่", f"ช็อต {', '.join(map(str, no_clip))} ยังไม่มีคลิป — เจนวิดีโอก่อน", parent=page)
                 return
-            chosen = []
-        if not chosen:
-            pool = slow_shots
+        else:
+            pool = [i for i in range(len(scenes)) if scenes[i].get("clip") and os.path.isfile(str(scenes[i]["clip"]))
+                    and Path(str(scenes[i]["clip"])).stem.endswith("_สโลว์") and normal_clip_of(scenes[i], i)]
+            if not pool:
+                messagebox.showinfo("ทำสโลว์ใหม่", "ยังไม่มีคลิปสโลว์ให้ตรวจ — เลือกช็อตในตารางแล้วกดอีกครั้งเพื่อทำสโลว์ช็อตนั้น", parent=page)
+                return
         free = ai_slow2x._free_vram_mb()
         vram = f"\n\nการ์ดจอว่างตอนนี้ {free:,} MB" if free is not None else ""
         if free is not None and free < ai_slow2x.LOW_VRAM_MB:
             vram += (f" — น้อยเกินไป (ควรเกิน {ai_slow2x.LOW_VRAM_MB:,} MB) เฟรมอาจเป็นลายเส้นอีก\n"
                      "ปิดโปรแกรมที่ใช้การ์ดจอก่อน (Character Creator, iClone, เกม, โปรแกรมตัดต่อ)")
-        what = (f"ช็อต {', '.join(str(i + 1) for i in pool)}" if chosen
+        what = (f"ช็อต {', '.join(str(i + 1) for i in pool)} (ช็อตไหนยังไม่สโลว์ จะกลายเป็นสโลว์)" if chosen
                 else f"ตรวจคลิปสโลว์ทั้งหมด {len(pool)} ช็อต แล้วทำใหม่เฉพาะช็อตที่เป็นลายเส้น/กระพริบ")
+        talking = [i + 1 for i in pool if chosen and scenes[i].get("dialogue")
+                   and not Path(str(scenes[i].get("clip"))).stem.endswith("_สโลว์")]
+        if talking:
+            what += f"\n⚠ ช็อต {', '.join(map(str, talking))} มีบทพูด — สโลว์แล้วเสียงพูดจะช้าและปากไม่ตรง"
         if not messagebox.askyesno("ทำสโลว์ใหม่", f"ทำสโลว์ 2x ใหม่: {what}\n"
                                    "ใช้ไฟล์ความเร็วปกติเดิม ไม่เสียเครดิตวิดีโอ ไฟล์สโลว์เดิมเก็บไว้ที่ clips/_สำรอง" + vram
                                    + "\n\nทำเลยไหม?", parent=page):
@@ -3677,17 +3685,28 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
                     target = clips_dir / f"clip_{i + 1:03d}_สโลว์.mp4"
                     fresh = clips_dir / f"clip_{i + 1:03d}_สโลว์_ใหม่.mp4"
                     fresh.unlink(missing_ok=True)
-                    made = ai_slow2x.make_ai_slow2x(normal_clip_of(scene, i), str(fresh), log=log, recheck=True)
+                    source = speed_source_of(scene, i)
+                    made = ai_slow2x.make_ai_slow2x(source, str(fresh), log=log, recheck=True)
                     if not (made == str(fresh) and fresh.is_file() and fresh.stat().st_size > 0):
                         log(f"❌ ช็อต {i + 1}: ทำสโลว์ใหม่ไม่สำเร็จ — คงไฟล์เดิมไว้")
                         continue
-                    if os.path.isfile(str(scene["clip"])):
+                    if str(scene.get("clip")) == source:
+                        # A normal-speed shot made slow: its clip stays as the _ปกติ copy for hand editing.
+                        normal = clips_dir / f"clip_{i + 1:03d}_ปกติ.mp4"
+                        if os.path.abspath(source) != os.path.abspath(normal):
+                            if normal.is_file():  # left over from an earlier slow version of this shot
+                                backup_dir = clips_dir / "_สำรอง"
+                                backup_dir.mkdir(exist_ok=True)
+                                shutil.move(str(normal), str(backup_dir / f"{normal.stem}_เก่า_{time.strftime('%Y%m%d-%H%M%S')}.mp4"))
+                            shutil.move(source, str(normal))
+                        scene["clip_normal"] = str(normal)
+                    elif os.path.isfile(str(scene["clip"])):
                         backup_dir = clips_dir / "_สำรอง"
                         backup_dir.mkdir(exist_ok=True)
                         old = Path(scene["clip"])
                         shutil.move(str(old), str(backup_dir / f"{old.stem}_ก่อนทำสโลว์ใหม่_{time.strftime('%Y%m%d-%H%M%S')}{old.suffix}"))
                     shutil.move(str(fresh), str(target))
-                    scene["clip"] = str(target)
+                    scene["clip"], scene["clip_slow"] = str(target), True
                     for key in ("clip_review", "clip_use_until", "clip_cuts"):
                         scene.pop(key, None)
                     (still_bad if ai_slow2x.video_has_streaks(target, normal_clip_of(scene, i)) else redone).append(i + 1)

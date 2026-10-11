@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """Smooth slow motion using bundled RIFE NCNN Vulkan with FFmpeg fallback."""
-import os, re, shutil, subprocess, sys, tempfile, threading, time, zipfile
+import json, os, re, shutil, subprocess, sys, tempfile, threading, time, zipfile
 from pathlib import Path
 
 RIFE_RELEASE_URL = "https://github.com/nihui/rife-ncnn-vulkan/releases/download/20221029/rife-ncnn-vulkan-20221029-windows.zip"
@@ -182,6 +182,24 @@ def _probe_video(ffmpeg, path):
     has_audio = any("Audio:" in line for line in text.splitlines())
     return fps, has_audio
 
+def _load_rife_choice(rife) -> dict:
+    """This PC's RIFE set-up that gives clean frames ({gpu, model}), or {broken} — kept next to RIFE."""
+    try:
+        data = json.loads((Path(rife).parent / "snapgen_rife_choice.json").read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    if data.get("broken") and time.time() - float(data.get("checked") or 0) > 3 * 86400:
+        return {}  # a driver may have been updated since: look again
+    return data if isinstance(data, dict) else {}
+
+
+def _save_rife_choice(rife, data: dict) -> None:
+    try:
+        (Path(rife).parent / "snapgen_rife_choice.json").write_text(json.dumps(data), encoding="utf-8")
+    except OSError:
+        pass
+
+
 def _stripe_ratio(png) -> float:
     """Vertical / horizontal detail of a frame: broken RIFE frames are horizontal streaks (ratio > 3)."""
     try:
@@ -291,66 +309,74 @@ def make_ai_slow2x(input_video, output_video=None, factor=2, log=None, **_kwargs
                         say(f"[slow2x] RIFE: {_done}/{target_count} ({_pct}%)")
                 except Exception:
                     pass
-            rife_command = [
-                rife, "-i", str(in_dir), "-o", str(out_dir), "-f", "%08d.png"
-            ]
-            _proc = subprocess.Popen(rife_command, cwd=str(Path(rife).parent), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            while _proc.poll() is None:
-                _poll_progress()
-                time.sleep(3)
-            _poll_progress()
-            if _proc.returncode:
-                # Keep RIFE as the interpolator.  On PCs with unsupported or
-                # missing Vulkan GPU, retry its documented CPU mode instead
-                # of switching to ffmpeg minterpolate (which visibly judders).
-                say("[slow2x] RIFE GPU ใช้ไม่ได้ — ลอง RIFE CPU (ช้ากว่าแต่ยังลื่น)")
+            def _ffmpeg_slow():
+                # No GPU set-up gives clean RIFE frames here (RIFE on the CPU takes ~70x longer).
+                _slow_cmd = [
+                    ffmpeg, "-y", "-i", str(inp),
+                    "-vf", f"minterpolate=fps={source_fps*factor:.0f}:mi_mode=mci:mc_mode=aobmc:me_mode=bidir,setpts={factor}.0*PTS",
+                ]
+                if not mute_audio and has_audio:
+                    _slow_cmd += ["-c:a", "aac", "-b:a", "192k"]
+                else:
+                    _slow_cmd += ["-an"]
+                _slow_cmd += ["-c:v", "libx264", "-preset", "medium", "-crf", "18",
+                              "-pix_fmt", "yuv420p", "-movflags", "+faststart", str(out)]
+                say("[slow2x] FFmpeg minterpolate running...")
+                _r = subprocess.run(_slow_cmd, capture_output=True, text=True, timeout=1800, encoding="utf-8", errors="replace")
+                if _r.returncode:
+                    err = (_r.stderr or "")[-400:].strip()
+                    raise RuntimeError("FFmpeg minterpolate failed: " + (err or "unknown"))
+                if _video_ok(out):
+                    say(f"[slow2x] FFmpeg minterpolate done: {out.name}")
+                    return str(out)
+                raise RuntimeError("FFmpeg minterpolate no output")
+
+            choice = _load_rife_choice(rife)
+            if choice.get("broken"):
+                say("[slow2x] เครื่องนี้การ์ดจอทำ RIFE ไม่ได้ (ตรวจไว้แล้ว) — ใช้ FFmpeg สโลว์แทน")
+                return _ffmpeg_slow()
+            # First clip on a PC: find a GPU + model whose in-between frames are clean, then remember it.
+            # Broken frames come from RIFE picking the CPU's built-in graphics, an old driver, or a model
+            # the card computes wrongly — each is tried in turn, never RIFE on the CPU.
+            remembered = [(choice.get("gpu"), choice.get("model"))] if choice.get("model") else []
+            candidates = list(dict.fromkeys(remembered + [
+                (None, "rife-v2.3"), (0, "rife-v2.3"), (1, "rife-v2.3"), (2, "rife-v2.3"),
+                (None, "rife-v4.6"), (0, "rife-v4.6"), (1, "rife-v4.6")]))
+            working = None
+            for gpu, model in candidates:
+                if not (Path(rife).parent / model).is_dir():
+                    continue
                 shutil.rmtree(out_dir, ignore_errors=True)
                 out_dir.mkdir()
                 _last_pct = -1
-                _proc2 = subprocess.Popen(
-                    [*rife_command, "-g", "-1"],
-                    cwd=str(Path(rife).parent), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                )
-                while _proc2.poll() is None:
+                rife_command = [rife, "-i", str(in_dir), "-o", str(out_dir), "-f", "%08d.png", "-m", model]
+                if gpu is not None:
+                    rife_command += ["-g", str(gpu)]
+                _proc = subprocess.Popen(rife_command, cwd=str(Path(rife).parent), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                while _proc.poll() is None:
                     _poll_progress()
                     time.sleep(3)
                 _poll_progress()
-                if _proc2.returncode:
-                    say("[slow2x] RIFE CPU too slow - using FFmpeg minterpolate instead")
-                    shutil.rmtree(out_dir, ignore_errors=True)
-                    out_dir.mkdir()
-                    _slow_cmd = [
-                        ffmpeg, "-y", "-i", str(inp),
-                        "-vf", f"minterpolate=fps={source_fps*factor:.0f}:mi_mode=mci:mc_mode=aobmc:me_mode=bidir,setpts={factor}.0*PTS",
-                    ]
-                    if not mute_audio and has_audio:
-                        _slow_cmd += ["-c:a", "aac", "-b:a", "192k"]
-                    else:
-                        _slow_cmd += ["-an"]
-                    _slow_cmd += ["-c:v", "libx264", "-preset", "medium", "-crf", "18",
-                                  "-pix_fmt", "yuv420p", "-movflags", "+faststart", str(out)]
-                    say("[slow2x] FFmpeg minterpolate running...")
-                    _r = subprocess.run(_slow_cmd, capture_output=True, text=True, timeout=1800, encoding="utf-8", errors="replace")
-                    if _r.returncode:
-                        err = (_r.stderr or "")[-400:].strip()
-                        raise RuntimeError("FFmpeg minterpolate failed: " + (err or "unknown"))
-                    if _video_ok(out):
-                        say(f"[slow2x] FFmpeg minterpolate done: {out.name}")
-                        return str(out)
-                    raise RuntimeError("FFmpeg minterpolate no output")
-            if _rife_frames_broken(in_dir, out_dir):
-                # Seen on some GPUs/drivers: RIFE "succeeds" but every in-between frame is horizontal
-                # streaks, so the slowed clip flickers garbage on every other frame.
-                say("[slow2x] RIFE GPU ให้เฟรมกลางเสีย (ลายเส้น/ภาพกระพริบ) — ทำใหม่ด้วย RIFE CPU")
-                shutil.rmtree(out_dir, ignore_errors=True)
-                out_dir.mkdir()
-                _proc3 = subprocess.Popen([*rife_command, "-g", "-1"], cwd=str(Path(rife).parent),
-                                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                while _proc3.poll() is None:
-                    _poll_progress()
-                    time.sleep(3)
-                if _proc3.returncode or _rife_frames_broken(in_dir, out_dir):
-                    raise RuntimeError("RIFE ให้เฟรมกลางเสียทั้ง GPU และ CPU")
+                done = len(list(out_dir.glob("*.png")))
+                label = f"GPU {'อัตโนมัติ' if gpu is None else gpu} / {model}"
+                if _proc.returncode or done < target_count - 2:
+                    say(f"[slow2x] RIFE {label} ใช้ไม่ได้ — ลองชุดถัดไป")
+                    continue
+                if _rife_frames_broken(in_dir, out_dir):
+                    say(f"[slow2x] RIFE {label} ให้เฟรมกลางเสีย (ลายเส้น/ภาพกระพริบ) — ลองชุดถัดไป")
+                    continue
+                working = (gpu, model)
+                break
+            if working is None:
+                _save_rife_choice(rife, {"broken": True, "checked": time.time()})
+                say("[slow2x] ⚠ การ์ดจอเครื่องนี้ทำ RIFE ไม่ได้ทุกชุด — ใช้ FFmpeg สโลว์แทน "
+                    "(อัปเดตไดรเวอร์การ์ดจอแล้วเปิดโปรแกรมใหม่ จะตรวจใหม่ใน 3 วัน)")
+                return _ffmpeg_slow()
+            if (working[0], working[1]) != (choice.get("gpu"), choice.get("model")):
+                _save_rife_choice(rife, {"gpu": working[0], "model": working[1], "checked": time.time()})
+                if working != (None, "rife-v2.3"):
+                    say(f"[slow2x] ใช้ RIFE GPU {'อัตโนมัติ' if working[0] is None else working[0]} / {working[1]} "
+                        "(ชุดนี้ภาพปกติ — จำไว้ใช้ครั้งต่อไป)")
             output_count = len(list(out_dir.glob("*.png")))
             if output_count < target_count - 2:
                 raise RuntimeError(f"RIFE returned too few frames {output_count}/{target_count}")

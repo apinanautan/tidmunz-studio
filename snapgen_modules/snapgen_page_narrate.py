@@ -1117,7 +1117,10 @@ CONTINUITY_RULES = (
     "ช็อตที่เล่าย้อนเหตุการณ์ก่อนสภาพนั้นจะเกิด (ภาพย้อนอดีต คนอื่นเล่าเหตุการณ์ก่อนหน้า) ต้องไม่อยู่ในช่วง from–to "
     "ให้แยกเป็นหลายรายการเว้นช็อตนั้นไว้ เช่น คนที่ตายแล้วแต่ช็อตนี้เล่าตอนเขายังมีชีวิต ต้องเป็นร่างคนปกติ. "
     "character = ชื่อตัวละครตรงตามรายชื่อ. state = คำบรรยายภาพที่ต้องเห็นจริง สั้นและชัด (เช่น 'แผลฉีกยาวจากดาบที่ลำตัวด้านซ้าย "
-    "เกล็ดสีนิลแตก มีเลือดซึม เคลื่อนไหวอ่อนแรง'). ")
+    "เกล็ดสีนิลแตก มีเลือดซึม เคลื่อนไหวอ่อนแรง'). "
+    "state ต้องเป็นเฉพาะรูปลักษณ์ที่มองเห็นบนตัวในช็อตนั้น (แผล คราบ เสื้อผ้า ความเปียก ร่างกาย) เท่านั้น "
+    "ห้ามใส่ประวัติ ความสัมพันธ์ อาชีพ นิสัย อารมณ์ หรือการกระทำ/เหตุการณ์ (เช่น ห้าม 'อาศัยอยู่กับลูก' 'เดินสำรวจบ้านร้าง') "
+    "ถ้าตัวละครไม่มีสภาพที่เปลี่ยนจากปกติ ไม่ต้องใส่รายการ. ")
 
 
 def continuity_request(numbered: list, names: list) -> str:
@@ -1410,7 +1413,41 @@ def bodies_request(names: list, era: str) -> str:
 
 # Every clip: things AI video often breaks, whatever the story.
 VIDEO_NEGATIVE = ("ตัวหนังสือ, ลายน้ำ, ตัวละครใหม่ที่ไม่มีในภาพเริ่มต้น, หน้าตาหรือร่างกายเปลี่ยนไปเองโดยบทไม่ได้สั่ง, "
-                  "แขนขาหรือนิ้วเกินหรือหาย, ร่างกายบิดเบี้ยว, ภาพการ์ตูนหรืออนิเมะ, ฉากเปลี่ยนกะทันหัน")
+                  "แขนขาหรือนิ้วเกินหรือหาย, ร่างกายบิดเบี้ยว, ภาพการ์ตูนหรืออนิเมะ, ฉากเปลี่ยนกะทันหัน, "
+                  "ตัดฉาก, ตัดไปช็อตอื่น, เปลี่ยนสถานที่, กิจกรรมอื่นที่ไม่ได้สั่ง")
+# First line of every clip request: AI video likes to cut to new scenes inside one clip.
+ONE_SHOT_RULE = ("ช็อตเดียวต่อเนื่องตลอดคลิป (one continuous shot): กล้องตัวเดียว สถานที่เดียว เวลาเดียว "
+                 "เริ่มจากภาพเริ่มต้นและอยู่ในฉากนั้นจนจบคลิป ห้ามตัดฉาก ห้ามตัดไปช็อตอื่น ห้ามเปลี่ยนสถานที่ "
+                 "ห้ามเพิ่มคนหรือกิจกรรมที่ไม่ได้สั่ง ทำเฉพาะการกระทำที่เขียนไว้ด้านล่าง.")
+CONTINUITY_VERSION = 2  # rules changed: records made before this are built again (text only)
+# A jump to another scene inside a clip: mean pixel change over half a second (64x36 frames).
+# Measured on real grok-lower clips: single continuous shots stay under ~25, scene jumps reach 45-90.
+CUT_THRESHOLD = 30
+# Checker 1: a separate GPT (temporary chat) reads the full request before any video credit is spent.
+PROMPT_CHECK = (
+    "คุณคือผู้ตรวจคำสั่งก่อนส่งให้ AI สร้างวิดีโอ {seconds} วินาที จากภาพเริ่มต้นที่แนบ (ภาพแรกของคลิป ตามสตอรี่บอร์ด). "
+    "AI วิดีโอทำทุกอย่างที่อ่านเจอ: ถ้าคำสั่งเอ่ยถึงกิจกรรม สถานที่ หรือเหตุการณ์อื่น มันจะตัดฉากไปทำสิ่งนั้นเองกลางคลิป. "
+    "ตรวจคำสั่งทั้งหมดด้านล่าง (ทุกบรรทัด รวมบรรทัดร่างกาย ความต่อเนื่อง และ Negative) ตามเช็กลิสต์: "
+    "1) เป็นช็อตเดียวต่อเนื่อง สถานที่เดียว เวลาเดียว ตรงกับภาพเริ่มต้น; "
+    "2) ทุกการกระทำมาจากคำบรรยายของช็อตนี้ ไม่มีกิจกรรม เหตุการณ์ หรือคนจากช่วงอื่นของเรื่อง (เช่น ทำไร่ อุ้มลูก ฟันไม้ ถ้าช็อตนี้ไม่ได้เล่า); "
+    "3) ตัวละครและตำแหน่งตรงกับภาพเริ่มต้น; "
+    "4) บรรทัดร่างกายและความต่อเนื่องมีแต่รูปลักษณ์ที่มองเห็นบนตัว ไม่มีประวัติ ความสัมพันธ์ นิสัย หรือการกระทำ; "
+    "5) ทำได้จริงในเวลาที่มี ไม่ยัดหลายเหตุการณ์. "
+    "ถ้าผ่านทุกข้อ ตอบ pass=true. ถ้าไม่ผ่าน ใส่ problems และเขียนใหม่: video_prompt = ส่วนหลักของคำสั่ง "
+    "(รูปแบบเดิม [เปิดภาพ] [จังหวะ] [ร่างกาย] [กล้อง] [บรรยากาศ] เฉพาะช็อตนี้), anatomy = ร่างกายของคนในเฟรมนี้สั้นๆ (รูปลักษณ์เท่านั้น), "
+    "continuity = สภาพที่มองเห็นบนตัวที่ต้องคงไว้ (ว่างได้). "
+    "ตอบ JSON เท่านั้น: {{\"pass\":true,\"problems\":[],\"video_prompt\":\"\",\"anatomy\":\"\",\"continuity\":\"\"}}\n\n"
+    "ช็อตนี้ในเรื่อง:\n{anchor}\n\nคำสั่งที่จะส่งให้ AI วิดีโอ:\n{request}")
+# Checker 2: after the clip, a GPT look at its frames decides whether it can be used.
+CLIP_CHECK = (
+    "รูปแรกที่แนบคือเฟรมจากคลิปวิดีโอ AI ยาว {length} วินาที เรียงซ้ายไปขวา บนลงล่าง ทุก {step} วินาที "
+    "(เฟรมที่ k เริ่มนับ 0 = วินาทีที่ k×{step}); รูปที่สองคือภาพเริ่มต้นที่ตั้งใจไว้. "
+    "โปรแกรมตรวจพบภาพกระโดดที่วินาที: {cuts}. "
+    "ตัดสินคลิปนี้: pass = เป็นช็อตเดียวต่อเนื่อง (หรือตัดมุมกล้องในฉากเดิมกับคนเดิมแบบหนังทั่วไป) ตรงกับคำบรรยาย ตัวละครหน้าเดิม ร่างกายถูก; "
+    "trim = ช่วงแรกใช้ได้ แต่หลังจากนั้นตัดไปฉาก/สถานที่/เหตุการณ์อื่น หรือร่างกายพัง — ใส่ use_until = วินาทีสุดท้ายที่ยังใช้ได้; "
+    "redo = ใช้ไม่ได้ตั้งแต่ต้น หรือส่วนที่ใช้ได้สั้นเกิน 2 วินาที. reason = เหตุผลสั้นๆ ภาษาไทย. "
+    "ตอบ JSON เท่านั้น: {{\"verdict\":\"pass\",\"use_until\":0,\"reason\":\"\"}}\n\n"
+    "ช็อตนี้ในเรื่อง:\n{anchor}\n\nคำสั่งที่ใช้สร้าง:\n{request}")
 
 
 def image_data_url(path, max_side: int = 768) -> str:
@@ -1669,6 +1706,8 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
     if video_mode:
         make_styled_button(table_tools, "SUCCESS", "🎬 เจนวิดีโอใหม่ช็อตที่เลือก",
                            command=lambda: remake_clips_selected()).pack(side="right", padx=6)
+        make_styled_button(table_tools, "SECONDARY", "🔍 ตรวจคลิป",
+                           command=lambda: review_clips_selected()).pack(side="right", padx=6)
     make_styled_button(table_tools, "PRIMARY", "GPT ช่วยแก้ prompt", command=lambda: refine_selected()).pack(side="right", padx=6)
     make_styled_button(table_tools, "DANGER", "เริ่มประวัติ GPT ใหม่", command=lambda: reset_history()).pack(side="right")
     table_frame = tk.Frame(box, bg=bg)
@@ -1887,8 +1926,13 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
                 status = "ต้องเจนใหม่: " + scene["bad"]
             if video_mode:
                 clip = scene.get("clip")
+                verdict = (scene.get("clip_review") or {}).get("verdict") if clip and os.path.isfile(clip) else None
                 status = (f"รูป{status} คลิป{clip_label(scene)}"
-                          + ("✓" if clip and os.path.isfile(clip) else ("✗" if scene.get("clip_error") else "—")))
+                          + ("✓" if clip and os.path.isfile(clip) else ("✗" if scene.get("clip_error") else "—"))
+                          + {"pass": " ตรวจผ่าน", "trim": f" ✂ใช้ถึง {scene.get('clip_use_until', '-')}วิ",
+                             "redo": " ⚠ควรเจนใหม่"}.get(verdict, ""))
+                if verdict == "redo":
+                    status += ": " + str((scene.get("clip_review") or {}).get("reason") or "")[:60]
             who = ", ".join(scene.get("characters") or [])
             if video_mode:
                 # What the picture of this shot is drawn with: the Image page attachments matched by name.
@@ -1896,7 +1940,8 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
                     who = ", ".join(Path(p).stem for p in attachments_for(scene)) or "— ไม่มีไฟล์แนบ"
                 except Exception:
                     pass
-            table.insert("", "end", iid=str(i), tags=("bad",) if scene.get("bad") or scene.get("error") else (), values=(
+            redo = video_mode and (scene.get("clip_review") or {}).get("verdict") == "redo"
+            table.insert("", "end", iid=str(i), tags=("bad",) if scene.get("bad") or scene.get("error") or redo else (), values=(
                 i + 1, fmt_time(scene.get("start")), who,
                 scene.get("prompt", "").replace("\n", " "), status))
 
@@ -2439,6 +2484,7 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
                     json.dumps(project["direction"], ensure_ascii=False, indent=2), encoding="utf-8")
             # The director pass already recorded continuity; otherwise it is asked for before pictures.
             project["continuity_done"] = bool(project["direction"].get("continuity"))
+            project["continuity_v"] = CONTINUITY_VERSION
             project["scenes"] = scenes_so_far
             save_project()
             log(f"✓ วางแผน {len(scenes_so_far)} คลิป ({clip_summary(scenes_so_far)})")
@@ -2532,8 +2578,8 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
                 missing.append(name)
                 continue
             fact = f"{name}" + (f" ({entry['kind']})" if entry.get("kind") else "") + f": {entry.get('body', '')}"
-            if entry.get("moves"):
-                fact += f" — เคลื่อนไหว: {entry['moves']}"
+            # "moves" (e.g. "farms, carries her child, chops wood") is not added either: AI video
+            # acted out every listed activity as extra scenes cut into the clip.
             # "forms" (e.g. a leg lost near the end) is not added here: every shot would show it from
             # the start. The continuity record puts a change only on the shots after it happens.
             facts.append(fact)
@@ -2628,7 +2674,7 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
         scenes = project.get("scenes") or []
         if scenes:
             ensure_base_looks()  # may hand later changes (e.g. a lost leg) over to the continuity record
-        if not scenes or project.get("continuity_done"):
+        if not scenes or (project.get("continuity_done") and project.get("continuity_v") == CONTINUITY_VERSION):
             return
         set_progress("plan", 1.0, "GPT กำลังทำบันทึกความต่อเนื่อง (บาดแผล เลือด ร่างที่เปลี่ยน) ของทั้งเรื่อง ...")
         ensure_story_in_history()
@@ -2640,6 +2686,7 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
             chat(continuity_request(list(enumerate(scenes, 1)), names))))
         apply_continuity(scenes, reply.get("continuity"))
         project["continuity_done"] = True
+        project["continuity_v"] = CONTINUITY_VERSION
         save_project()
         ui(refresh_table)
         count = sum(1 for sc in scenes if sc.get("continuity"))
@@ -2989,8 +3036,7 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
             frames = max(1, round(length * FPS))
             clip = work / f"clip_{i:04d}.mp4"
             if video_mode:
-                source = scene["clip"]
-                fit = clip_fit_filter(media_duration(source), length, width, height)
+                source, fit = fitted_clip(scene, length, width, height)
                 run(["-i", source, "-an", "-vf", fit, "-frames:v", str(frames), *encode, str(clip)])
             else:
                 still = STYLES.get(project.get("style_mode") or "ปกติ", STYLES["ปกติ"])["still"]
@@ -3086,9 +3132,10 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
         for i in range(ready):
             source = scenes[i]["clip"]
             part, stamp = work / f"part_{i:04d}.mp4", work / f"part_{i:04d}.key"
-            key = f"{source}|{os.path.getmtime(source)}|{lengths[i]}|{width}x{height}"
+            key = (f"{source}|{os.path.getmtime(source)}|{lengths[i]}|{width}x{height}"
+                   f"|{scenes[i].get('clip_use_until')}")
             if not (part.is_file() and stamp.is_file() and stamp.read_text(encoding="utf-8") == key):
-                run(["-i", source, "-an", "-vf", clip_fit_filter(media_duration(source), lengths[i], width, height),
+                run(["-i", source, "-an", "-vf", fitted_clip(scenes[i], lengths[i], width, height)[1],
                      "-frames:v", str(max(1, round(lengths[i] * FPS))), *encode, part.name])
                 stamp.write_text(key, encoding="utf-8")
             names.append(part.name)
@@ -3221,6 +3268,193 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
             ui(refresh_table)
         log(f"✓ พรอมต์วิดีโอจากรูปจริง + บท: {len(todo)} ช็อต")
 
+    def clip_prompt(scene) -> str:
+        """Everything the AI video model receives for one shot, in the order it reads it."""
+        prompt = (scene.get("video_prompt") or scene["prompt"]).strip()
+        bodies, body_forbid = shot_bodies(scene)
+        # The body sheet always (GPT's per-shot summary may leave someone out), then what GPT saw in this frame.
+        note = str(scene.get("clip_anatomy") if scene.get("clip_anatomy") is not None else scene.get("anatomy") or "")
+        anatomy = "; ".join(x for x in (bodies, f"ในช็อตนี้: {note}" if note and note[:40] not in bodies else "") if x)
+        if anatomy:  # stated early: video models weigh the opening words most
+            prompt = f"ร่างกายที่ต้องคงไว้ตลอดคลิป: {anatomy}\n{prompt}"
+        prompt = ONE_SHOT_RULE + "\n" + prompt
+        if scene.get("dialogue"):
+            prompt += (f"\n{scene['dialogue']} พูดว่า “{scene.get('line', '')}” ขยับปากพูดด้วยความเร็วปกติตลอดคลิป "
+                       "ไม่มีตัวหนังสือในภาพ ตัวละครหน้าตาเหมือนในภาพเริ่มต้นตลอดคลิป")
+        else:
+            prompt += "\nไม่มีบทพูด ไม่มีตัวหนังสือในภาพ ตัวละครหน้าตาเหมือนในภาพเริ่มต้นตลอดคลิป"
+        prompt += "\nภาพสมจริงแบบภาพยนตร์ไลฟ์แอ็กชัน ไม่ใช่การ์ตูนหรืออนิเมะ"
+        continuity = scene.get("clip_continuity") if scene.get("clip_continuity") is not None else scene.get("continuity")
+        if continuity:  # wounds, blood, wet, transformed ... carried from earlier shots
+            prompt += f"\nความต่อเนื่อง (สภาพที่เห็นบนตัว คงไว้ตลอดคลิป): {continuity}"
+        # Negative prompt: this shot's (GPT + 🛠 problems seen) + each body's + what AI video always breaks.
+        prompt += f"\nNegative — ห้ามปรากฏเด็ดขาดตลอดทั้งคลิป: {merge_forbid(scene.get('forbid'), body_forbid, VIDEO_NEGATIVE)}"
+        return prompt
+
+    def gpt_look(text: str, images=()) -> dict:
+        """One question with pictures to GPT in a temporary chat (keeps the story history clean); JSON reply."""
+        content = [{"type": "text", "text": text}] + [
+            {"type": "image_url", "image_url": {"url": url}} for url in images if url]
+        body = {"model": "auto", "temporary_chat": True, "chatgpt_image_intercept": False,
+                "messages": [{"role": "user", "content": content}]}
+        request = urllib.request.Request(
+            g["_chatgpt_api_base"]() + "/chat/completions", data=json.dumps(body).encode("utf-8"),
+            headers={"Authorization": "Bearer local-dev-key", "Content-Type": "application/json"}, method="POST")
+        with g.get("_bridge_queue_lock") or threading.Lock():
+            with urllib.request.urlopen(request, timeout=600) as response:
+                data = json.loads(response.read().decode("utf-8", errors="replace"))
+        return parse_json_reply(str(((data.get("choices") or [{}])[0].get("message") or {}).get("content") or "")) or {}
+
+    def review_clip_prompt(scene, index):
+        """Checker 1, before credits: a separate GPT reads the whole request + the start frame and passes or fixes it."""
+        import hashlib
+        key = hashlib.md5((clip_prompt(scene) + str(scene.get("image"))).encode("utf-8")).hexdigest()
+        if (scene.get("prompt_review") or {}).get("key") == key:
+            return
+        for attempt in (1, 2):
+            check_stop()
+            set_progress("clips", state.get("clip_fraction", 0), f"ผู้ตรวจ GPT ตรวจคำสั่งช็อต {index + 1} (รอบ {attempt})")
+            try:
+                reply = gpt_look(
+                    PROMPT_CHECK.format(seconds=scene.get("clip_seconds") or "", anchor=story_anchor(index),
+                                        request=clip_prompt(scene)),
+                    [image_data_url(scene["image"])] if scene.get("image") and os.path.isfile(scene["image"]) else [])
+            except (Stopped, HistoryLost, RateLimited):
+                raise
+            except Exception as exc:
+                log(f"ผู้ตรวจคำสั่งช็อต {index + 1} ใช้ไม่ได้ ({str(exc)[:120]}) — ส่งคำสั่งเดิม")
+                return
+            problems = [str(p) for p in reply.get("problems") or [] if str(p).strip()]
+            passed = reply.get("pass") is True or str(reply.get("pass")).lower() == "true"
+            if passed or not str(reply.get("video_prompt") or "").strip():
+                break
+            log(f"🔎 ผู้ตรวจ: ช็อต {index + 1} ไม่ผ่าน — {'; '.join(problems)[:300]} → แก้คำสั่งแล้ว")
+            scene.setdefault("video_prompt_before_review", scene.get("video_prompt", ""))
+            scene["video_prompt"] = str(reply["video_prompt"]).strip()
+            scene["clip_anatomy"] = str(reply.get("anatomy") or "").strip()
+            scene["clip_continuity"] = str(reply.get("continuity") or "").strip()
+            save_project()
+        else:
+            passed = False
+        scene["prompt_review"] = {"key": hashlib.md5((clip_prompt(scene) + str(scene.get("image"))).encode("utf-8")).hexdigest(),
+                                  "pass": passed, "problems": problems}
+        save_project()
+        if passed:
+            log(f"🔎 ผู้ตรวจ: คำสั่งช็อต {index + 1} ผ่าน")
+
+    def detect_clip_cuts(path) -> list:
+        """Seconds (in the file) where the picture jumps to another scene: large change within half a second."""
+        import numpy as np
+        raw = subprocess.run([ffmpeg_path(), "-loglevel", "error", "-i", str(path), "-vf",
+                              "fps=8,scale=64:36,format=rgb24", "-f", "rawvideo", "-"],
+                             capture_output=True, creationflags=NO_WINDOW).stdout
+        frames = np.frombuffer(raw, np.uint8)
+        if frames.size < 64 * 36 * 3 * 6:
+            return []
+        frames = frames[: frames.size // (64 * 36 * 3) * (64 * 36 * 3)].reshape(-1, 36, 64, 3).astype(np.float32)
+        diff = np.abs(frames[4:] - frames[:-4]).mean(axis=(1, 2, 3))
+        cuts = []
+        for k, value in enumerate(diff):
+            if value > CUT_THRESHOLD and value == diff[max(0, k - 8):k + 9].max():
+                at = round((k + 2) / 8, 2)
+                if 0.4 < at < len(frames) / 8 - 0.4:
+                    cuts.append(at)
+        return cuts
+
+    def frames_sheet_url(path, seconds: float) -> tuple:
+        """(data URL of a 1-row-per-4 sheet of frames, seconds between frames)."""
+        step = 1.0 if seconds <= 13 else 2.0
+        sheet = Path(state["folder"]) / "_review_sheet.jpg"
+        subprocess.run([ffmpeg_path(), "-y", "-loglevel", "error", "-i", str(path), "-vf",
+                        f"fps=1/{step},scale=320:-2,tile=5x4", "-frames:v", "1", str(sheet)],
+                       capture_output=True, creationflags=NO_WINDOW)
+        try:
+            return image_data_url(sheet, max_side=1600), step
+        finally:
+            try:
+                sheet.unlink()
+            except OSError:
+                pass
+
+    def review_clip(scene, index):
+        """Checker 2, after the clip: local cut detection + a GPT look at the frames → pass / trim / redo."""
+        clip = scene.get("clip")
+        if not (clip and os.path.isfile(clip)):
+            return
+        length = media_duration(clip)
+        cuts = detect_clip_cuts(clip)
+        scene["clip_cuts"] = cuts
+        verdict, reason, until = ("trim", f"ตัดฉากเองที่วินาที {cuts[0]:g}", cuts[0] - 0.15) if cuts else ("pass", "", None)
+        try:
+            url, step = frames_sheet_url(clip, length)
+            reply = gpt_look(CLIP_CHECK.format(step=step, length=round(length, 1), cuts=", ".join(f"{c:g}" for c in cuts) or "ไม่พบ",
+                                               anchor=story_anchor(index), request=clip_prompt(scene)),
+                             [url] + ([image_data_url(scene["image"])] if scene.get("image") and os.path.isfile(scene["image"]) else []))
+            answer = str(reply.get("verdict") or "").strip().lower()
+            if answer in ("pass", "trim", "redo"):
+                verdict, reason = answer, str(reply.get("reason") or reason).strip()
+                if answer == "trim":
+                    try:
+                        until = float(reply.get("use_until") or until or 0) or until
+                    except (TypeError, ValueError):
+                        pass
+                elif answer == "pass" and cuts:
+                    until = None  # a camera cut inside the same scene: GPT says keep it all
+        except (Stopped, HistoryLost, RateLimited):
+            raise
+        except Exception as exc:
+            log(f"ผู้ตรวจคลิปช็อต {index + 1} ใช้ไม่ได้ ({str(exc)[:120]}) — ใช้ผลตรวจในเครื่อง")
+        if verdict == "redo" and cuts:
+            until = cuts[0] - 0.15  # until it is made again, use only the part before the jump
+        scene["clip_review"] = {"verdict": verdict, "reason": reason[:200]}
+        if until and 0.5 < until < length:
+            scene["clip_use_until"] = round(until, 2)
+        else:
+            scene.pop("clip_use_until", None)
+        save_project()
+        mark = {"pass": "✓ ผ่าน", "trim": f"✂ ใช้ถึงวินาที {scene.get('clip_use_until', '-')}", "redo": "⚠ ควรเจนใหม่"}[verdict]
+        log(f"🔎 ผู้ตรวจคลิปช็อต {index + 1}: {mark}" + (f" — {reason}" if reason else ""))
+
+    def fitted_clip(scene, length, width, height) -> tuple:
+        """(source, filter) of a shot's clip fitted to its slot, using only the part the checker kept."""
+        source = scene["clip"]
+        usable = media_duration(source)
+        until = float(scene.get("clip_use_until") or 0)
+        head = ""
+        if 0.5 < until < usable:
+            head, usable = f"trim=duration={until:.3f},setpts=PTS-STARTPTS,", until
+        return source, head + clip_fit_filter(usable, length, width, height)
+
+    def review_clips_selected():
+        """Button: run checker 2 on the selected shots (all shots when none selected)."""
+        project = state["project"]
+        if not project or state["busy"]:
+            return
+        selected = sorted(int(i) for i in table.selection()) or list(range(len(project.get("scenes") or [])))
+        state["busy"], state["stop"] = True, False
+
+        def worker():
+            try:
+                for n, i in enumerate(selected, 1):
+                    check_stop()
+                    set_progress("clips", (n - 1) / max(1, len(selected)), f"ผู้ตรวจคลิป {n}/{len(selected)} (ช็อต {i + 1})")
+                    review_clip(project["scenes"][i], i)
+                    ui(refresh_table)
+                redo = [i + 1 for i in selected if (project["scenes"][i].get("clip_review") or {}).get("verdict") == "redo"]
+                log("✓ ตรวจคลิปเสร็จ" + (f" — ควรเจนใหม่: ช็อต {', '.join(map(str, redo))} "
+                                          "(เลือกแล้วกด 🎬 เจนวิดีโอใหม่ช็อตที่เลือก)" if redo else " — ผ่านทุกช็อต")
+                    + " · กด 'ต่อวิดีโอใหม่' เพื่อตัดต่อตามผลตรวจ")
+            except Stopped:
+                log("⏸ หยุดตรวจคลิป")
+            except Exception as exc:
+                log(f"❌ ตรวจคลิปไม่สำเร็จ: {exc}")
+            finally:
+                project["done"].pop("video", None)
+                save_project()
+                state["busy"] = False
+                ui(refresh_all)
+        threading.Thread(target=worker, daemon=True).start()
+
     def make_clip(scene, index):
         """Generate one clip by driving the Slot exactly like pressing its Generate button."""
         busy = runtime["slot_busy"]
@@ -3235,23 +3469,8 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
         before = {str(f): f.stat().st_mtime for f in out_dir.glob("*.mp4")} if out_dir.is_dir() else {}
         started = time.time()
         errors = []
-        prompt = (scene.get("video_prompt") or scene["prompt"]).strip()
-        bodies, body_forbid = shot_bodies(scene)
-        # The body sheet always (GPT's per-shot summary may leave someone out), then what GPT saw in this frame.
-        note = str(scene.get("anatomy") or "")
-        anatomy = "; ".join(x for x in (bodies, f"ในช็อตนี้: {note}" if note and note[:40] not in bodies else "") if x)
-        if anatomy:  # stated first: video models weigh the opening words most
-            prompt = f"ร่างกายที่ต้องคงไว้ตลอดคลิป: {anatomy}\n{prompt}"
-        if scene.get("dialogue"):
-            prompt += (f"\n{scene['dialogue']} พูดว่า “{scene.get('line', '')}” ขยับปากพูดด้วยความเร็วปกติตลอดคลิป "
-                       "ไม่มีตัวหนังสือในภาพ ตัวละครหน้าตาเหมือนในภาพเริ่มต้นตลอดคลิป")
-        else:
-            prompt += "\nไม่มีบทพูด ไม่มีตัวหนังสือในภาพ ตัวละครหน้าตาเหมือนในภาพเริ่มต้นตลอดคลิป"
-        prompt += "\nภาพสมจริงแบบภาพยนตร์ไลฟ์แอ็กชัน ไม่ใช่การ์ตูนหรืออนิเมะ"
-        if scene.get("continuity"):  # wounds, blood, wet, transformed ... carried from earlier shots
-            prompt += f"\nความต่อเนื่อง (คงไว้ตลอดคลิป): {scene['continuity']}"
-        # Negative prompt: this shot's (GPT + 🛠 problems seen) + each body's + what AI video always breaks.
-        prompt += f"\nNegative — ห้ามปรากฏเด็ดขาดตลอดทั้งคลิป: {merge_forbid(scene.get('forbid'), body_forbid, VIDEO_NEGATIVE)}"
+        review_clip_prompt(scene, index)  # checker 1: a second GPT passes or rewrites the request first
+        prompt = clip_prompt(scene)
 
         def submit():
             state["show_error_backup"] = runtime.get("show_error")
@@ -3376,6 +3595,13 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
                 scene["clip"] = make_scene_clip(scene, i)
                 scene.pop("clip_error", None)
                 failures_in_row = 0
+                try:
+                    review_clip(scene, i)  # checker 2: pass / use only the first part / should be made again
+                except (Stopped, HistoryLost, RateLimited):
+                    raise
+                except Exception as exc:  # a check must never stop the clips
+                    log(f"ตรวจคลิปช็อต {i + 1} ไม่ได้: {str(exc)[:200]}")
+                ui(refresh_table)
                 try:
                     update_preview()
                 except Exception as exc:  # a preview must never stop the clips
@@ -3801,7 +4027,7 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
         log(f"🎬 กำลังเจนวิดีโอใหม่: ช็อต {shots}")
         ui(stage_var.set, f"กำลังเจนวิดีโอใหม่ ช็อต {shots}")
         for i in selected:
-            for key in ("clip", "clip_normal", "clip_error"):
+            for key in ("clip", "clip_normal", "clip_error", "clip_review", "clip_use_until", "clip_cuts"):
                 project["scenes"][i].pop(key, None)
         project["done"].pop("clips", None)
         stage_clips(selected)

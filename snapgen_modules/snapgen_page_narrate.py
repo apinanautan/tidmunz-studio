@@ -1488,6 +1488,11 @@ PROMPT_CHECK = (
     "ถ้ามีบทพูด ให้คงประโยคที่พูดเป็นภาษาไทยตามเดิมในเครื่องหมายคำพูด. "
     "ตอบ JSON เท่านั้น: {{\"pass\":true,\"problems\":[],\"video_prompt\":\"\",\"anatomy\":\"\",\"continuity\":\"\",\"english\":\"\"}}\n\n"
     "ช็อตนี้ในเรื่อง:\n{anchor}\n\nคำสั่งที่จะส่งให้ AI วิดีโอ:\n{request}")
+TRANSLATE_REQUEST = (
+    "แปลคำสั่งสร้างวิดีโอด้านล่างเป็นภาษาอังกฤษสำหรับโมเดลวิดีโอ AI: ครบทุกส่วนและทุกข้อห้าม ห้ามตัดหรือเพิ่มเนื้อหา "
+    "เขียนกระชับ ชัด ข้อห้ามสำคัญเขียนเป็นคำสั่งเชิงบวกก่อน (one continuous shot, silent — mouths closed, "
+    "keeps facing away from the camera สำหรับคนที่หันหลัง) ชื่อคนไทยเขียนทับศัพท์ ประโยคบทพูดคงเป็นภาษาไทยในเครื่องหมายคำพูด "
+    "ปิดท้ายด้วยบรรทัด 'Negative: ...'. ตอบ JSON เท่านั้น: {{\"english\":\"\"}}\n\n{request}")
 # Checker 2: after the clip, a GPT look at its frames decides whether it can be used.
 CLIP_CHECK = (
     "รูปแรกที่แนบคือเฟรมจากคลิปวิดีโอ AI ยาว {length} วินาที เรียงซ้ายไปขวา บนลงล่าง ทุก {step} วินาที "
@@ -3306,6 +3311,11 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
                 except Exception as exc:
                     # Pictures could not be sent: for the rest of this run write from the script and image prompt.
                     state["motion_text_only"] = True
+                    if force:
+                        # A re-look only to describe the picture: without the picture keep the prompt
+                        # already written from it rather than rewriting it from planning text.
+                        log(f"ส่งรูปให้ GPT ดูไม่ได้ ({str(exc)[:120]}) — ใช้พรอมต์วิดีโอเดิมของช็อต {shots}")
+                        continue
                     log(f"ส่งรูปให้ GPT ดูไม่ได้ ({str(exc)[:120]}) — เขียนพรอมต์วิดีโอจากบทและคำสั่งรูปแทน")
             if reply is None:
                 text = request + "\n\n(ไม่มีรูปแนบ: ภาพแรกของแต่ละช็อตคือ) " + " | ".join(
@@ -3390,8 +3400,11 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
             try:
                 # Text only: every attached picture uses ChatGPT's file-upload quota (80 per few hours),
                 # which the story's own pictures need.
+                # Only a description written by someone who looked at the picture counts as the real frame.
+                # The planning text is not: trusting it once removed a correct "seen from behind" (shot 33).
                 seen = (f"\nภาพเริ่มต้นจริง (บรรยายโดยผู้ที่ดูรูปนี้แล้ว): {scene['seen']}" if scene.get("seen")
-                        else "\nภาพเริ่มต้นจริง: ไม่มีคำบรรยายจากรูป — ใช้คำสั่งรูป: " + str(scene.get("prompt") or "")[:300])
+                        else "\nภาพเริ่มต้นจริง: ไม่มีคำบรรยายจากผู้ดูรูป — ข้ามข้อ 0 และห้ามลบหรือเปลี่ยนรายละเอียดใน [เปิดภาพ] "
+                             "(ทิศที่หันหน้า/หันหลัง ตำแหน่ง สิ่งที่ถือ) เพราะ [เปิดภาพ] เขียนโดยผู้ที่ดูรูปจริงแล้ว")
                 reply = gpt_look(PROMPT_CHECK.format(seconds=scene.get("clip_seconds") or "",
                                                      anchor=story_anchor(index) + seen, request=clip_prompt(scene)))
             except (Stopped, HistoryLost, RateLimited):
@@ -3413,6 +3426,13 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
             save_project()
         else:
             passed = False
+        if not english:
+            try:  # GPT sometimes leaves "english" empty: ask for the translation alone (text only)
+                english = str(gpt_look(TRANSLATE_REQUEST.format(request=clip_prompt(scene))).get("english") or "").strip()
+            except (Stopped, HistoryLost, RateLimited):
+                raise
+            except Exception:
+                english = ""
         # The English version is what the video model gets (it follows English, and English "never ..." best).
         scene["prompt_review"] = {"key": hashlib.md5((clip_prompt(scene) + str(scene.get("image"))).encode("utf-8")).hexdigest(),
                                   "pass": passed, "problems": problems, "english": english}
@@ -3581,6 +3601,10 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
                 (prompt + str(scene.get("image"))).encode("utf-8")).hexdigest():
             thai = prompt
             prompt = review["english"]
+            if any(word in thai for word in BACK_TURNED_WORDS) and not any(
+                    word in prompt.lower() for word in ("facing away", "back to the camera", "from behind", "back turned")):
+                prompt += ("\nAnyone seen from behind in the opening frame keeps facing away from the camera for the "
+                           "whole clip; never turn them toward the camera.")
             if "negative" not in prompt.lower() and "\nNegative" in thai:  # never lose the forbidden list
                 prompt += "\nNegative" + thai.rsplit("\nNegative", 1)[1]
             log(f"ช็อต {index + 1}: ส่งคำสั่งภาษาอังกฤษให้โมเดลวิดีโอ (ฉบับไทยดูได้ในตาราง)")

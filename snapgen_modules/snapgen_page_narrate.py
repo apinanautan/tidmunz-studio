@@ -1444,12 +1444,13 @@ CONTINUITY_VERSION = 2  # rules changed: records made before this are built agai
 CUT_THRESHOLD = 30
 # Checker 1: a separate GPT (temporary chat) reads the full request before any video credit is spent.
 PROMPT_CHECK = (
-    "คุณคือผู้ตรวจคำสั่งก่อนส่งให้ AI สร้างวิดีโอ {seconds} วินาที จากภาพเริ่มต้นที่แนบ (ภาพแรกของคลิป ตามสตอรี่บอร์ด). "
+    "คุณคือผู้ตรวจคำสั่งก่อนส่งให้ AI สร้างวิดีโอ {seconds} วินาที จากภาพเริ่มต้นของช็อต (ภาพแรกของคลิป ตามสตอรี่บอร์ด "
+    "ซึ่งถูกบรรยายไว้ในส่วน [เปิดภาพ] ของคำสั่ง). "
     "AI วิดีโอทำทุกอย่างที่อ่านเจอ: ถ้าคำสั่งเอ่ยถึงกิจกรรม สถานที่ หรือเหตุการณ์อื่น มันจะตัดฉากไปทำสิ่งนั้นเองกลางคลิป. "
     "ตรวจคำสั่งทั้งหมดด้านล่าง (ทุกบรรทัด รวมบรรทัดร่างกาย ความต่อเนื่อง และ Negative) ตามเช็กลิสต์: "
     "1) เป็นช็อตเดียวต่อเนื่อง สถานที่เดียว เวลาเดียว ตรงกับภาพเริ่มต้น; "
     "2) ทุกการกระทำมาจากคำบรรยายของช็อตนี้ ไม่มีกิจกรรม เหตุการณ์ หรือคนจากช่วงอื่นของเรื่อง (เช่น ทำไร่ อุ้มลูก ฟันไม้ ถ้าช็อตนี้ไม่ได้เล่า); "
-    "3) ตัวละครและตำแหน่งตรงกับภาพเริ่มต้น; "
+    "3) ตัวละครและตำแหน่งตรงกับ [เปิดภาพ] และรายชื่อตัวละครของช็อต; "
     "4) บรรทัดร่างกายและความต่อเนื่องมีแต่รูปลักษณ์ที่มองเห็นบนตัว ไม่มีประวัติ ความสัมพันธ์ นิสัย หรือการกระทำ; "
     "5) ทำได้จริงในเวลาที่มี ไม่ยัดหลายเหตุการณ์. "
     "ถ้าผ่านทุกข้อ ตอบ pass=true. ถ้าไม่ผ่าน ใส่ problems และเขียนใหม่: video_prompt = ส่วนหลักของคำสั่ง "
@@ -3347,14 +3348,15 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
             check_stop()
             set_progress("clips", state.get("clip_fraction", 0), f"ผู้ตรวจ GPT ตรวจคำสั่งช็อต {index + 1} (รอบ {attempt})")
             try:
-                reply = gpt_look(
-                    PROMPT_CHECK.format(seconds=scene.get("clip_seconds") or "", anchor=story_anchor(index),
-                                        request=clip_prompt(scene)),
-                    [image_data_url(scene["image"])] if scene.get("image") and os.path.isfile(scene["image"]) else [])
+                # Text only: every attached picture uses ChatGPT's file-upload quota (80 per few hours),
+                # which the story's own pictures need.
+                reply = gpt_look(PROMPT_CHECK.format(seconds=scene.get("clip_seconds") or "", anchor=story_anchor(index),
+                                                     request=clip_prompt(scene)))
             except (Stopped, HistoryLost, RateLimited):
                 raise
             except Exception as exc:
-                log(f"ผู้ตรวจคำสั่งช็อต {index + 1} ใช้ไม่ได้ ({str(exc)[:120]}) — ส่งคำสั่งเดิม")
+                text = exc.read().decode("utf-8", errors="replace") if hasattr(exc, "read") else str(exc)
+                log(f"ผู้ตรวจคำสั่งช็อต {index + 1} ใช้ไม่ได้ ({error_reason(text)}) — ส่งคำสั่งเดิม")
                 return
             problems = [str(p) for p in reply.get("problems") or [] if str(p).strip()]
             passed = reply.get("pass") is True or str(reply.get("pass")).lower() == "true"
@@ -3393,14 +3395,26 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
                     cuts.append(at)
         return cuts
 
-    def frames_sheet_url(path, seconds: float) -> tuple:
-        """(data URL of a 1-row-per-4 sheet of frames, seconds between frames)."""
+    def frames_sheet_url(path, seconds: float, start_image=None) -> tuple:
+        """(data URL of ONE picture: the intended start frame on top, the clip's frames below; seconds between frames).
+
+        One picture = one ChatGPT file upload (that quota is shared with the story's pictures).
+        """
+        from PIL import Image
         step = 1.0 if seconds <= 13 else 2.0
         sheet = Path(state["folder"]) / "_review_sheet.jpg"
         subprocess.run([ffmpeg_path(), "-y", "-loglevel", "error", "-i", str(path), "-vf",
                         f"fps=1/{step},scale=320:-2,tile=5x4", "-frames:v", "1", str(sheet)],
                        capture_output=True, creationflags=NO_WINDOW)
         try:
+            if start_image and os.path.isfile(start_image):
+                with Image.open(sheet) as frames, Image.open(start_image) as first:
+                    frames, first = frames.convert("RGB"), first.convert("RGB")
+                    first.thumbnail((frames.width // 3, frames.height // 3))
+                    both = Image.new("RGB", (frames.width, frames.height + first.height + 8), "white")
+                    both.paste(first, (0, 0))
+                    both.paste(frames, (0, first.height + 8))
+                    both.save(sheet, quality=85)
             return image_data_url(sheet, max_side=1600), step
         finally:
             try:
@@ -3418,10 +3432,11 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
         scene["clip_cuts"] = cuts
         verdict, reason, until = ("trim", f"ตัดฉากเองที่วินาที {cuts[0]:g}", cuts[0] - 0.15) if cuts else ("pass", "", None)
         try:
-            url, step = frames_sheet_url(clip, length)
+            if not cuts or state.get("upload_quota_out"):
+                raise LookupError  # one continuous shot (or no upload quota left): the local check decides
+            url, step = frames_sheet_url(clip, length, scene.get("image"))
             reply = gpt_look(CLIP_CHECK.format(step=step, length=round(length, 1), cuts=", ".join(f"{c:g}" for c in cuts) or "ไม่พบ",
-                                               anchor=story_anchor(index), request=clip_prompt(scene)),
-                             [url] + ([image_data_url(scene["image"])] if scene.get("image") and os.path.isfile(scene["image"]) else []))
+                                               anchor=story_anchor(index), request=clip_prompt(scene)), [url])
             answer = str(reply.get("verdict") or "").strip().lower()
             if answer in ("pass", "trim", "redo"):
                 verdict, reason = answer, str(reply.get("reason") or reason).strip()
@@ -3434,8 +3449,15 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
                     until = None  # a camera cut inside the same scene: GPT says keep it all
         except (Stopped, HistoryLost, RateLimited):
             raise
+        except LookupError:
+            pass
         except Exception as exc:
-            log(f"ผู้ตรวจคลิปช็อต {index + 1} ใช้ไม่ได้ ({str(exc)[:120]}) — ใช้ผลตรวจในเครื่อง")
+            text = exc.read().decode("utf-8", errors="replace") if hasattr(exc, "read") else str(exc)
+            if "file upload is blocked" in text or "โควต้าไฟล์แนบ" in text:
+                state["upload_quota_out"] = True  # keep the remaining uploads for the story's pictures
+                log("โควตาไฟล์แนบ ChatGPT หมด — ผู้ตรวจคลิปใช้ผลตรวจในเครื่องอย่างเดียวจนจบรอบนี้")
+            else:
+                log(f"ผู้ตรวจคลิปช็อต {index + 1} ใช้ไม่ได้ ({text[:120]}) — ใช้ผลตรวจในเครื่อง")
         if verdict == "redo" and cuts:
             until = cuts[0] - 0.15  # until it is made again, use only the part before the jump
         scene["clip_review"] = {"verdict": verdict, "reason": reason[:200]}

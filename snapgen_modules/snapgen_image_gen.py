@@ -1344,7 +1344,6 @@ def generate_image(prompt, *, output_dir=None, name_hint=None,
             "conversation_id": _prop_conversation["conversation_id"],
             "parent_message_id": _prop_conversation["parent_message_id"],
         }
-        payload["chatgpt_account"] = _prop_conversation["account_alias"]
     elif isinstance(conversation_state, dict) and conversation_state.get("conversation_id") and conversation_state.get("account_alias"):
         payload["metadata"] = {
             "conversation_id": conversation_state["conversation_id"],
@@ -1463,9 +1462,11 @@ def generate_image(prompt, *, output_dir=None, name_hint=None,
                             else current_history["parent_message_id"]
                         ),
                     }
-                    if current_history.get("account_alias"):
+                    if current_history.get("account_alias") and current_history is not _prop_conversation:
                         payload["chatgpt_account"] = current_history["account_alias"]
                     else:
+                        # Prop is not tied to one account: Bridge uses the active one, and a chat
+                        # it cannot open there simply starts again (reset_lost_history).
                         payload.pop("chatgpt_account", None)
                 elif current_history is not None:
                     payload.pop("metadata", None)
@@ -1493,7 +1494,11 @@ def generate_image(prompt, *, output_dir=None, name_hint=None,
                     continue
                 raise RuntimeError(f"Bridge error: {msg}")
 
-            if expected_conversation_id:
+            if expected_conversation_id and current_history is _prop_conversation:
+                # Prop is not tied to one chat or account: a new chat on the active account is fine.
+                if str(result.get("conversation_id") or "").strip() not in ("", expected_conversation_id):
+                    log("[image-gen] Prop: ใช้แชตใหม่ในบัญชีที่ใช้อยู่")
+            elif expected_conversation_id:
                 returned_conversation_id = str(result.get("conversation_id") or "").strip()
                 returned_parent_message_id = str(result.get("parent_message_id") or "").strip()
                 if not returned_conversation_id or not returned_parent_message_id:

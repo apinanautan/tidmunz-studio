@@ -3709,6 +3709,13 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
                     scene["clip"], scene["clip_slow"] = str(target), True
                     for key in ("clip_review", "clip_use_until", "clip_cuts"):
                         scene.pop(key, None)
+                    if ai_slow2x.video_has_streaks(target, normal_clip_of(scene, i)):
+                        # RIFE still streaky on this PC: FFmpeg's slow is less smooth but never streaky.
+                        log(f"ช็อต {i + 1}: RIFE ยังเป็นลายเส้น — ทำใหม่ด้วย FFmpeg สโลว์แทน")
+                        fresh.unlink(missing_ok=True)
+                        made = ai_slow2x.make_ai_slow2x(normal_clip_of(scene, i), str(fresh), log=log, ffmpeg_only=True)
+                        if made == str(fresh) and fresh.is_file() and fresh.stat().st_size > 0:
+                            os.replace(str(fresh), str(target))
                     (still_bad if ai_slow2x.video_has_streaks(target, normal_clip_of(scene, i)) else redone).append(i + 1)
                     save_project()
                     ui(refresh_table)

@@ -405,6 +405,9 @@ def make_ai_slow2x(input_video, output_video=None, factor=2, log=None, **_kwargs
                     return str(out)
                 raise RuntimeError("FFmpeg minterpolate no output")
 
+            if _kwargs.get("ffmpeg_only"):
+                say("[slow2x] ใช้ FFmpeg สโลว์ (RIFE เครื่องนี้ยังให้ภาพลายเส้น)")
+                return _ffmpeg_slow()
             choice = _load_rife_choice(rife)
             if choice.get("broken") and _kwargs.get("recheck"):
                 choice = {}  # the user freed the card and asked again: try RIFE once more

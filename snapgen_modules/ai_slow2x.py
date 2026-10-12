@@ -263,7 +263,9 @@ def _rife_frames_broken(in_dir, out_dir, samples=12) -> bool:
     ins = sorted(Path(in_dir).glob("*.png"))
     if len(outs) < 4 or not ins:
         return False
-    step = max(1, len(outs) // samples)
+    # Odd step: RIFE writes real and in-between frames in turn, so an even step only ever saw the real ones
+    # and the streaks were never caught.
+    step = max(1, len(outs) // samples) | 1
     striped = sum(1 for p in outs[::step][:samples] if _stripe_ratio(p) > 3)
     source = max(_stripe_ratio(p) for p in ins[:: max(1, len(ins) // 4)][:4])
     return striped >= 3 and source < 2

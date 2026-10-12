@@ -357,7 +357,7 @@ def make_ai_slow2x(input_video, output_video=None, factor=2, log=None, **_kwargs
             in_dir.mkdir()
             out_dir.mkdir()
             extracted = subprocess.run([
-                ffmpeg, "-y", "-i", str(inp), "-vsync", "0", str(in_dir / "%08d.png")
+                ffmpeg, "-y", "-i", str(inp), "-vsync", "0", "-compression_level", "1", str(in_dir / "%08d.png")
             ], capture_output=True, text=True, timeout=900, encoding="utf-8", errors="replace")
             if extracted.returncode:
                 raise RuntimeError((extracted.stderr or extracted.stdout or "extract frames failed")[-1200:])
@@ -427,6 +427,9 @@ def make_ai_slow2x(input_video, output_video=None, factor=2, log=None, **_kwargs
             if gpus:
                 say("[slow2x] การ์ดจอที่ RIFE เห็น: " + ", ".join(f"{i}={n}" for i, n in gpus.items())
                     + (f" → ใช้ {gpus[candidates[0][0]]}" if candidates[0][0] in gpus else ""))
+            # More work in flight at once: ~35% faster RIFE, but it needs memory the card may not have free.
+            free_now = _free_vram_mb()
+            threads = "2:4:4" if free_now is not None and free_now >= LOW_VRAM_MB else ""
             working = None
             low_vram = []
             for gpu, model in candidates:
@@ -438,10 +441,12 @@ def make_ai_slow2x(input_video, output_video=None, factor=2, log=None, **_kwargs
                 rife_command = [rife, "-i", str(in_dir), "-o", str(out_dir), "-f", "%08d.png", "-m", model]
                 if gpu is not None:
                     rife_command += ["-g", str(gpu)]
+                if threads:
+                    rife_command += ["-j", threads]
                 _proc = subprocess.Popen(rife_command, cwd=str(Path(rife).parent), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 while _proc.poll() is None:
                     _poll_progress()
-                    time.sleep(3)
+                    time.sleep(1)
                 _poll_progress()
                 done = len(list(out_dir.glob("*.png")))
                 label = f"GPU {'อัตโนมัติ' if gpu is None else gpu} / {model}"
@@ -489,7 +494,7 @@ def make_ai_slow2x(input_video, output_video=None, factor=2, log=None, **_kwargs
             else:
                 encode += ["-map", "0:v:0", "-an"]
             encode += [
-                "-c:v", "libx264", "-preset", "medium", "-crf", "18",
+                "-c:v", "libx264", "-preset", "veryfast", "-crf", "18",
                 "-pix_fmt", "yuv420p", "-movflags", "+faststart", str(out),
             ]
             r = subprocess.run(encode, capture_output=True, text=True, timeout=1800, encoding="utf-8", errors="replace")

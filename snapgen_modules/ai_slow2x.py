@@ -200,6 +200,34 @@ def _save_rife_choice(rife, data: dict) -> None:
         pass
 
 
+def _rife_gpus(rife) -> dict:
+    """{vulkan index: name} of the cards RIFE can see, from a 2-frame run (its start-up lines)."""
+    tmp_dir = Path(tempfile.mkdtemp(prefix="snapgen_rife_probe_"))
+    try:
+        from PIL import Image
+        (tmp_dir / "in").mkdir()
+        (tmp_dir / "out").mkdir()
+        for i in (1, 2):
+            Image.new("RGB", (64, 64), (i * 60, 0, 0)).save(tmp_dir / "in" / f"{i:08d}.png")
+        text = subprocess.run([rife, "-i", str(tmp_dir / "in"), "-o", str(tmp_dir / "out")],
+                              cwd=str(Path(rife).parent), capture_output=True, text=True, timeout=60,
+                              encoding="utf-8", errors="replace",
+                              creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)).stderr or ""
+        import re
+        return {int(i): name.strip() for i, name in re.findall(r"^\[(\d+) ([^\]]+)\]", text, re.M)}
+    except Exception:
+        return {}
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+def _is_built_in_gpu(name: str) -> bool:
+    """Graphics inside the CPU (laptops): slow for RIFE and the usual source of streak frames."""
+    low = name.lower()
+    return ("intel" in low and "arc" not in low) or "radeon(tm) graphics" in low or low.endswith("radeon graphics") \
+        or "vega" in low or "llvmpipe" in low or "microsoft basic" in low
+
+
 LOW_VRAM_MB = 3000  # below this RIFE (720p, v2.3) may return streak frames instead of failing
 
 
@@ -321,6 +349,7 @@ def make_ai_slow2x(input_video, output_video=None, factor=2, log=None, **_kwargs
         if mute_audio:
             has_audio = False
         say(f"[slow2x] ใช้ RIFE AI | ต้นฉบับ {source_fps:g} FPS | Slow {factor}x")
+        _started = time.time()
         tmp_dir = Path(tempfile.mkdtemp(prefix="snapgen_rife_"))
         try:
             in_dir = tmp_dir / "in"
@@ -387,6 +416,17 @@ def make_ai_slow2x(input_video, output_video=None, factor=2, log=None, **_kwargs
             candidates = list(dict.fromkeys(remembered + [
                 (None, "rife-v2.3"), (0, "rife-v2.3"), (1, "rife-v2.3"), (2, "rife-v2.3"),
                 (None, "rife-v4.6"), (0, "rife-v4.6"), (1, "rife-v4.6")]))
+            gpus = _rife_gpus(rife)
+            real = [i for i, name in gpus.items() if not _is_built_in_gpu(name)]
+            if real and len(gpus) > 1:
+                # Laptops with two cards: "auto" may land on the CPU's graphics (slow, streaky) — name the real card.
+                built_in = set(gpus) - set(real)
+                candidates = list(dict.fromkeys(
+                    [(real[0], "rife-v2.3"), (real[0], "rife-v4.6")]
+                    + [(g, m) for g, m in candidates if g is not None and g not in built_in]))
+            if gpus:
+                say("[slow2x] การ์ดจอที่ RIFE เห็น: " + ", ".join(f"{i}={n}" for i, n in gpus.items())
+                    + (f" → ใช้ {gpus[candidates[0][0]]}" if candidates[0][0] in gpus else ""))
             working = None
             low_vram = []
             for gpu, model in candidates:
@@ -456,7 +496,7 @@ def make_ai_slow2x(input_video, output_video=None, factor=2, log=None, **_kwargs
             if r.returncode:
                 raise RuntimeError((r.stderr or r.stdout or "ffmpeg encode failed")[-1200:])
             if _video_ok(out):
-                say(f"[slow2x] RIFE ✓ {out.name}")
+                say(f"[slow2x] RIFE ✓ {out.name} ({time.time() - _started:.0f} วินาที)")
                 return str(out)
         finally:
             shutil.rmtree(tmp_dir, ignore_errors=True)

@@ -16160,7 +16160,7 @@ def _install_image_bridge_status():
         try:
             import snapgen_chrome_relay
             state = snapgen_chrome_relay.RELAY.status()
-            left = str(state.get("images_estimate") or state.get("images_left") or "—")
+            left = str(state.get("images_left") or "—")  # ChatGPT's own number: shared by every PC on the account
             plan = str(state.get("plan") or "").strip()
             quota_var.set(f"โควตารูป: {left}" + (f" · {plan.capitalize()}" if plan else ""))
         except Exception:

@@ -3011,6 +3011,17 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
             log(f"✓ สตอรี่ชีต ช็อต {first}–{last}: {Path(sheet).name}")
         log(f"✓ สตอรี่ชีตครบ {len(groups)} ชีต (โฟลเดอร์ storyboard) — รูปฉากแต่ละช็อตจะวาดตามช่องของตัวเอง")
 
+    def follow_shot(index):
+        """Show the shot being made now: the table scrolls to it and selects it. Clicking another row
+        to look at a finished picture is fine; the next shot that starts takes the view back."""
+        iid = str(index)
+        try:
+            if table.exists(iid):
+                table.see(iid)
+                table.selection_set(iid)
+        except tk.TclError:
+            pass
+
     def stage_images(indices=None):
         project = state["project"]
         check_script_matches_audio()
@@ -3034,6 +3045,7 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
                 remaining = (time.time() - started) / (n - 1) * (len(todo) - n + 1)
                 eta = f" · เหลือประมาณ {int(remaining // 60)} นาที"
             set_progress("images", (n - 1) / max(1, len(todo)), f"สร้างรูปฉาก {n}/{len(todo)} (ฉากที่ {i + 1}){eta}")
+            ui(follow_shot, i)
             if video_mode:
                 ref_paths = attachments_for(scene)
             else:
@@ -4075,6 +4087,7 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
                 eta = f" · เหลือประมาณ {int(remaining // 60)} นาที"
             state["clip_fraction"] = (n - 1) / max(1, len(todo))
             state["clip_label"] = f"สร้างคลิป {n}/{len(todo)} (ฉากที่ {i + 1}) ด้วย {clip_label(scene)}{eta}"
+            ui(follow_shot, i)
             set_progress("clips", state["clip_fraction"], state["clip_label"])
             try:
                 scene["clip"] = make_scene_clip(scene, i)

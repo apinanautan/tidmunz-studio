@@ -3109,8 +3109,8 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
         log(f"✓ สตอรี่ชีตครบ {len(groups)} ชีต (โฟลเดอร์ storyboard) — รูปฉากแต่ละช็อตจะวาดตามช่องของตัวเอง")
 
     def follow_shot(index):
-        """Show the shot being made now: the table scrolls to it and selects it. Clicking another row
-        to look at a finished picture is fine; the next shot that starts takes the view back."""
+        """Show the shot that just finished: the table scrolls to it and selects it, and it stays there
+        while the next shot is made. Clicking another row is fine; the next finished shot takes the view."""
         iid = str(index)
         try:
             if table.exists(iid):
@@ -3142,7 +3142,6 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
                 remaining = (time.time() - started) / (n - 1) * (len(todo) - n + 1)
                 eta = f" · เหลือประมาณ {int(remaining // 60)} นาที"
             set_progress("images", (n - 1) / max(1, len(todo)), f"สร้างรูปฉาก {n}/{len(todo)} (ฉากที่ {i + 1}){eta}")
-            ui(follow_shot, i)
             if video_mode:
                 ref_paths = attachments_for(scene)
             else:
@@ -3183,6 +3182,7 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
                         failures_in_row = 0
                         save_project()
                         ui(refresh_table)
+                        ui(follow_shot, i)
                         continue
                     except (Stopped, HistoryLost, RateLimited):
                         raise
@@ -3195,6 +3195,8 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
                     raise RuntimeError("สร้างรูปล้มเหลว 3 ฉากติดกัน (เครดิตหมดหรือ Bridge มีปัญหา) — แก้แล้วกดเริ่มเพื่อทำต่อ")
             save_project()
             ui(refresh_table)
+            if not scene.get("error"):
+                ui(follow_shot, i)
         missing = [i + 1 for i, s in enumerate(scenes) if not (s.get("image") and os.path.isfile(s["image"]))]
         if missing and indices is None:
             # One more pass by itself over the scenes that failed (their prompts were already softened).
@@ -4185,7 +4187,6 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
                 eta = f" · เหลือประมาณ {int(remaining // 60)} นาที"
             state["clip_fraction"] = (n - 1) / max(1, len(todo))
             state["clip_label"] = f"สร้างคลิป {n}/{len(todo)} (ฉากที่ {i + 1}) ด้วย {clip_label(scene)}{eta}"
-            ui(follow_shot, i)
             set_progress("clips", state["clip_fraction"], state["clip_label"])
             try:
                 scene["clip"] = make_scene_clip(scene, i)
@@ -4198,6 +4199,7 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
                 except Exception as exc:  # a check must never stop the clips
                     log(f"ตรวจคลิปช็อต {i + 1} ไม่ได้: {str(exc)[:200]}")
                 ui(refresh_table)
+                ui(follow_shot, i)
                 try:
                     update_preview()
                 except Exception as exc:  # a preview must never stop the clips

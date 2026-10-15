@@ -2349,21 +2349,27 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
         shared = None
         try:
             import snapgen_shared_context
-            if not project.pop("force_new_context", False):  # "ทำใหม่ตั้งแต่วิเคราะห์บท" asks GPT again
+            # "ทำใหม่ตั้งแต่วิเคราะห์บท" asks GPT again in เล่าภาพ; ออโต้ always takes Prompt-Ref's Context.
+            if not project.pop("force_new_context", False) or video_mode:
                 shared = snapgen_shared_context.find(project["script"])
         except Exception:
             pass
+        if video_mode and not shared:
+            # ออโต้ makes one part of a story whose Context (names, looks, places) was built once in
+            # Prompt-Ref and drawn into the reference pictures: never analyse it again here.
+            raise RuntimeError("ยังไม่มี Context ของเรื่องนี้จากหน้า Prompt-Ref — ไปทำ Context ในหน้า Prompt-Ref "
+                               "(เลือกบทเรื่องเดียวกัน) ก่อน แล้วกดเริ่มที่หน้าออโต้อีกครั้ง")
         if shared:
             context = shared["context"]
-            log("ใช้ Context ที่ทีมแตกไว้แล้ว (หน้า Prompt-Ref หรือเล่าภาพ) ไม่ต้องให้ GPT วิเคราะห์ใหม่")
+            log("ใช้ Context ของเรื่องนี้จากหน้า Prompt-Ref — ไม่วิเคราะห์บทใหม่")
         else:
             # Same two-step method as Prompt-Ref: facts with evidence first,
             # then the full SnapGen Context built only from those facts.
             script = story_script()
             set_progress("context", 0.2, "GPT กำลังอ่านบทและหาหลักฐานตัวละคร ...")
             readings = []
-            if True:
-                # เล่าภาพ and ออโต้: three heads — two independent readers in chats of their own, then a judge in this
+            if not video_mode:
+                # เล่าภาพ: three heads — two independent readers in chats of their own, then a judge in this
                 # story's history settles the facts against the script (one reading alone still misses things).
                 for n, label in enumerate(("A", "B")):
                     set_progress("context", 0.1 + 0.1 * n, f"ด่าน {label}: ผู้วิเคราะห์อิสระอ่านบท (แชตแยก) ...")

@@ -2508,6 +2508,28 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
         log("✓ ผีในเรื่อง: " + (", ".join(names) if names else "ไม่พบ"))
         save_project()
 
+    def audio_stamp(path) -> str:
+        """Size and time of the narration file: a re-cut file with the same name gets a new stamp."""
+        try:
+            info = os.stat(str(path))
+            return f"{info.st_size}:{int(info.st_mtime)}"
+        except OSError:
+            return ""
+
+    def audio_changed() -> bool:
+        """The narration file was replaced (e.g. cut again) after this project transcribed it."""
+        project = state["project"]
+        if not project.get("done", {}).get("transcribe") or not project.get("audio"):
+            return False
+        stamp = audio_stamp(project["audio"])
+        if project.get("audio_stamp"):
+            return bool(stamp) and stamp != project["audio_stamp"]
+        transcript = Path(state["folder"]) / "transcript.json"
+        try:  # projects from before the stamp: a transcript older than the audio file is stale
+            return os.path.getmtime(str(project["audio"])) > transcript.stat().st_mtime
+        except OSError:
+            return False
+
     def stage_transcribe():
         project, folder = state["project"], Path(state["folder"])
         # The same narration may already be transcribed by the other page
@@ -2525,10 +2547,12 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
                 if video_mode and transcript.is_file() and '"words"' not in transcript.read_text(encoding="utf-8")[:20000]:
                     continue  # older transcript without word times: dialogue cuts need them
                 if (data.get("done", {}).get("transcribe") and transcript.is_file()
-                        and os.path.normcase(os.path.abspath(str(data.get("audio") or ""))) == same_audio):
+                        and os.path.normcase(os.path.abspath(str(data.get("audio") or ""))) == same_audio
+                        and data.get("audio_stamp") == audio_stamp(project["audio"])):  # same name, same cut
                     shutil.copy2(transcript, folder / "transcript.json")
                     log(f"ใช้ข้อความถอดเสียงที่ทำไว้แล้วจาก {candidate.parent.parent.name}/{candidate.parent.name}")
                     return
+        project["audio_stamp"] = audio_stamp(project["audio"])
         set_progress("transcribe", 0.02, "กำลังเปิด Whisper ...")
         names = [c.get("name") for c in (project.get("context") or {}).get("characters", []) if c.get("name")]
         segments, duration, backend = [], float(project.get("duration") or 1), ""
@@ -4306,6 +4330,17 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
                 return
             style_var.set(chosen)
             project["style_chosen"] = True
+        if only is None and audio_changed():
+            log("ไฟล์เสียงถูกเปลี่ยน (ตัดใหม่) หลังถอดเสียงไว้ — ถอดเสียงใหม่และวางแผนใหม่ (รูป/คลิปเดิมไม่ถูกใช้)")
+            project["scenes"] = []
+            project.pop("direction", None)
+            project.pop("planned_windows", None)
+            for key in ("transcribe", "plan", "storyboard", "images", "motion", "clips", "video"):
+                project["done"].pop(key, None)
+            try:
+                project["duration"] = media_duration(project["audio"])
+            except Exception:
+                pass
         aspect = desired_aspect()
         if project.get("scenes") and project.get("aspect") and project["aspect"] != aspect:
             if video_mode:

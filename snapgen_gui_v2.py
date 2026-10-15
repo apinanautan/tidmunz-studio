@@ -18021,8 +18021,9 @@ def _install_ref_mode():
         # Slot 2 "🤖 ออโต้": the เล่าภาพ pipeline plus one video clip per scene,
         # generated through Slot 2's own model settings.
         from snapgen_page_narrate import install_video_auto as _install_video_auto
-        _install_video_auto(_page_env, root, slot_index=1)
+        auto_page = _install_video_auto(_page_env, root, slot_index=1)
     except Exception as _video_auto_error:
+        auto_page = None
         print(f"[SnapGen] Slot 2 auto install failed: {_video_auto_error}")
 
     # Page modules share `_page_env`, while global toolbar controls read `g`.
@@ -18272,7 +18273,50 @@ def _install_ref_mode():
         except Exception as e:
             print(f"[SnapGen] Narrate page error: {e}")
 
+    def show_auto_mode():
+        try:
+            if slots: slots.pack_forget()
+            if img_page: img_page.pack_forget()
+            for _other in (ref_page, prop_page, new_page, karaoke_page, audio_page, narrate_page):
+                _other.pack_forget()
+            auto_page.pack(fill="both", expand=True)
+            if footer: footer.pack_forget()
+            g.get("current_mode").set("auto")
+            _set_mode_active("auto")
+            refresh = g.get("video_auto_refresh")
+            if callable(refresh):
+                refresh()
+        except Exception as e:
+            print(f"[SnapGen] Auto page error: {e}")
+
+    if auto_page is not None:
+        auto_mode_btn = tk.Button(mode_frame, text="🤖 ออโต้", command=show_auto_mode)
+        style_mode_button(auto_mode_btn)
+        auto_mode_btn.pack(side="left", padx=MODE_PACK_PADX, after=narrate_mode_btn)
+        mode_buttons["auto"] = auto_mode_btn
+        g["auto_mode_btn"] = auto_mode_btn
+        _mode_btn_map["auto"] = auto_mode_btn
+
+        def _leave_auto_page(_event=None):
+            try:
+                auto_page.pack_forget()
+            except Exception:
+                pass
+
+        # Every other page tab leaves the ออโต้ page (pressed before the tab shows its own page).
+        def _bind_leave_auto():
+            for tab in mode_frame.winfo_children():
+                if isinstance(tab, tk.Button) and tab is not auto_mode_btn:
+                    try:
+                        if tab.winfo_manager() == "pack" and tab.pack_info().get("side") == "left":
+                            tab.bind("<Button-1>", _leave_auto_page, add="+")
+                    except Exception:
+                        pass
+        root.after(2000, _bind_leave_auto)
+
     def switch_mode(mode):
+        if mode == "auto" and auto_page is not None:
+            show_auto_mode(); return
         if mode == "video":
             show_video_mode(); return
         if mode == "ref":

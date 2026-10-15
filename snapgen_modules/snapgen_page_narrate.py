@@ -1612,64 +1612,34 @@ def _ancestors(widget) -> list:
 
 
 def install_video_auto(g: dict, root: tk.Misc, slot_index: int = 1):
-    """Slot 2 'ออโต้': swap the Slot for the automatic panel and back."""
+    """'🤖 ออโต้' page (its own tab). Its clips are made through Slot 2's video machinery, so that
+    Slot stays alive but is taken off the video page: no Generate button to press by mistake."""
+    from snapgen_page_builder import build_page
     runtime = g.get("_runtime_g") or g
     prompts = runtime.get("slot_prompts") or []
     if len(prompts) <= slot_index:
         return None
     slot_frame = prompts[slot_index].master.master.master  # Text -> content -> body -> Slot frame
-    # The panel covers the area holding every Slot (their closest common parent): a full page.
-    shared = set.intersection(*({id(w) for w in _ancestors(p.master.master.master.master)} for p in prompts))
-    container = next(w for w in _ancestors(slot_frame.master) if id(w) in shared)
-    panel = tk.Frame(container, bg="#F8FAFC", highlightthickness=2, highlightbackground="#60A5FA")
-    header = tk.Frame(panel, bg="#DBEAFE")
-    header.pack(fill="x")
-    tk.Label(header, text=f"🤖 Slot {slot_index + 1} ออโต้ — บท + เสียง → วิดีโอทั้งเรื่อง (GPT เลือกโมเดล/ความยาวต่อช็อต ใช้สัดส่วนภาพจาก ⚙ ของ Slot {slot_index + 1})",
-             bg="#DBEAFE", fg="#1E3A8A", font=("TkDefaultFont", 10, "bold")).pack(side="left", padx=10, pady=6)
-    body = tk.Frame(panel, bg="#F8FAFC")
-    body.pack(fill="both", expand=True)
-    controls = _build(g, root, panel, body, mode="video", slot_index=slot_index)
+    page, box = build_page(root, "🤖 ออโต้ — บท + เสียง → วิดีโอทั้งเรื่อง (GPT เลือกโมเดล/ความยาวต่อช็อต)")
+    controls = _build(g, root, page, box, mode="video", slot_index=slot_index)
 
-    def show_auto():
-        # Full page: the panel covers every Slot so the plan table, progress and log all fit.
-        panel.place(x=0, y=0, relwidth=1, relheight=1)
-        panel.lift()
-        controls["refresh_clip_info"]()
+    def hide_slot():
+        try:
+            manager = slot_frame.winfo_manager()
+            if manager == "pack":
+                slot_frame.pack_forget()
+            elif manager == "grid":
+                slot_frame.grid_remove()
+            elif manager == "place":
+                slot_frame.place_forget()
+        except tk.TclError:
+            pass
 
-    def show_slot():
-        if controls["busy"]():
-            messagebox.showinfo("ออโต้", "กำลังทำงานอยู่ — กดหยุดก่อนกลับเป็น Slot ปกติ", parent=panel)
-            return
-        panel.place_forget()
-
-    tk.Button(header, text=f"↩ กลับเป็น Slot {slot_index + 1} ปกติ", command=show_slot, relief="flat",
-              bg="#FFFFFF", fg="#1E3A8A", cursor="hand2").pack(side="right", padx=8, pady=4)
-    toggle_style = dict(text="🤖 ออโต้", command=show_auto, relief="flat", bg="#2563EB", fg="#FFFFFF",
-                        activebackground="#1D4ED8", activeforeground="#FFFFFF", cursor="hand2",
-                        font=("TkDefaultFont", 9, "bold"), padx=10)
-    placed = False
-    try:
-        # Sit next to the Slot's own Generate button so nothing is covered.
-        generate_btn = (runtime.get("slot_buttons") or [])[slot_index]
-        row_frame = generate_btn.master
-        if generate_btn.winfo_manager() == "pack":
-            side = generate_btn.pack_info().get("side", "left")
-            tk.Button(row_frame, **toggle_style).pack(side=side, padx=4, after=generate_btn)
-            placed = True
-        elif generate_btn.winfo_manager() == "grid":
-            info = generate_btn.grid_info()
-            columns = [int(w.grid_info().get("column", 0)) for w in row_frame.grid_slaves(row=int(info["row"]))]
-            tk.Button(row_frame, **toggle_style).grid(row=int(info["row"]), column=max(columns) + 1, padx=4,
-                                                      sticky=info.get("sticky", ""))
-            placed = True
-    except Exception:
-        placed = False
-    if not placed:
-        tk.Button(slot_frame, **toggle_style).place(relx=1.0, x=-6, y=2, anchor="ne")
-    runtime["video_auto_panel"] = panel
-    runtime["video_auto_show"] = show_auto
-    runtime["video_auto_hide"] = show_slot
-    return panel
+    hide_slot()
+    root.after(1500, hide_slot)  # in case the video page lays its Slots out again after start
+    runtime["video_auto_panel"] = page
+    runtime["video_auto_refresh"] = controls["refresh_clip_info"]
+    return page
 
 
 def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "image", slot_index: int = 1) -> dict:

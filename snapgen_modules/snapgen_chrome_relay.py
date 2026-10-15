@@ -86,6 +86,7 @@ class _Relay:
         self.email = ""  # the ChatGPT account the Chrome profile is logged into
         self.images = ""  # pictures left today, as chatgpt.com reports it
         self.reset = ""
+        self.plan = ""
         self.token = ""
         self.port = 0
 
@@ -131,7 +132,8 @@ class _Relay:
     def status(self) -> dict:
         return {"connected": time.time() - self.last_seen < CONNECTED_WITHIN, "last_seen": self.last_seen,
                 "queue": len(self.pending), "busy": len(self.waiting), "extension_version": self.version,
-                "email": self.email, "images_left": self.images, "images_reset": self.reset}
+                "email": self.email, "images_left": self.images, "images_reset": self.reset,
+                "plan": self.plan}
 
 
 RELAY = _Relay()
@@ -182,6 +184,8 @@ class _Handler(BaseHTTPRequestHandler):
                 RELAY.email = str(query.get("email") or "")
             if "images" in query:
                 RELAY.images, RELAY.reset = str(query.get("images") or ""), str(query.get("reset") or "")
+            if "plan" in query:
+                RELAY.plan = str(query.get("plan") or "")
             job = RELAY.next_job(min(float(query.get("wait") or 25), 30))
             return self._send(200, job) if job else self._send(204)
         self._send(404, {"error": "not found"})

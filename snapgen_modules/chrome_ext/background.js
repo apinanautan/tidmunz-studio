@@ -43,13 +43,14 @@ function badge(text, color) {
 }
 
 // Which ChatGPT account this Chrome profile is logged into and its picture quota (shown in Tidmunz).
-let account = {email: "", images: "", reset: "", checked: 0};
+let account = {email: "", images: "", reset: "", plan: "", checked: 0};
 async function chatgptAccount() {
   if (Date.now() - account.checked < 120000) return account;
-  const next = {email: "", images: "", reset: "", checked: Date.now()};
+  const next = {email: "", images: "", reset: "", plan: "", checked: Date.now()};
   try {
     const session = await (await fetch("https://chatgpt.com/api/auth/session", {credentials: "include"})).json();
     next.email = (session && session.user && session.user.email) || "";
+    next.plan = (session && session.account && (session.account.planType || session.account.plan_type)) || "";
     if (session && session.accessToken) {
       // The same call chatgpt.com makes when it opens: it reports what is left of each limit.
       const init = await (await fetch("https://chatgpt.com/backend-api/conversation/init", {
@@ -76,7 +77,7 @@ async function loop() {
       try {
         const who = await chatgptAccount();
         job = await relay(`/next?wait=25&v=${chrome.runtime.getManifest().version}&email=${encodeURIComponent(who.email)}` +
-                          `&images=${encodeURIComponent(who.images)}&reset=${encodeURIComponent(who.reset)}`);
+                          `&images=${encodeURIComponent(who.images)}&reset=${encodeURIComponent(who.reset)}&plan=${encodeURIComponent(who.plan)}`);
         badge("ON", "#10A37F");
       } catch (e) {
         badge("OFF", "#9CA3AF");  // Tidmunz is not open: look again later

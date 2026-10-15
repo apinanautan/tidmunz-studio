@@ -15779,7 +15779,7 @@ def _install_image_bridge_status():
     g["snap_light_item"] = dot
     g["snap_status_var"] = status_var
 
-    quota_var = tk.StringVar(value="โควตารูปคงเหลือ: —")
+    quota_var = tk.StringVar(value="โควตารูป: —")
     quota_parent = mode_frame or parent
     try:
         quota_bg = str(quota_parent.cget("bg"))
@@ -16053,36 +16053,23 @@ def _install_image_bridge_status():
             import snapgen_chrome_relay
             state = snapgen_chrome_relay.RELAY.status()
         except Exception:
-            return False, "ส่วนขยาย Chrome: —"
+            return False, "Chrome: —"
         if not state.get("connected"):
-            return False, "ส่วนขยาย Chrome: ยังไม่เชื่อมต่อ"
+            return False, "Chrome: ยังไม่เชื่อมต่อ"
         if state.get("busy"):
             waiting = f" (รอคิว {state['queue']})" if state.get("queue") else ""
-            return True, f"ส่วนขยาย Chrome: กำลังทำงาน{waiting}"
+            return True, f"Chrome: กำลังทำงาน{waiting}"
         who = str(state.get("email") or "").split("@")[0]
-        return True, "ส่วนขยาย Chrome: เชื่อมต่อแล้ว ✓" + (f" ({who})" if who else "")
+        return True, "Chrome ✓" + (f" {who}" if who else "")
 
     def show_chrome_quota():
-        """Pictures left for the account in the program's Chrome, as chatgpt.com itself reports it."""
+        """Pictures left and plan of the account in the program's Chrome — one short line."""
         try:
             import snapgen_chrome_relay
-            from datetime import datetime
             state = snapgen_chrome_relay.RELAY.status()
-            left = str(state.get("images_left") or "")
-            if not left:
-                # The Bridge's own quota text talks about its account-1 capture, which no longer applies.
-                version = str(state.get("extension_version") or "0")
-                old = tuple(int(x) for x in version.split(".") if x.isdigit()) < (1, 0, 2)
-                quota_var.set("โควตารูปคงเหลือ: — (ส่วนขยายเวอร์ชันเก่า: กดรีโหลดใน chrome://extensions)" if old
-                              else "โควตารูปคงเหลือ: — (ChatGPT ยังไม่บอก / ยังไม่ล็อกอินใน Chrome ของโปรแกรม)")
-                return
-            reset = ""
-            try:
-                when = datetime.fromisoformat(str(state.get("images_reset") or "")).astimezone()
-                reset = f" · รีเซ็ต {when:%d/%m %H:%M}"
-            except ValueError:
-                pass
-            quota_var.set(f"โควตารูปคงเหลือ: {left}{reset}")
+            left = str(state.get("images_left") or "—")
+            plan = str(state.get("plan") or "").strip()
+            quota_var.set(f"โควตารูป: {left}" + (f" · {plan.capitalize()}" if plan else ""))
         except Exception:
             pass
 
@@ -16303,7 +16290,7 @@ def _install_image_bridge_status():
                         waiting_text = f" | รอคิว {image_waiting}" if image_waiting else ""
                         set_light("#FFC107", f"Bridge: กำลังทำงาน {active}{waiting_text} | GPT: {account} | Tailscale: พร้อม")
                     elif no_saved_account:
-                        quota_var.set("โควตารูปคงเหลือ: —")
+                        pass  # quota comes from the program's Chrome
                         set_light("#FFC107", "Bridge: พร้อม | GPT: ยังไม่มี Account | Tailscale: พร้อม")
                     else:
                         # Quota was fetched in the worker, so this UI callback
@@ -16314,7 +16301,7 @@ def _install_image_bridge_status():
                             shown_account = str(quota_info.get("account") or "").strip()
                             if shown_account and shown_account != current_account_key[0]:
                                 plan_text += f" ({shown_account})"
-                            quota_var.set(f"โควตารูปคงเหลือ: {quota_info['remaining']}{plan_text}")
+                            pass  # quota comes from the program's Chrome
                         if prompt:
                             set_light("#4CAF50", f"Bridge: พร้อม | GPT: {account} | Tailscale: พร้อม")
                         else:

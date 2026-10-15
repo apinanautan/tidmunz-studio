@@ -2293,7 +2293,7 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
             "บทและ SnapGen Context ของเรื่องนี้อยู่ด้านล่าง เก็บไว้ในประวัตินี้เพื่อใช้วางแผนฉากและสร้างรูปทุกครั้งต่อจากนี้ "
             "ใช้ชื่อและหน้าตาตัวละครตาม Context ตรงตัว ตอบสั้นๆ ว่า OK เท่านั้น\n\nCONTEXT:\n"
             + json.dumps(project.get("context") or {}, ensure_ascii=False)
-            + "\n\nFULL STORY:\n" + read_script(project["script"])
+            + "\n\nFULL STORY:\n" + story_script()
         )
         with_retries("ส่งบทเข้าประวัติ", lambda: chat(content))
         project["history_seeded"] = True
@@ -2315,7 +2315,7 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
         else:
             # Same two-step method as Prompt-Ref: facts with evidence first,
             # then the full SnapGen Context built only from those facts.
-            script = read_script(project["script"])
+            script = story_script()
             set_progress("context", 0.2, "GPT กำลังอ่านบทและหาหลักฐานตัวละคร ...")
             analysis = with_retries("วิเคราะห์บท", lambda: parse_json_reply(chat(analysis_request(script))))
             project["history_seeded"] = True  # the full script is now in this story's history
@@ -2358,7 +2358,7 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
         project = state["project"]
         if "ghosts" in project:
             return
-        script = read_script(project["script"])
+        script = story_script()
         if not (GHOST_HINT.search(script) or project.get("style_mode") == "เรื่องผี"):
             project["ghosts"] = []
             return
@@ -2427,7 +2427,7 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
         if not segments:
             raise RuntimeError("Whisper ไม่ได้ยินเสียงพูดในไฟล์")
         try:
-            corrected = correct_with_script(segments, read_script(project["script"]))
+            corrected = correct_with_script(segments, story_script())
             changed = sum(1 for a, b in zip(segments, corrected) if a["text"] != b["text"])
             log(f"แก้คำที่ฟังผิดตามบท {changed} ประโยค")
             segments = corrected
@@ -2580,7 +2580,7 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
         transcript = Path(state["folder"]) / "transcript.json"
         if not transcript.is_file():
             return
-        score = script_audio_match(json.loads(transcript.read_text(encoding="utf-8")), read_script(project["script"]))
+        score = script_audio_match(json.loads(transcript.read_text(encoding="utf-8")), story_script())
         if score < 0.6:
             raise RuntimeError(
                 f"ไฟล์บทกับไฟล์เสียงไม่ใช่เรื่องเดียวกัน (ตรงกันแค่ {score:.0%}) — "
@@ -2606,12 +2606,12 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
                 project["scenes"] = scenes_so_far
                 save_project()
                 ui(refresh_table)
-            if script_dialogues(read_script(project["script"])) and not any(s.get("words") for s in segments):
+            if script_dialogues(story_script()) and not any(s.get("words") for s in segments):
                 log("⚠ ข้อความถอดเสียงนี้ไม่มีเวลาของแต่ละคำ จุดตัดบทพูดอาจคลาดได้ราว 1 วินาที")
             scenes_so_far = []
             plan_video(segments, float(project["duration"]), names, era, ask,
                        horror=project.get("style_mode") == "เรื่องผี", progress=progress, out=scenes_so_far,
-                       script=read_script(project["script"]), direction=project.setdefault("direction", {}),
+                       script=story_script(), direction=project.setdefault("direction", {}),
                        refs=attachment_names(), aspect=desired_aspect(), economy=economy_on())
             if project["direction"]:
                 (folder / "director_plan.json").write_text(
@@ -4130,7 +4130,7 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
                 has_words = any(s.get("words") for s in json.loads(transcript.read_text(encoding="utf-8")))
             except (OSError, ValueError):
                 has_words = False
-            if not has_words and script_dialogues(read_script(project["script"])):
+            if not has_words and script_dialogues(story_script()):
                 project["done"].pop("transcribe", None)
         project["image_count"] = wanted
         project.update({"aspect": aspect,
@@ -4261,6 +4261,43 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
         if state["busy"]:
             state["stop"] = True
             log("กำลังหยุดหลังขั้นตอนย่อยที่ทำอยู่ ...")
+
+    def story_script() -> str:
+        """The story's script text, even after its file was moved or renamed.
+
+        A copy is kept in the project folder (บท.txt) each time the file is read; when the file is
+        gone, the copy is used, or a file with the same name is looked up in the usual places."""
+        project, folder = state["project"], Path(state["folder"])
+        copy = folder / "บท.txt"
+        try:
+            text = read_script(project["script"])
+            if not copy.is_file() or copy.read_text(encoding="utf-8") != text:
+                copy.write_text(text, encoding="utf-8")
+            return text
+        except OSError:
+            pass
+        name = Path(str(project.get("script") or "")).name
+        home = Path.home()
+        places = [folder, home / "Downloads", home / "Desktop", home / "Documents", home / "OneDrive"]
+        places += [Path(f"{d}:/") for d in "DEFGH" if Path(f"{d}:/").exists()]
+        for place in places:
+            if not name or not place.is_dir():
+                continue
+            for depth in ("", "*/", "*/*/", "*/*/*/"):
+                for found in place.glob(depth + name):
+                    try:
+                        text = read_script(found)
+                    except Exception:
+                        continue
+                    log(f"ไฟล์บทถูกย้าย — ใช้ไฟล์ที่เจอ: {found}")
+                    project["script"] = str(found)
+                    save_project()
+                    copy.write_text(text, encoding="utf-8")
+                    return text
+        if copy.is_file():
+            log("ไม่พบไฟล์บทเดิม — ใช้สำเนาบทที่เก็บไว้ในโฟลเดอร์โปรเจกต์")
+            return copy.read_text(encoding="utf-8")
+        raise RuntimeError(f"ไม่พบไฟล์บท {name} (ถูกย้ายหรือลบ) — เปิดบทใหม่จากปุ่มเลือกบท แล้วกดทำต่อ")
 
     def _mtime(path) -> float:
         try:

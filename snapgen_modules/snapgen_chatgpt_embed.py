@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 """Show the program's own Chrome (ChatGPT) inside a Tidmunz window.
 
-The Chrome window that runs the "Tidmunz ChatGPT" extension is re-parented into a
-page of the main window (the 🌐 ChatGPT button), so there is no separate browser
+The Chrome window that runs the "Tidmunz ChatGPT" extension is laid over a page
+of the main window (the 🌐 ChatGPT button), so there is no separate browser
 window to minimize by accident. When Tidmunz closes, the Chrome window goes back
 to the desktop unchanged; Chrome itself keeps running.
 """
@@ -19,16 +19,21 @@ import snapgen_chrome_relay as relay
 
 user32 = ctypes.WinDLL("user32", use_last_error=True)
 GWL_STYLE = -16
-WS_CHILD = 0x40000000
 WS_POPUP = 0x80000000
 WS_CAPTION = 0x00C00000
 WS_THICKFRAME = 0x00040000
 WS_SYSMENU = 0x00080000
 WS_MINIMIZEBOX = 0x00020000
 WS_MAXIMIZEBOX = 0x00010000
-WS_CLIPCHILDREN = 0x02000000
 SW_RESTORE = 9
 SW_SHOW = 5
+SW_SHOWNOACTIVATE = 4
+GWL_EXSTYLE = -20
+GWLP_HWNDPARENT = -8
+WS_EX_APPWINDOW = 0x00040000
+GA_ROOT = 2
+GW_OWNER = 4
+PER_MONITOR_AWARE_V2 = ctypes.c_void_p(-4)
 SWP_FRAMECHANGED = 0x0020
 SWP_NOZORDER = 0x0004
 SWP_NOACTIVATE = 0x0010
@@ -38,10 +43,12 @@ user32.GetWindowLongPtrW.restype = ctypes.c_ssize_t
 user32.GetWindowLongPtrW.argtypes = [wintypes.HWND, ctypes.c_int]
 user32.SetWindowLongPtrW.restype = ctypes.c_ssize_t
 user32.SetWindowLongPtrW.argtypes = [wintypes.HWND, ctypes.c_int, ctypes.c_ssize_t]
-user32.SetParent.restype = wintypes.HWND
-user32.SetParent.argtypes = [wintypes.HWND, wintypes.HWND]
-user32.GetParent.restype = wintypes.HWND
-user32.GetParent.argtypes = [wintypes.HWND]
+user32.GetAncestor.restype = wintypes.HWND
+user32.GetAncestor.argtypes = [wintypes.HWND, ctypes.c_uint]
+user32.GetWindow.restype = wintypes.HWND
+user32.GetWindow.argtypes = [wintypes.HWND, ctypes.c_uint]
+user32.SetThreadDpiAwarenessContext.restype = ctypes.c_void_p
+user32.SetThreadDpiAwarenessContext.argtypes = [ctypes.c_void_p]
 EnumProc = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
 
 
@@ -105,42 +112,70 @@ def find_or_open(wait: float = 30.0) -> int | None:
 
 
 class EmbeddedChrome:
+    """Chrome as a frameless window owned by Tidmunz, laid exactly over the page.
+
+    It stays its own top-level window (not a child), because Tidmunz is not DPI-aware: a child
+    would be stretched by Windows with the rest of the program and look blurred. Owned by the
+    main window it keeps above it, hides when it is minimized and has no taskbar button.
+    """
+
     def __init__(self, host: tk.Widget) -> None:
         self.host = host
         self.hwnd = None
+        self.visible = False
         self.old_style = 0
-        self.old_parent = None
+        self.old_exstyle = 0
+
+    def owner(self) -> int:
+        return user32.GetAncestor(self.host.winfo_id(), GA_ROOT)
 
     def attach(self, hwnd: int) -> None:
-        host_id = self.host.winfo_id()
-        style = user32.GetWindowLongPtrW(host_id, GWL_STYLE)
-        user32.SetWindowLongPtrW(host_id, GWL_STYLE, style | WS_CLIPCHILDREN)
-        user32.ShowWindow(hwnd, SW_RESTORE)  # a maximized window would not follow the frame's size
+        user32.ShowWindow(hwnd, SW_RESTORE)  # a maximized window would not follow the page's size
         self.old_style = user32.GetWindowLongPtrW(hwnd, GWL_STYLE)
-        self.old_parent = user32.GetParent(hwnd)
-        user32.SetWindowLongPtrW(hwnd, GWL_STYLE, (self.old_style & ~FRAME_STYLES) | WS_CHILD)
-        user32.SetParent(hwnd, host_id)
+        self.old_exstyle = user32.GetWindowLongPtrW(hwnd, GWL_EXSTYLE)
+        user32.SetWindowLongPtrW(hwnd, GWL_STYLE, (self.old_style & ~FRAME_STYLES) | WS_POPUP)
+        user32.SetWindowLongPtrW(hwnd, GWL_EXSTYLE, self.old_exstyle & ~WS_EX_APPWINDOW)
+        user32.SetWindowLongPtrW(hwnd, GWLP_HWNDPARENT, self.owner())
         self.hwnd = hwnd
-        self.fit()
-        user32.ShowWindow(hwnd, SW_SHOW)
+        self.fit(frame_changed=True)
+        user32.ShowWindow(hwnd, SW_SHOWNOACTIVATE)
 
-    def fit(self, _event=None) -> None:
-        if not self.hwnd:
+    def attached(self) -> bool:
+        hwnd = self.hwnd
+        return bool(hwnd and user32.IsWindow(hwnd) and user32.GetWindow(hwnd, GW_OWNER) == self.owner())
+
+    def fit(self, _event=None, frame_changed: bool = False) -> None:
+        """Lay Chrome over the page in real screen pixels, or out of sight when the page is hidden."""
+        hwnd = self.hwnd
+        if not hwnd or not user32.IsWindow(hwnd):
             return
-        rect = wintypes.RECT()
-        user32.GetClientRect(self.host.winfo_id(), ctypes.byref(rect))
-        user32.SetWindowPos(self.hwnd, None, 0, 0, rect.right, rect.bottom,
-                            SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED)
+        if user32.IsIconic(hwnd):  # minimized from its own tab strip: it must keep working
+            user32.ShowWindow(hwnd, SW_SHOWNOACTIVATE)
+        flags = SWP_NOZORDER | SWP_NOACTIVATE | (SWP_FRAMECHANGED if frame_changed else 0)
+        previous = user32.SetThreadDpiAwarenessContext(PER_MONITOR_AWARE_V2)
+        try:
+            rect = wintypes.RECT()
+            user32.GetWindowRect(self.host.winfo_id(), ctypes.byref(rect))
+            width, height = rect.right - rect.left, rect.bottom - rect.top
+            if self.visible and width > 50 and height > 50:
+                user32.SetWindowPos(hwnd, None, rect.left, rect.top, width, height, flags)
+            else:
+                user32.SetWindowPos(hwnd, None, -20000, -20000, max(width, 1200), max(height, 800), flags)
+        finally:
+            if previous:
+                user32.SetThreadDpiAwarenessContext(previous)
 
     def release(self) -> None:
         """Give the window back to the desktop as a normal Chrome window."""
         hwnd, self.hwnd = self.hwnd, None
         if not hwnd or not user32.IsWindow(hwnd):
             return
-        user32.SetParent(hwnd, self.old_parent or None)
+        user32.SetWindowLongPtrW(hwnd, GWLP_HWNDPARENT, 0)
         user32.SetWindowLongPtrW(hwnd, GWL_STYLE, self.old_style or (FRAME_STYLES & ~WS_POPUP))
+        user32.SetWindowLongPtrW(hwnd, GWL_EXSTYLE, self.old_exstyle)
         user32.SetWindowPos(hwnd, None, 80, 60, 1200, 820, SWP_NOZORDER | SWP_FRAMECHANGED)
         user32.ShowWindow(hwnd, SW_SHOW)
+
 
 class ChatGPTPage:
     """A page of the main window (below the top bar) that holds the program's Chrome.
@@ -161,7 +196,7 @@ class ChatGPTPage:
         self.host.pack(fill="both", expand=True)
         self.embed = EmbeddedChrome(self.host)
         self.host.bind("<Configure>", self.embed.fit)
-        # Tk tells the frame before its own window goes away: Chrome must leave first or it is destroyed too.
+        # Tk tells the frame before the program's window goes away: Chrome goes back to the desktop.
         self.host.bind("<Destroy>", lambda e: self.embed.release())
         root.bind("<Configure>", lambda e: self.layout() if e.widget is root else None, add="+")
         self.pids: set[int] = set()
@@ -185,6 +220,8 @@ class ChatGPTPage:
         self.page.place(in_=self.root, x=x, y=y, relwidth=1, relheight=1, height=-y)
         if self.shown:
             self.page.lift()
+        self.embed.visible = self.shown
+        self.root.after_idle(self.embed.fit)  # also when the main window only moved
 
     def show(self) -> None:
         self.shown = True
@@ -203,8 +240,7 @@ class ChatGPTPage:
         self.hide() if self.shown else self.show()
 
     def attached(self) -> bool:
-        hwnd = self.embed.hwnd
-        return bool(hwnd and user32.IsWindow(hwnd) and user32.GetParent(hwnd) == self.host.winfo_id())
+        return self.embed.attached()
 
     def watch(self) -> None:
         """Keep the program's Chrome inside this page, also when it was opened (again) by a job."""
@@ -212,6 +248,8 @@ class ChatGPTPage:
             if not self.attached():
                 self.embed.hwnd = None
                 self.search()
+            else:
+                self.embed.fit()
         finally:
             self.root.after(2000, self.watch)
 

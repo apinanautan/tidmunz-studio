@@ -163,7 +163,9 @@ def _message_text(message, images: list[str]) -> str:
 
 def chrome_provider_for_account(config, account: str | None):
     """A ChatGPTProvider backed by the Chrome tab when the extension is connected, else None."""
-    if os.environ.get("SNAPGEN_ENGINE", "").strip().lower() in ("web", "codex") or not chrome_connected():
+    # SNAPGEN_ENGINE=web only means "not Codex" (set when Codex became opt-in), so it keeps Chrome;
+    # "replay" forces the old website replay, "codex" forces Codex.
+    if os.environ.get("SNAPGEN_ENGINE", "").strip().lower() in ("replay", "codex") or not chrome_connected():
         return None
     from chatgpt_api.providers.chatgpt.provider import ChatGPTProvider
     provider = ChatGPTProvider(ChromeTransport())  # type: ignore[arg-type]

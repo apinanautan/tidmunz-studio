@@ -836,6 +836,25 @@ def analysis_request(script: str) -> str:
     )
 
 
+def cinematographer_request(rows: list, previous: str, era: str, horror: bool) -> str:
+    """เล่าภาพ: the director of photography reworks planned shots into movie frames."""
+    return (
+        "คุณคือผู้กำกับภาพ (Director of Photography) ของภาพยนตร์ไทยเรื่องนี้. ด้านล่างคือแผนช็อตที่ผู้เขียนบทวางไว้ "
+        "(ตามลำดับ พร้อมคำบรรยายที่ช็อตนั้นต้องเล่า). ปรับ prompt ของแต่ละช็อตให้ภาพดูเป็นฉากหนังจริง: "
+        "เลือกขนาดภาพ (extreme wide / wide / medium / close-up / extreme close-up) และมุมกล้อง (eye level, low angle, high angle, "
+        "over-the-shoulder, POV, top shot) ที่ส่งอารมณ์ของคำบรรยาย, ระบุเลนส์ (เช่น 24mm กว้าง, 50mm, 85mm ละลายหลัง), "
+        "แสง (ทิศทาง ความแรง สี เวลา แหล่งแสงในฉาก), องค์ประกอบ (rule of thirds, foreground ที่บังบางส่วน, leading lines, ความลึกของฉาก), "
+        "และไม่ให้ช็อตติดกันซ้ำขนาดภาพหรือมุมเดิม (สลับ wide → medium → close-up ให้มีจังหวะแบบตัดต่อหนัง). "
+        + ("เรื่องผี: ใช้แสงน้อย เงา พื้นที่ว่างในเฟรม มุมแอบมอง และสิ่งที่เห็นไม่ชัดเพื่อความน่ากลัว ไม่ใช้เลือดหรือความรุนแรง. " if horror else "")
+        + f"ยุคของเรื่อง: {era}. "
+        "ห้ามเปลี่ยนเหตุการณ์ ตัวละคร (ชื่อเดิม) สถานที่ หรือสิ่งที่คำบรรยายบอก; ห้ามเพิ่มตัวละครหรือเหตุการณ์ใหม่; "
+        "ภาพเดียวเต็มเฟรม ไม่มีตัวหนังสือ. เขียน prompt ใหม่เป็นภาษาไทยเต็มประโยค ครบรายละเอียดเดิม + ภาษากล้อง. "
+        + (f"ช็อตก่อนหน้าชุดนี้: {previous}. " if previous else "")
+        + 'ตอบ JSON เท่านั้น: {"scenes":[{"i":เลขช็อต,"prompt":"..."}]} ครบทุกช็อตในชุดนี้\n\n'
+        + json.dumps(rows, ensure_ascii=False)
+    )
+
+
 def judge_request(script: str, readings: list) -> str:
     """Stage 3 of the three-head reading (เล่าภาพ): settle the facts from two independent readings."""
     shown = "\n\n".join(f"ผู้วิเคราะห์ {label}:\n{json.dumps(reading, ensure_ascii=False)}" for label, reading in readings)
@@ -2669,6 +2688,8 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
         windows = plan_windows(segments)
         planned = project.setdefault("planned_windows", 0)
         scenes = project["scenes"] if planned else []
+        if not planned:
+            project.pop("dop_done", None)  # a new plan gets its own director-of-photography pass
         for w in range(planned, len(windows)):
             check_stop()
             window = windows[w]
@@ -2714,6 +2735,47 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
         project["continuity_done"] = False  # a new plan needs its own continuity record
         save_project()
         log(f"✓ วางแผน {len(scenes)} ฉาก (ไม่เกิน {target} รูป)")
+        cinematographer_pass()
+
+    def cinematographer_pass():
+        """A second GPT, as the film's director of photography, makes every planned shot look like a
+        movie frame (shot size, angle, lens, light, composition) without changing what happens."""
+        project = state["project"]
+        scenes = project.get("scenes") or []
+        if project.get("dop_done") or not scenes:
+            return
+        ensure_scene_text()
+        era = ((project.get("context") or {}).get("story") or {}).get("era") or "-"
+        batch_size = 10
+        changed = 0
+        for b in range(0, len(scenes), batch_size):
+            check_stop()
+            set_progress("plan", min(0.99, b / len(scenes)), f"ผู้กำกับภาพปรับฉาก {b + 1}-{min(len(scenes), b + batch_size)}/{len(scenes)} ...")
+            rows = [{"i": i + 1, "narration": str(sc.get("text") or "")[:300], "prompt": sc.get("prompt", ""),
+                     "characters": sc.get("characters") or [], "location": sc.get("location", "")}
+                    for i, sc in enumerate(scenes[b:b + batch_size], start=b)]
+            before = scenes[b - 1].get("prompt", "")[:200] if b else ""
+            try:
+                reply = parse_json_reply(gpt_text(cinematographer_request(rows, before, era,
+                                                                          project.get("style_mode") == "เรื่องผี")))
+            except Exception as exc:
+                log(f"ผู้กำกับภาพปรับฉาก {b + 1}-{b + len(rows)} ไม่ได้ ({str(exc)[:100]}) — ใช้แผนเดิม")
+                continue
+            for item in reply.get("scenes") or []:
+                try:
+                    i = int(item.get("i")) - 1
+                except (TypeError, ValueError, AttributeError):
+                    continue
+                new = str(item.get("prompt") or "").strip()
+                if b <= i < b + len(rows) and len(new) > 20:
+                    scenes[i].setdefault("prompt_before_dop", scenes[i].get("prompt", ""))
+                    scenes[i]["prompt"] = new
+                    changed += 1
+            save_project()
+            ui(refresh_table)
+        project["dop_done"] = True
+        save_project()
+        log(f"✓ ผู้กำกับภาพปรับมุมกล้อง/แสง/องค์ประกอบแล้ว {changed} ฉาก (prompt เดิมเก็บไว้ที่ prompt_before_dop)")
 
     def scene_prompt(scene):
         context = state["project"].get("context") or {}

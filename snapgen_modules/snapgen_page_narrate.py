@@ -855,6 +855,9 @@ def cinematographer_request(rows: list, previous: str, era: str, horror: bool) -
     )
 
 
+IMAGES_PER_CHAT = 5  # pictures per ChatGPT chat before a fresh one (speed vs. seeing the previous shots)
+
+
 def judge_request(script: str, readings: list) -> str:
     """Stage 3 of the three-head reading (เล่าภาพ): settle the facts from two independent readings."""
     shown = "\n\n".join(f"ผู้วิเคราะห์ {label}:\n{json.dumps(reading, ensure_ascii=False)}" for label, reading in readings)
@@ -2226,13 +2229,20 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
         old = {hashlib.md5(Path(s["image"]).read_bytes()).hexdigest()
                for s in project.get("scenes") or [] if s.get("image") and os.path.isfile(s["image"])}
         old.update(project.get("rejected_hashes") or [])
-        # Each picture is drawn in a chat of its own: the story chat grows by ~2 MB per picture and, once it
-        # holds a few dozen, every new picture there took 3-8 minutes (the page and GPT re-read it all).
-        # Faces stay consistent through the attached references and the look written into the prompt.
+        # Pictures go into short chats of IMAGES_PER_CHAT, not the story chat: it grows ~2 MB per picture
+        # and, once it held a few dozen, every new picture there took 3-8 minutes (the page and GPT re-read
+        # it all). A short chat still lets GPT see the previous few shots; faces stay consistent through
+        # the attached references and the look written into the prompt.
+        chat_state = project.setdefault("image_chat", {})
+        if int(chat_state.get("count") or 0) >= IMAGES_PER_CHAT:
+            chat_state.clear()
         out = imgmod.generate_image(
             prompt, output_dir=str(out_dir), name_hint=name, is_edit=bool(encoded),
-            ref_images=encoded or None, aspect_ratio=aspect, save_sidecar=False, temporary_chat=True,
+            ref_images=encoded or None, aspect_ratio=aspect, save_sidecar=False,
+            conversation_state=chat_state, conversation_save_fn=save_project,
         )
+        chat_state["count"] = int(chat_state.get("count") or 0) + 1
+        save_project()
         if hashlib.md5(Path(out).read_bytes()).hexdigest() in old:
             # An old picture came back (GPT drew nothing new): ask once more in another fresh chat.
             log(f"{name}: ได้รูปเก่าซ้ำกลับมา — สร้างใหม่ในแชตใหม่")

@@ -222,9 +222,21 @@ STYLES = {
     "เรื่องผี": {
         "prompt": ("ภาพถ่ายสมจริงแบบภาพยนตร์สยองขวัญไทย โทนสีมืด หม่น อึมครึม สีซีดอมเขียวเทา แสงน้อย เงาเข้ม "
                    "บรรยากาศน่ากลัววังเวง มีหมอกหรือความมืดรอบภาพ ไม่มีตัวหนังสือหรือคำบรรยายในภาพ"),
-        "still": True,
+        "still": False,
+        "zoom_only": True,  # slow zoom in / out at one steady speed, no pans
+        "film": True,       # old film grain, faded tone, flicker, dark corners
     },
 }
+
+# Zoom speed for "zoom_only" styles: the same every shot (1% of the frame per second, at most 15%),
+# so short shots do not rush.
+STEADY_ZOOM_PER_SECOND = 0.01
+STEADY_ZOOM_MAX = 0.15
+
+# Old horror-film look, applied after zoom/pan: faded warm tone, moving grain, light flicker, dark corners.
+FILM_LOOK = ("eq=eval=frame:saturation=0.55:contrast=1.12:brightness='-0.04+0.03*(random(0)-0.5)',"
+             "colorbalance=rm=0.05:gm=0.02:bm=-0.05:rh=0.03:bh=-0.03,"
+             "noise=alls=26:allf=t+u,vignette=angle=PI/4.5")
 
 # Thai ghosts GPT often does not know. Looks follow common Thai folklore and
 # are phrased for film (no gore words) so image models do not refuse.
@@ -716,11 +728,18 @@ def clip_fit_filter(clip_seconds: float, target: float, width: int, height: int)
     return vf + f",trim=duration={target:.3f},setpts=PTS-STARTPTS,format=yuv420p"
 
 
-def zoompan_filter(motion: str, frames: int, width: int, height: int) -> str:
+def zoompan_filter(motion: str, frames: int, width: int, height: int, steady: bool = False,
+                   film: bool = False) -> str:
     frames = max(1, int(frames))
     progress = f"on/{frames}"
     centre_x, centre_y = "iw/2-(iw/zoom/2)", "ih/2-(ih/zoom/2)"
-    if motion == "still":
+    step = STEADY_ZOOM_PER_SECOND / FPS
+    total = min(STEADY_ZOOM_MAX, step * frames)
+    if steady and motion == "zoom_out":
+        z, x, y = f"{1 + total:.5f}-{step:.7f}*on", centre_x, centre_y
+    elif steady and motion != "still":
+        z, x, y = f"1+{step:.7f}*on", centre_x, centre_y
+    elif motion == "still":
         z, x, y = "1", centre_x, centre_y
     elif motion == "zoom_out":
         z, x, y = f"1.15-0.15*{progress}", centre_x, centre_y
@@ -734,7 +753,7 @@ def zoompan_filter(motion: str, frames: int, width: int, height: int) -> str:
     return (
         f"scale={big_w}:{big_h}:force_original_aspect_ratio=increase,crop={big_w}:{big_h},"
         f"zoompan=z='{z}':x='{x}':y='{y}':d={frames}:s={width}x{height}:fps={FPS},"
-        "format=yuv420p"
+        + (FILM_LOOK + "," if film else "") + "format=yuv420p"
     )
 
 
@@ -3143,10 +3162,21 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
                 source, fit = fitted_clip(scene, length, width, height)
                 run(["-i", source, "-an", "-vf", fit, "-frames:v", str(frames), *encode, str(clip)])
             else:
-                still = STYLES.get(project.get("style_mode") or "ปกติ", STYLES["ปกติ"])["still"]
-                motion = "still" if still else scene.get("motion", "zoom_in")
-                run(["-i", scene["image"], "-vf", zoompan_filter(motion, frames, width, height),
+                style = STYLES.get(project.get("style_mode") or "ปกติ", STYLES["ปกติ"])
+                motion = "still" if style["still"] else scene.get("motion", "zoom_in")
+                if style.get("zoom_only"):
+                    motion = ("zoom_in", "zoom_out")[i % 2]  # in, out, in, out … at the same slow speed
+                run(["-i", scene["image"], "-vf", zoompan_filter(motion, frames, width, height,
+                                                                 steady=bool(style.get("zoom_only")),
+                                                                 film=bool(style.get("film"))),
                      "-frames:v", str(frames), *encode, str(clip)])
+                if style.get("film"):
+                    # The pictures with the same film look, for posting as stills (originals stay clean
+                    # because they are also the references for later shots).
+                    film_dir = Path(state["folder"]) / "ภาพฟิล์ม"
+                    film_dir.mkdir(exist_ok=True)
+                    run(["-i", scene["image"], "-vf", FILM_LOOK.replace("eval=frame:", "") + ",format=yuvj420p",
+                         "-frames:v", "1", "-q:v", "2", str(film_dir / f"scene_{i + 1:03d}.jpg")])
             return clip
 
         # The zoom/pan filter uses one core per scene: render a few scenes at

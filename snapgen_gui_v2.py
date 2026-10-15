@@ -8969,6 +8969,35 @@ def _attach_loaded_context_to_history(master):
     return True
 
 
+_PROMPT_REF_ANALYSIS_RULES = (
+    "ตอบ JSON เท่านั้น: "
+    '{"summary":"","protagonist":{"name":"","evidence":[]},"characters":'
+    '[{"name":"","role":"","evidence":[]}],"locations":[{"name":"","evidence":[]}],'
+    '"props":[{"name":"","evidence":[]}]} '
+    "ระบุตัวเอกและตัวละครจากสิ่งที่พูดหรือกระทำในเนื้อเรื่องจริง พร้อมข้อความหลักฐานสั้นๆ จากบท. "
+    "ถ้าผู้เล่าบอกชื่อตัวเอง เช่น 'ผมชื่อ ...' ให้ใช้ชื่อนั้น. "
+    "คำในวงเล็บท้ายหัวเรื่องเป็น metadata เว้นแต่ปรากฏเป็นบุคคลในเนื้อเรื่องด้วย. "
+    "เก็บตัวละคร สถานที่ และพร็อพที่มีผลต่อเหตุการณ์ให้ครบ"
+)
+
+
+def _separate_gpt_chat(text):
+    """One question in a chat of its own (never the story history): used by the independent readers."""
+    import urllib.request
+    body = {"model": "auto", "temporary_chat": True, "chatgpt_image_intercept": False, "temperature": 0.15,
+            "messages": [{"role": "user", "content": text}]}
+    request = urllib.request.Request(
+        _chatgpt_api_base() + "/chat/completions", data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
+        headers={"Authorization": "Bearer local-dev-key", "Content-Type": "application/json; charset=utf-8"},
+        method="POST")
+    with urllib.request.urlopen(request, timeout=900) as response:
+        data = json.loads(response.read().decode("utf-8", errors="replace"))
+    message = ((data.get("choices") or [{}])[0].get("message") or {}).get("content") or ""
+    if isinstance(message, list):
+        message = "".join(str(p.get("text") or "") if isinstance(p, dict) else str(p) for p in message)
+    return str(message)
+
+
 def _build_prompt_ref_context_in_history():
     """Create shared Ref/Prop context as the next turn in Prompt-Ref's story chat."""
     shared = _shared_context_payload(require_story_match=True)
@@ -8985,20 +9014,43 @@ def _build_prompt_ref_context_in_history():
         }], require_history=True)
         _mark_prompt_ref_context_ready()
         return shared["context"]
-    analysis_raw = _prompt_ref_chat([{
-        "role": "user",
-        "content": (
-            "อ่าน FULL STORY ที่อยู่ในประวัตินี้แล้วสรุปข้อเท็จจริงก่อน โดยยังไม่ต้องสร้าง SnapGen Context. "
-            "ตอบ JSON เท่านั้น: "
-            '{"summary":"","protagonist":{"name":"","evidence":[]},"characters":'
-            '[{"name":"","role":"","evidence":[]}],"locations":[{"name":"","evidence":[]}],'
-            '"props":[{"name":"","evidence":[]}]} '
-            "ระบุตัวเอกและตัวละครจากสิ่งที่พูดหรือกระทำในเนื้อเรื่องจริง พร้อมข้อความหลักฐานสั้นๆ จากบท. "
-            "ถ้าผู้เล่าบอกชื่อตัวเอง เช่น 'ผมชื่อ ...' ให้ใช้ชื่อนั้น. "
-            "คำในวงเล็บท้ายหัวเรื่องเป็น metadata เว้นแต่ปรากฏเป็นบุคคลในเนื้อเรื่องด้วย. "
-            "เก็บตัวละคร สถานที่ และพร็อพที่มีผลต่อเหตุการณ์ให้ครบ"
-        ),
-    }], require_history=True)
+    # Three heads: two independent readers in their own chats, then a judge in this story's history
+    # compares both against the script and settles the facts (one reading alone still misses things).
+    heads = []
+    story_text = _selected_story_text()
+    if story_text:
+        for label in ("A", "B"):
+            try:
+                print(f"[Prompt-Ref] Context ด่าน {label}: ผู้วิเคราะห์อิสระอ่านบท (แชตแยก)", flush=True)
+                raw = _separate_gpt_chat(
+                    "คุณคือผู้วิเคราะห์บทอิสระ อ่าน FULL STORY ด้านล่างแล้วสรุปข้อเท็จจริง โดยยังไม่ต้องสร้าง SnapGen Context. "
+                    + _PROMPT_REF_ANALYSIS_RULES + "\n\nFULL STORY:\n" + story_text)
+                head = _parse_bridge_context_json(raw)
+                if isinstance(head, dict) and isinstance(head.get("characters"), list):
+                    heads.append((label, head))
+            except Exception as exc:
+                print(f"[Prompt-Ref] Context ด่าน {label} ใช้ไม่ได้ ({str(exc)[:160]}) — ทำต่อด้วยด่านที่เหลือ", flush=True)
+    if heads:
+        print("[Prompt-Ref] Context ด่าน 3: ผู้ตัดสินเทียบคำตอบกับบทในประวัติเรื่อง", flush=True)
+        readings = "\n\n".join(f"ผู้วิเคราะห์ {label}:\n{json.dumps(head, ensure_ascii=False)}" for label, head in heads)
+        analysis_raw = _prompt_ref_chat([{
+            "role": "user",
+            "content": (
+                "คุณคือผู้ตัดสิน: FULL STORY อยู่ในประวัตินี้แล้ว ด้านล่างคือผลวิเคราะห์ของผู้วิเคราะห์อิสระที่อ่านบทเดียวกันแยกกัน. "
+                "เทียบทุกข้อกับบทจริง: ข้อที่ตรงกันและมีหลักฐานในบทให้เก็บ, ข้อที่มีคนหนึ่งขาดให้เติมถ้าบทมีหลักฐาน, "
+                "ข้อที่ใส่เกินจากบทให้ตัดออก, ข้อที่ขัดกัน (เช่น ชื่อ ตัวเอก จำนวนตัวละคร สถานที่) ให้เลือกตามหลักฐานในบทเท่านั้น "
+                "และบันทึกไว้ใน disagreements. ห้ามเพิ่มสิ่งที่บทไม่มี. "
+                + _PROMPT_REF_ANALYSIS_RULES
+                + ' เพิ่ม key "disagreements":[{"topic":"","A":"","B":"","decision":"","evidence":""}].\n\n'
+                + readings
+            ),
+        }], require_history=True)
+    else:
+        analysis_raw = _prompt_ref_chat([{
+            "role": "user",
+            "content": "อ่าน FULL STORY ที่อยู่ในประวัตินี้แล้วสรุปข้อเท็จจริงก่อน โดยยังไม่ต้องสร้าง SnapGen Context. "
+                       + _PROMPT_REF_ANALYSIS_RULES,
+        }], require_history=True)
     analysis = _parse_bridge_context_json(analysis_raw)
     if (not isinstance(analysis.get("protagonist"), dict)
             or not isinstance(analysis.get("characters"), list)

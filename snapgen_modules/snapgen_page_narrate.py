@@ -2351,8 +2351,8 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
             script = story_script()
             set_progress("context", 0.2, "GPT กำลังอ่านบทและหาหลักฐานตัวละคร ...")
             readings = []
-            if not video_mode:
-                # เล่าภาพ: three heads — two independent readers in chats of their own, then a judge in this
+            if True:
+                # เล่าภาพ and ออโต้: three heads — two independent readers in chats of their own, then a judge in this
                 # story's history settles the facts against the script (one reading alone still misses things).
                 for n, label in enumerate(("A", "B")):
                     set_progress("context", 0.1 + 0.1 * n, f"ด่าน {label}: ผู้วิเคราะห์อิสระอ่านบท (แชตแยก) ...")
@@ -2379,13 +2379,15 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
             context = with_retries("สร้าง Context", lambda: parse_json_reply(chat(context_from_analysis_request(analysis))))
             if not isinstance(context.get("characters"), list) or not context["characters"]:
                 raise RuntimeError("GPT คืน Context ไม่ครบ")
-            if not video_mode:
-                set_progress("context", 0.8, "GPT ตรวจหน้าตาตัวละครให้ต่างกันชัด ...")
+            if True:
+                set_progress("context", 0.8, "สไตลิสต์ออกแบบหน้าตา ทรงผม และชุดตัวละคร ...")
                 try:
                     import snapgen_distinct_looks
+                    style = STYLES.get(project.get("style_mode") or "ปกติ", STYLES["ปกติ"])["prompt"]
                     changed = snapgen_distinct_looks.merge(
-                        context, parse_json_reply(chat(snapgen_distinct_looks.request(context))))
-                    log(f"ตรวจหน้าตาตัวละครแล้ว — ปรับให้ต่างกันชัด {changed} ตัว")
+                        context, parse_json_reply(chat(snapgen_distinct_looks.request(
+                            context, "ภาพถ่ายสมจริงแบบภาพยนตร์" + (f" — {style}" if style else "")))))
+                    log(f"สไตลิสต์ออกแบบตัวละครแล้ว — ปรับหน้าตา/ทรงผม/ชุดให้ต่างกันชัด {changed} ตัว")
                 except Exception as exc:
                     log(f"ตรวจหน้าตาตัวละครไม่ได้ ({str(exc)[:120]}) — ใช้ Context ตามเดิม")
             try:
@@ -2682,8 +2684,10 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
             project["continuity_done"] = bool(project["direction"].get("continuity"))
             project["continuity_v"] = CONTINUITY_VERSION
             project["scenes"] = scenes_so_far
+            project.pop("dop_done", None)
             save_project()
             log(f"✓ วางแผน {len(scenes_so_far)} คลิป ({clip_summary(scenes_so_far)})")
+            cinematographer_pass()
             return
         windows = plan_windows(segments)
         planned = project.setdefault("planned_windows", 0)

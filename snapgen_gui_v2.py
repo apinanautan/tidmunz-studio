@@ -9094,11 +9094,12 @@ def _build_prompt_ref_context_in_history():
         raise RuntimeError("GPT คืน Context ว่าง")
     try:
         import snapgen_distinct_looks
-        print("[Prompt-Ref] ตรวจหน้าตาตัวละครให้ต่างกันชัด", flush=True)
+        print("[Prompt-Ref] สไตลิสต์ออกแบบหน้าตา ทรงผม และชุดตัวละคร", flush=True)
         looks = _parse_bridge_context_json(
-            _prompt_ref_chat([{"role": "user", "content": snapgen_distinct_looks.request(parsed)}], require_history=True))
+            _prompt_ref_chat([{"role": "user", "content": snapgen_distinct_looks.request(
+                parsed, str((parsed.get("visual_rules") or {}).get("style") or ""))}], require_history=True))
         changed = snapgen_distinct_looks.merge(parsed, looks)
-        print(f"[Prompt-Ref] ปรับหน้าตาให้ต่างกันชัด {changed} ตัว", flush=True)
+        print(f"[Prompt-Ref] สไตลิสต์ปรับหน้าตา/ทรงผม/ชุดให้ต่างกันชัด {changed} ตัว", flush=True)
     except Exception as exc:
         print(f"[Prompt-Ref] ตรวจหน้าตาตัวละครไม่ได้ ({str(exc)[:160]}) — ใช้ Context ตามเดิม", flush=True)
     _mark_prompt_ref_context_ready()

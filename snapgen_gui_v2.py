@@ -15449,14 +15449,6 @@ def _install_better_bridge_manager():
                 email = str(info.get("email") or stored.get("email_masked") or "พร้อมใช้งาน")
                 tk.Label(rowa, text=email, anchor="w", fg="#333").pack(side="left", fill="x", expand=True)
                 is_current = (acct == current_account)
-                try:
-                    import snapgen_codex_setup
-                    signed = (snapgen_codex_setup.account_home(BRIDGE_DIR, acct) / "auth.json").is_file()
-                except Exception:
-                    signed = False
-                tk.Button(rowa, text=("ChatGPT ✓" if signed else "ล็อกอิน"), width=9,
-                          bg=("#10A37F" if signed else "#F59E0B"), fg="white",
-                          command=lambda a=acct: login_chatgpt(a)).pack(side="right", padx=(4, 0))
                 if primary:
                     tk.Button(rowa, text="Use", width=5, bg=("#0EA5E9" if is_current else "#9CA3AF"), fg="white", command=lambda a=acct: use_account(a)).pack(side="right", padx=(4,0))
                     tk.Button(rowa, text="🗑", width=2, fg="#B71C1C", command=lambda a=acct: delete_account(a)).pack(side="right")
@@ -15637,24 +15629,11 @@ def _install_better_bridge_manager():
                 except Exception as e:
                     log_to(log_box, "❌ เพิ่ม account ไม่สำเร็จ: "+str(e))
             threading.Thread(target=worker, daemon=True).start()
-        def login_chatgpt(account=None):
-            """ChatGPT's own login page (through the official Codex CLI) — no capture needed."""
-            def worker():
-                try:
-                    import snapgen_codex_setup
-                    name = account or snapgen_codex_setup.active_account(BRIDGE_DIR)
-                    snapgen_codex_setup.start_login(
-                        BRIDGE_DIR, name, lambda m: log_to(log_box, m),
-                        on_done=lambda ok: root.after(0, refresh_accounts) if ok else None)
-                except Exception as e:
-                    log_to(log_box, "❌ เปิดหน้าล็อกอิน ChatGPT ไม่สำเร็จ: " + str(e))
-            threading.Thread(target=worker, daemon=True).start()
         row=tk.Frame(win); row.pack(fill="x", padx=8, pady=(0,8))
         tk.Button(row,text="📦 ติดตั้ง",command=install).pack(side="left")
         tk.Button(row,text="▶ เริ่ม",command=start).pack(side="left",padx=(6,0))
         tk.Button(row,text="⏹ หยุด",command=stop).pack(side="left",padx=(6,0))
-        tk.Button(row,text="🔑 ล็อกอิน ChatGPT",command=login_chatgpt,bg="#10A37F",fg="white").pack(side="left",padx=(12,0))
-        tk.Button(row,text="🔑 เพิ่ม Account",command=add_account,bg="#673AB7",fg="white").pack(side="left",padx=(6,0))
+        tk.Button(row,text="🔑 เพิ่ม Account",command=add_account,bg="#673AB7",fg="white").pack(side="left",padx=(12,0))
         tk.Button(row,text="🔄 ตรวจสอบ",command=refresh).pack(side="left",padx=(6,0))
         tk.Button(row,text="ปิด",command=win.destroy).pack(side="right")
         refresh_accounts()
@@ -15986,14 +15965,54 @@ def _install_image_bridge_status():
     except Exception as _voice_error:
         print(f"[SnapGen] global voice mic failed: {_voice_error}")
 
+    last_light = {"color": "#FFC107", "text": "Bridge: กำลังตรวจ..."}
+
+    def chrome_link_state():
+        """(connected, label) of the Tidmunz ChatGPT extension, read from the in-program job queue."""
+        try:
+            import snapgen_chrome_relay
+            state = snapgen_chrome_relay.RELAY.status()
+        except Exception:
+            return False, "ส่วนขยาย Chrome: —"
+        if not state.get("connected"):
+            return False, "ส่วนขยาย Chrome: ยังไม่เชื่อมต่อ"
+        if state.get("busy"):
+            waiting = f" (รอคิว {state['queue']})" if state.get("queue") else ""
+            return True, f"ส่วนขยาย Chrome: กำลังทำงาน{waiting}"
+        return True, "ส่วนขยาย Chrome: เชื่อมต่อแล้ว ✓"
+
+    def render_light():
+        """Show the Chrome extension in place of the Bridge (ChatGPT work now runs in Chrome)."""
+        color, text = last_light["color"], last_light["text"]
+        connected, label = chrome_link_state()
+        parts = text.split(" | ")
+        if parts and parts[0].startswith("Bridge"):
+            parts[0] = label
+        else:
+            parts.insert(0, label)
+        if not connected and color == "#4CAF50":
+            color = "#FFC107"
+        try:
+            light.itemconfig(dot, fill=color)
+            status_var.set(" | ".join(parts))
+            footer_light = globals().get("_footer_status_light")
+            footer_dot = globals().get("_footer_status_light_item")
+            if footer_light is not None and footer_dot is not None and footer_light.winfo_exists():
+                footer_light.itemconfig(footer_dot, fill=color)
+        except Exception:
+            pass
+
     def set_light(color, text):
         if g.get("_bridge_busy"):
             return  # a picture is being made: keep the orange "working" light
-        try:
-            light.itemconfig(dot, fill=color)
-            status_var.set(text)
-        except Exception:
-            pass
+        last_light.update(color=color, text=text)
+        render_light()
+
+    def watch_chrome_link():
+        render_light()  # local check only, no network: the extension's ON/OFF shows within seconds
+        _snapgen_after(4000, watch_chrome_link)
+
+    _snapgen_after(3000, watch_chrome_link)
 
     account_name_cache = {}
 

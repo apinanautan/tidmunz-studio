@@ -2096,9 +2096,8 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
             detail = exc.read().decode("utf-8", errors="replace")
             try:
                 error = json.loads(detail).get("error") or {}
-                if error.get("raw_provider_error") == "ChatGPT conversation failed: 404 " or (
-                        error.get("code") == "chatgpt_conversation_not_found" and not json.loads(
-                            request.data.decode("utf-8")).get("metadata")):
+                if error.get("code") == "chatgpt_conversation_not_found" and not json.loads(
+                        request.data.decode("utf-8")).get("metadata"):
                     # Even a brand-new chat is refused: the account's capture no longer matches ChatGPT.
                     raise RuntimeError(
                         "ChatGPT ไม่รับแชตใหม่จากบัญชีนี้ (404) — ข้อมูลที่จับบัญชีไว้ใน Bridge ใช้ไม่ได้แล้ว "

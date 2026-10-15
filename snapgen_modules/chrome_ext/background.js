@@ -136,22 +136,31 @@ async function waitLoaded(tabId, limitMs) {
 
 async function openPage(tabId, url) {
   await chrome.tabs.update(tabId, {url});
-  await waitLoaded(tabId, 60000);
-  for (let i = 0; i < 60; i++) {  // wait for the composer
-    let ready = "";
+  // Do not wait for "complete": ChatGPT keeps loading in the background; the composer is what counts.
+  let seen = "", reloaded = false;
+  const start = Date.now();
+  while (Date.now() - start < 120000) {
+    await sleep(1000);
+    let ready = null;
     try {
       ready = await inPage(tabId, () => {
-        const page = document.title + " " + (document.body ? document.body.innerText.slice(0, 400) : "");
-        if (/just a moment|verify you are human|ยืนยันว่าคุณเป็นมนุษย์/i.test(page)) return "challenge";
-        return document.querySelector('form div.ProseMirror[role="textbox"]') ? "ok" : "";
+        const body = document.body ? document.body.innerText.slice(0, 300) : "";
+        const page = (document.title + " | " + body).replace(/\s+/g, " ").slice(0, 160);
+        if (/just a moment|verify you are human|ยืนยันว่าคุณเป็นมนุษย์|checking your browser/i.test(page)) return {state: "challenge", page};
+        if (document.querySelector('form div.ProseMirror[role="textbox"]')) return {state: "ok", page};
+        return {state: "", page};
       });
-    } catch (e) {}
-    if (ready === "ok") return;
-    if (ready === "challenge")
+    } catch (e) {}  // still navigating
+    if (ready && ready.state === "ok") return;
+    if (ready && ready.page) seen = ready.page;
+    if (ready && ready.state === "challenge")
       throw new Error("ChatGPT asks to confirm you are human — open the program's Chrome window and confirm, then try again");
-    await sleep(1000);
+    if (!reloaded && Date.now() - start > 45000) {  // stuck once: reload the tab and wait again
+      reloaded = true;
+      try { await chrome.tabs.reload(tabId); } catch (e) {}
+    }
   }
-  throw new Error("ChatGPT composer not found (logged out or page changed)");
+  throw new Error("ChatGPT page not ready after 2 minutes — the window shows: " + (seen || "nothing"));
 }
 
 async function inPage(tabId, func, args) {

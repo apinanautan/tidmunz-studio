@@ -836,6 +836,20 @@ def analysis_request(script: str) -> str:
     )
 
 
+def judge_request(script: str, readings: list) -> str:
+    """Stage 3 of the three-head reading (เล่าภาพ): settle the facts from two independent readings."""
+    shown = "\n\n".join(f"ผู้วิเคราะห์ {label}:\n{json.dumps(reading, ensure_ascii=False)}" for label, reading in readings)
+    return (
+        "คุณคือผู้ตัดสิน: ด้านล่างคือ FULL STORY และผลวิเคราะห์ของผู้วิเคราะห์อิสระที่อ่านบทเดียวกันแยกกัน. "
+        "เทียบทุกข้อกับบทจริง: ข้อที่ตรงกันและมีหลักฐานในบทให้เก็บ, ข้อที่มีคนหนึ่งขาดให้เติมถ้าบทมีหลักฐาน, "
+        "ข้อที่ใส่เกินจากบทให้ตัดออก, ข้อที่ขัดกัน (เช่น ชื่อ ตัวเอก จำนวนตัวละคร ช่วงวัย สถานที่) ให้เลือกตามหลักฐานในบทเท่านั้น "
+        "และบันทึกไว้ใน disagreements. ห้ามเพิ่มสิ่งที่บทไม่มี. ตอบ JSON รูปแบบเดียวกับผลวิเคราะห์ "
+        '(summary, protagonist, characters[name, role, importance, is_group, evidence], locations, props) '
+        'และเพิ่ม "disagreements":[{"topic":"","A":"","B":"","decision":"","evidence":""}].\n\n'
+        + shown + "\n\nFULL STORY:\n" + script
+    )
+
+
 def context_from_analysis_request(analysis: dict) -> str:
     """Step 2: turn the facts into the program's SnapGen Context (same schema as Prompt-Ref)."""
     try:
@@ -2317,7 +2331,27 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
             # then the full SnapGen Context built only from those facts.
             script = story_script()
             set_progress("context", 0.2, "GPT กำลังอ่านบทและหาหลักฐานตัวละคร ...")
-            analysis = with_retries("วิเคราะห์บท", lambda: parse_json_reply(chat(analysis_request(script))))
+            readings = []
+            if not video_mode:
+                # เล่าภาพ: three heads — two independent readers in chats of their own, then a judge in this
+                # story's history settles the facts against the script (one reading alone still misses things).
+                for n, label in enumerate(("A", "B")):
+                    set_progress("context", 0.1 + 0.1 * n, f"ด่าน {label}: ผู้วิเคราะห์อิสระอ่านบท (แชตแยก) ...")
+                    try:
+                        reading = parse_json_reply(gpt_text(analysis_request(script)))
+                        if isinstance(reading, dict) and isinstance(reading.get("characters"), list):
+                            readings.append((label, reading))
+                    except Exception as exc:
+                        log(f"ด่าน {label} ใช้ไม่ได้ ({str(exc)[:120]}) — ทำต่อด้วยด่านที่เหลือ")
+            if readings:
+                set_progress("context", 0.3, "ด่าน 3: ผู้ตัดสินเทียบคำตอบกับบท ...")
+                analysis = with_retries("ตัดสินผลวิเคราะห์บท",
+                                        lambda: parse_json_reply(chat(judge_request(script, readings))))
+                for item in analysis.get("disagreements") or []:
+                    if isinstance(item, dict) and item.get("topic"):
+                        log(f"ผู้วิเคราะห์เห็นต่างเรื่อง {item.get('topic')} → เลือก: {str(item.get('decision'))[:80]}")
+            else:
+                analysis = with_retries("วิเคราะห์บท", lambda: parse_json_reply(chat(analysis_request(script))))
             project["history_seeded"] = True  # the full script is now in this story's history
             if not isinstance(analysis.get("characters"), list) or not analysis["characters"]:
                 raise RuntimeError("GPT วิเคราะห์บทไม่ครบ: ไม่มีรายชื่อตัวละคร")

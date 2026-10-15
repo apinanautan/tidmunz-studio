@@ -2360,6 +2360,15 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
             context = with_retries("สร้าง Context", lambda: parse_json_reply(chat(context_from_analysis_request(analysis))))
             if not isinstance(context.get("characters"), list) or not context["characters"]:
                 raise RuntimeError("GPT คืน Context ไม่ครบ")
+            if not video_mode:
+                set_progress("context", 0.8, "GPT ตรวจหน้าตาตัวละครให้ต่างกันชัด ...")
+                try:
+                    import snapgen_distinct_looks
+                    changed = snapgen_distinct_looks.merge(
+                        context, parse_json_reply(chat(snapgen_distinct_looks.request(context))))
+                    log(f"ตรวจหน้าตาตัวละครแล้ว — ปรับให้ต่างกันชัด {changed} ตัว")
+                except Exception as exc:
+                    log(f"ตรวจหน้าตาตัวละครไม่ได้ ({str(exc)[:120]}) — ใช้ Context ตามเดิม")
             try:
                 from snapgen_context_tools import normalize_context_master
                 extras = {c.get("name"): c for c in context["characters"] if isinstance(c, dict)}

@@ -9092,6 +9092,15 @@ def _build_prompt_ref_context_in_history():
         raise RuntimeError("GPT คืน Context ไม่ครบ")
     if not parsed.get("characters") and not parsed.get("locations"):
         raise RuntimeError("GPT คืน Context ว่าง")
+    try:
+        import snapgen_distinct_looks
+        print("[Prompt-Ref] ตรวจหน้าตาตัวละครให้ต่างกันชัด", flush=True)
+        looks = _parse_bridge_context_json(
+            _prompt_ref_chat([{"role": "user", "content": snapgen_distinct_looks.request(parsed)}], require_history=True))
+        changed = snapgen_distinct_looks.merge(parsed, looks)
+        print(f"[Prompt-Ref] ปรับหน้าตาให้ต่างกันชัด {changed} ตัว", flush=True)
+    except Exception as exc:
+        print(f"[Prompt-Ref] ตรวจหน้าตาตัวละครไม่ได้ ({str(exc)[:160]}) — ใช้ Context ตามเดิม", flush=True)
     _mark_prompt_ref_context_ready()
     return parsed
 

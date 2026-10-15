@@ -105,30 +105,48 @@ async function loop() {
 // ── the ChatGPT tab ──
 async function workerTab() {
   const saved = (await chrome.storage.session.get("tabId")).tabId;
+  let id = null;
   if (saved) {
     try {
       const tab = await chrome.tabs.get(saved);
-      if (tab && /^https:\/\/chatgpt\.com\//.test(tab.url || tab.pendingUrl || "")) return tab.id;
+      if (tab && /^https:\/\/chatgpt\.com\//.test(tab.url || tab.pendingUrl || "")) id = tab.id;
     } catch (e) {}
   }
-  const tab = await chrome.tabs.create({url: "https://chatgpt.com/", active: false, pinned: true});
-  await chrome.storage.session.set({tabId: tab.id});
-  return tab.id;
+  if (id === null) {
+    const tab = await chrome.tabs.create({url: "https://chatgpt.com/", active: false, pinned: true});
+    await chrome.storage.session.set({tabId: tab.id});
+    id = tab.id;
+  }
+  // Chrome's memory saver must not unload (and reload) the work tab in the middle of a job.
+  try { await chrome.tabs.update(id, {autoDiscardable: false}); } catch (e) {}
+  return id;
 }
 
-async function openPage(tabId, url) {
-  await chrome.tabs.update(tabId, {url});
+async function waitLoaded(tabId, limitMs) {
   const start = Date.now();
   for (;;) {
     await sleep(700);
     const tab = await chrome.tabs.get(tabId);
-    if (tab.status === "complete") break;
-    if (Date.now() - start > 60000) throw new Error("ChatGPT page did not load");
+    if (tab.status === "complete") return;
+    if (Date.now() - start > limitMs) throw new Error("ChatGPT page did not load");
   }
+}
+
+async function openPage(tabId, url) {
+  await chrome.tabs.update(tabId, {url});
+  await waitLoaded(tabId, 60000);
   for (let i = 0; i < 60; i++) {  // wait for the composer
-    const [{result}] = await chrome.scripting.executeScript({target: {tabId}, world: "MAIN",
-      func: () => !!document.querySelector('form div.ProseMirror[role="textbox"]')});
-    if (result) return;
+    let ready = "";
+    try {
+      ready = await inPage(tabId, () => {
+        const page = document.title + " " + (document.body ? document.body.innerText.slice(0, 400) : "");
+        if (/just a moment|verify you are human|ยืนยันว่าคุณเป็นมนุษย์/i.test(page)) return "challenge";
+        return document.querySelector('form div.ProseMirror[role="textbox"]') ? "ok" : "";
+      });
+    } catch (e) {}
+    if (ready === "ok") return;
+    if (ready === "challenge")
+      throw new Error("ChatGPT asks to confirm you are human — open the program's Chrome window and confirm, then try again");
     await sleep(1000);
   }
   throw new Error("ChatGPT composer not found (logged out or page changed)");
@@ -144,12 +162,25 @@ async function runJob(job) {
   const url = job.conversation_id ? `https://chatgpt.com/c/${job.conversation_id}` : "https://chatgpt.com/";
   await openPage(tabId, url);
   const started = await inPage(tabId, pageSend, [job]);
-  if (started && started.error) return started;
+  if (!started || started.error) return started || {error: "ChatGPT page did not answer"};
+  // The job's state lives here, not in the page: a reloaded tab keeps going from the conversation itself.
+  const state = {before: started.before, oldPointers: started.oldPointers, sentAt: Date.now(),
+                 cid: job.conversation_id || null, idle: 0};
   const deadline = Date.now() + JOB_LIMIT_MS;
   while (Date.now() < deadline) {
     await sleep(3000);  // short calls keep this worker alive while ChatGPT works
-    const state = await inPage(tabId, pagePoll, [job.type]);
-    if (state && (state.done || state.error)) return state;
+    let result = null;
+    try {
+      const tab = await chrome.tabs.get(tabId);
+      if (tab.status !== "complete") continue;  // reloading: look again when it is back
+      result = await inPage(tabId, pagePoll, [job.type, state]);
+    } catch (e) {
+      continue;  // the page was navigating; the conversation keeps the answer
+    }
+    if (!result) continue;
+    if (result.cid) state.cid = result.cid;
+    if (result.idle != null) state.idle = result.idle;
+    if (result.done || result.error) return result;
   }
   return {error: "ChatGPT took longer than 12 minutes"};
 }
@@ -160,11 +191,16 @@ async function pageSend(job) {
   const session = await (await fetch("/api/auth/session")).json();
   if (!session || !session.accessToken) return {error: "ChatGPT is logged out in Chrome — log in, then try again"};
   let before = [];  // messages already in the chat: everything else is this job's answer
+  const oldPointers = [];  // pictures already in the chat (earlier pictures, references): never the answer
   if (job.conversation_id) {
     const check = await fetch(`/backend-api/conversation/${job.conversation_id}`,
       {headers: {Authorization: "Bearer " + session.accessToken}});
     if (check.status === 404 || check.status === 403) return {error: "ChatGPT conversation failed: 404 — not found for this account", not_found: true};
-    before = Object.keys((await check.json()).mapping || {});
+    const data = await check.json();
+    before = Object.keys(data.mapping || {});
+    for (const node of Object.values(data.mapping || {}))
+      for (const part of (node.message && node.message.content && node.message.content.parts) || [])
+        if (part && typeof part === "object" && part.asset_pointer) oldPointers.push(part.asset_pointer);
   }
   const editor = document.querySelector('form div.ProseMirror[role="textbox"]');
   const form = editor.closest("form");
@@ -195,54 +231,55 @@ async function pageSend(job) {
     if (send && !send.disabled) break;
   }
   if (!send || send.disabled) return {error: "ChatGPT did not accept the attachments / prompt in time"};
-  window.__tidmunz = {before, sentAt: Date.now(), cid: job.conversation_id || null, idle: 0};
   send.click();
-  return {ok: true};
+  return {ok: true, before, oldPointers};
 }
 
-async function pagePoll(kind) {
-  const state = window.__tidmunz;
-  if (!state) return {error: "ChatGPT page reloaded while working"};
+async function pagePoll(kind, state) {
   const busy = [...document.querySelectorAll("form button, button[data-testid]")].some(b =>
     b.getAttribute("data-testid") === "stop-button" ||
     /^(stop|หยุด|停止|detener|arrêter|stopp)/i.test((b.getAttribute("aria-label") || "").trim()));
   const match = location.pathname.match(/\/c\/([0-9a-f-]{20,})/);
-  if (match) state.cid = match[1];
-  state.idle = busy ? 0 : state.idle + 1;
+  const cid = state.cid || (match ? match[1] : null);
+  const idle = busy ? 0 : (state.idle || 0) + 1;
   const elapsed = (Date.now() - state.sentAt) / 1000;
-  if (!state.cid || state.idle < 2 || elapsed < 6) return {done: false};
+  if (!cid || idle < 2 || elapsed < 6) return {done: false, cid, idle};
 
   const token = (await (await fetch("/api/auth/session")).json()).accessToken;
   const auth = {headers: {Authorization: "Bearer " + token}};
-  const data = await (await fetch(`/backend-api/conversation/${state.cid}`, auth)).json();
+  const data = await (await fetch(`/backend-api/conversation/${cid}`, auth)).json();
   const nodes = Object.entries(data.mapping || {}).filter(([id, n]) => n.message && !state.before.includes(id))
     .map(([, n]) => n.message).sort((a, b) => (a.create_time || 0) - (b.create_time || 0));
+  const skip = new Set(state.oldPointers || []);
   const pointers = [];
   let text = "";
   for (const m of nodes) {
     const role = m.author && m.author.role;
-    if (role === "user") continue;
-    for (const part of (m.content && m.content.parts) || []) {
-      if (part && typeof part === "object" && part.asset_pointer && !pointers.includes(part.asset_pointer)) pointers.push(part.asset_pointer);
+    const parts = (m.content && m.content.parts) || [];
+    if (role === "user") {  // the pictures we attached come back in answers too
+      for (const part of parts) if (part && typeof part === "object" && part.asset_pointer) skip.add(part.asset_pointer);
+      continue;
     }
+    for (const part of parts)
+      if (part && typeof part === "object" && part.asset_pointer && !pointers.includes(part.asset_pointer)) pointers.push(part.asset_pointer);
     if (role === "assistant" && m.content && m.content.content_type === "text") {
-      const t = (m.content.parts || []).filter(p => typeof p === "string").join("\n").trim();
+      const t = parts.filter(p => typeof p === "string").join("\n").trim();
       if (t) text = t;
     }
     if (m.content && m.content.content_type === "system_error") text = (m.content.text || text);
   }
+  const fresh = pointers.filter(p => !skip.has(p));
   // A picture can still be drawing after the reply text: give it time unless ChatGPT answered instead.
-  if (kind === "image" && !pointers.length && !text && elapsed < 240) return {done: false};
+  if (kind === "image" && !fresh.length && !text && elapsed < 240) return {done: false, cid, idle};
   const images = [];
-  for (const pointer of pointers) {
+  for (const pointer of (kind === "image" ? fresh.slice(-1) : fresh)) {  // one picture per job: the newest
     const id = pointer.replace(/^[a-z-]+:\/\//, "");
-    const info = await (await fetch(`/backend-api/files/download/${id}?conversation_id=${state.cid}&inline=false`, auth)).json();
+    const info = await (await fetch(`/backend-api/files/download/${id}?conversation_id=${cid}&inline=false`, auth)).json();
     if (!info.download_url) continue;
     const blob = await (await fetch(info.download_url)).blob();
     images.push(await new Promise(r => { const fr = new FileReader(); fr.onload = () => r(fr.result); fr.readAsDataURL(blob); }));
   }
-  window.__tidmunz = null;
-  return {done: true, text, images, conversation_id: state.cid, message_id: data.current_node || null};
+  return {done: true, text, images, conversation_id: cid, message_id: data.current_node || null};
 }
 
 chrome.alarms.create("tidmunz-wake", {periodInMinutes: 0.5});

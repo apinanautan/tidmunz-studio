@@ -36,12 +36,16 @@ def _relay_info() -> dict:
 
 
 def chrome_connected() -> bool:
+    """Tidmunz's job queue is running (Tidmunz is open). It opens the program's Chrome itself when a
+    job arrives and the extension is not connected yet, so a closed Chrome no longer falls back to the
+    website replay that ChatGPT refuses."""
     info = _relay_info()
     if not info.get("port"):
         return False
     try:
         with urllib.request.urlopen(f"http://127.0.0.1:{info['port']}/status", timeout=2) as response:
-            return bool(json.loads(response.read().decode("utf-8")).get("connected"))
+            json.loads(response.read().decode("utf-8"))
+        return True
     except Exception:
         return False
 

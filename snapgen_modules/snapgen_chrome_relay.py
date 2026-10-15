@@ -23,6 +23,7 @@ from urllib.parse import parse_qs, urlparse
 PORTS = (8766, 8767, 8768)
 JOB_TIMEOUT = 15 * 60
 CONNECTED_WITHIN = 45  # seconds since the extension last asked for work
+OPEN_WAIT = 90  # seconds to wait for the extension after opening the program's Chrome
 
 
 def data_dir() -> Path:
@@ -87,6 +88,7 @@ class _Relay:
         self.images = ""  # pictures left today, as chatgpt.com reports it
         self.reset = ""
         self.plan = ""
+        self.opened_at = 0.0
         self.token = ""
         self.port = 0
 
@@ -113,6 +115,15 @@ class _Relay:
     # Bridge side
     def run(self, job: dict) -> dict:
         job = dict(job)
+        if not self.status()["connected"]:
+            # A GPT job but the program's Chrome is closed: open it and wait for the extension.
+            self._open_chrome()
+            deadline = time.time() + OPEN_WAIT
+            while time.time() < deadline and not self.status()["connected"]:
+                time.sleep(1)
+            if not self.status()["connected"]:
+                return {"error": "เปิด Chrome ของโปรแกรมให้แล้ว แต่ส่วนขยาย Tidmunz ChatGPT ยังไม่เชื่อมต่อ — "
+                                 "ติดตั้งส่วนขยายและล็อกอิน ChatGPT ในหน้าต่าง Chrome นั้น แล้วลองใหม่"}
         job["id"] = uuid.uuid4().hex
         slot = {"event": threading.Event(), "result": None}
         self.waiting[job["id"]] = slot
@@ -128,6 +139,16 @@ class _Relay:
             return slot["result"] or {"error": "empty result"}
         finally:
             self.waiting.pop(job["id"], None)
+
+    def _open_chrome(self) -> None:
+        with self.lock:
+            if time.time() - self.opened_at < OPEN_WAIT:
+                return  # one window is enough while it starts
+            self.opened_at = time.time()
+        try:
+            open_program_chrome()
+        except Exception:
+            pass
 
     def status(self) -> dict:
         return {"connected": time.time() - self.last_seen < CONNECTED_WITHIN, "last_seen": self.last_seen,

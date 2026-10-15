@@ -234,9 +234,10 @@ STEADY_ZOOM_PER_SECOND = 0.01
 STEADY_ZOOM_MAX = 0.15
 
 # Old horror-film look, applied after zoom/pan: faded warm tone, moving grain, light flicker, dark corners.
-FILM_LOOK = ("eq=eval=frame:saturation=0.55:contrast=1.12:brightness='-0.04+0.03*(random(0)-0.5)',"
+# Kept light: horror pictures are already dark, so it lifts the shadows a little instead of darkening.
+FILM_LOOK = ("eq=eval=frame:saturation=0.6:contrast=0.96:gamma=1.12:brightness='0.03+0.025*(random(0)-0.5)',"
              "colorbalance=rm=0.05:gm=0.02:bm=-0.05:rh=0.03:bh=-0.03,"
-             "noise=alls=26:allf=t+u,vignette=angle=PI/4.5")
+             "noise=alls=24:allf=t+u,vignette=angle=PI/7")
 
 # Thai ghosts GPT often does not know. Looks follow common Thai folklore and
 # are phrased for film (no gore words) so image models do not refuse.
@@ -1651,6 +1652,7 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
     subtitle_var = tk.BooleanVar(value=False)
     style_var = tk.StringVar(value="ปกติ")
     review_var = tk.BooleanVar(value=False)
+    film_var = tk.BooleanVar(value=True)  # เล่าภาพ เรื่องผี: old film look on the video
     economy_var = tk.BooleanVar(value=True)  # ออโต้: Slow 2x on every shot, longer shots, about half the credit
     stage_var = tk.StringVar(value="พร้อม")
 
@@ -1748,6 +1750,14 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
         tk.Label(options, text="รูปฉาก (+ รูปตัวละครตามเรื่อง)", bg=bg).pack(side="left", padx=(0, 14))
     tk.Label(options, text="สไตล์", bg=bg).pack(side="left")
     ttk.Combobox(options, textvariable=style_var, values=list(STYLES), width=9, state="readonly").pack(side="left", padx=(4, 14))
+    if not video_mode:
+        def film_changed():
+            if state.get("project") is not None:
+                state["project"]["film"] = bool(film_var.get())
+                state["project"].get("done", {}).pop("video", None)  # the next video uses the new choice
+                save_project()
+        tk.Checkbutton(options, text="ฟิลเตอร์ฟิล์มเก่า (เรื่องผี)", variable=film_var,
+                       command=film_changed, bg=bg).pack(side="left", padx=(0, 14))
     tk.Checkbutton(options, text="ใส่ซับไตเติล", variable=subtitle_var, bg=bg).pack(side="left", padx=(0, 10))
     tk.Checkbutton(options, text="หยุดให้ตรวจแผนก่อนสร้างรูป", variable=review_var, bg=bg).pack(side="left")
 
@@ -1912,6 +1922,7 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
         subtitle_var.set(bool(project.get("subtitles", subtitle_var.get())))
         if video_mode:
             economy_var.set(bool(project.get("economy", True)))
+        film_var.set(bool(project.get("film", True)))
         style_var.set(project.get("style_mode") if project.get("style_mode") in STYLES else "ปกติ")
         save_project()
         refresh_all()
@@ -3164,13 +3175,14 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
             else:
                 style = STYLES.get(project.get("style_mode") or "ปกติ", STYLES["ปกติ"])
                 motion = "still" if style["still"] else scene.get("motion", "zoom_in")
+                film_on = bool(style.get("film") and project.get("film", True))
                 if style.get("zoom_only"):
                     motion = ("zoom_in", "zoom_out")[i % 2]  # in, out, in, out … at the same slow speed
                 run(["-i", scene["image"], "-vf", zoompan_filter(motion, frames, width, height,
                                                                  steady=bool(style.get("zoom_only")),
-                                                                 film=bool(style.get("film"))),
+                                                                 film=film_on),
                      "-frames:v", str(frames), *encode, str(clip)])
-                if style.get("film"):
+                if film_on:
                     # The pictures with the same film look, for posting as stills (originals stay clean
                     # because they are also the references for later shots).
                     film_dir = Path(state["folder"]) / "ภาพฟิล์ม"

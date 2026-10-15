@@ -4262,6 +4262,12 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
             state["stop"] = True
             log("กำลังหยุดหลังขั้นตอนย่อยที่ทำอยู่ ...")
 
+    def _mtime(path) -> float:
+        try:
+            return os.path.getmtime(str(path)) if path else 0.0
+        except OSError:
+            return 0.0
+
     def regenerate_selected(only=None, ask=True):
         project = state["project"]
         selected = sorted(only if only is not None else (int(i) for i in table.selection()))
@@ -4278,6 +4284,7 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
         state["busy"], state["stop"] = True, False
 
         def worker():
+            before = {i: (project["scenes"][i].get("image"), _mtime(project["scenes"][i].get("image"))) for i in selected}
             try:
                 stage_images(selected)
                 if video_mode:
@@ -4291,7 +4298,14 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
                 save_project()
                 state["busy"] = False
                 ui(refresh_all)
-                log("สร้างรูปใหม่เสร็จ — กด 'ต่อวิดีโอใหม่' เพื่อทำวิดีโออีกรอบ")
+                # Only say "done" for shots that really got a new picture.
+                made = [i + 1 for i in selected
+                        if (project["scenes"][i].get("image"), _mtime(project["scenes"][i].get("image"))) != before[i]]
+                failed = [i + 1 for i in selected if i + 1 not in made]
+                if made:
+                    log(f"สร้างรูปใหม่เสร็จ: ช็อต {', '.join(map(str, made))} — กด 'ต่อวิดีโอใหม่' เพื่อทำวิดีโออีกรอบ")
+                if failed:
+                    log(f"❌ ยังไม่ได้รูปใหม่: ช็อต {', '.join(map(str, failed))} — ดูข้อความ error ด้านบน")
         threading.Thread(target=worker, daemon=True).start()
 
     def fix_request(index: int, problem: str) -> str:

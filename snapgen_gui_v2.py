@@ -16070,6 +16070,11 @@ def _install_image_bridge_status():
             state = snapgen_chrome_relay.RELAY.status()
             left = str(state.get("images_left") or "")
             if not left:
+                # The Bridge's own quota text talks about its account-1 capture, which no longer applies.
+                version = str(state.get("extension_version") or "0")
+                old = tuple(int(x) for x in version.split(".") if x.isdigit()) < (1, 0, 2)
+                quota_var.set("โควตารูปคงเหลือ: — (ส่วนขยายเวอร์ชันเก่า: กดรีโหลดใน chrome://extensions)" if old
+                              else "โควตารูปคงเหลือ: — (ChatGPT ยังไม่บอก / ยังไม่ล็อกอินใน Chrome ของโปรแกรม)")
                 return
             reset = ""
             try:

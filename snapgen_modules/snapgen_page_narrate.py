@@ -1612,34 +1612,57 @@ def _ancestors(widget) -> list:
 
 
 def install_video_auto(g: dict, root: tk.Misc, slot_index: int = 1):
-    """'🤖 ออโต้' page (its own tab). Its clips are made through Slot 2's video machinery, so that
-    Slot stays alive but is taken off the video page: no Generate button to press by mistake."""
-    from snapgen_page_builder import build_page
+    """Slot 2 is the ออโต้ card on the video page (its own Generate button is covered, so no clip is
+    made by mistake). Pressing the card opens ออโต้ as a full page over every Slot; ↩ goes back.
+    The clips are still made through Slot 2's video machinery, which stays alive under the card."""
     runtime = g.get("_runtime_g") or g
     prompts = runtime.get("slot_prompts") or []
     if len(prompts) <= slot_index:
         return None
     slot_frame = prompts[slot_index].master.master.master  # Text -> content -> body -> Slot frame
-    page, box = build_page(root, "🤖 ออโต้ — บท + เสียง → วิดีโอทั้งเรื่อง (GPT เลือกโมเดล/ความยาวต่อช็อต)")
-    controls = _build(g, root, page, box, mode="video", slot_index=slot_index)
+    # The full page covers the area holding every Slot (their closest common parent).
+    shared = set.intersection(*({id(w) for w in _ancestors(p.master.master.master.master)} for p in prompts))
+    container = next(w for w in _ancestors(slot_frame.master) if id(w) in shared)
+    panel = tk.Frame(container, bg="#F8FAFC", highlightthickness=2, highlightbackground="#60A5FA")
+    header = tk.Frame(panel, bg="#DBEAFE")
+    header.pack(fill="x")
+    tk.Label(header, text="🤖 ออโต้ — บท + เสียง → วิดีโอทั้งเรื่อง (GPT เลือกโมเดล/ความยาวต่อช็อต)",
+             bg="#DBEAFE", fg="#1E3A8A", font=("TkDefaultFont", 10, "bold")).pack(side="left", padx=10, pady=6)
+    body = tk.Frame(panel, bg="#F8FAFC")
+    body.pack(fill="both", expand=True)
+    controls = _build(g, root, panel, body, mode="video", slot_index=slot_index)
 
-    def hide_slot():
-        try:
-            manager = slot_frame.winfo_manager()
-            if manager == "pack":
-                slot_frame.pack_forget()
-            elif manager == "grid":
-                slot_frame.grid_remove()
-            elif manager == "place":
-                slot_frame.place_forget()
-        except tk.TclError:
-            pass
+    def show_auto(_event=None):
+        panel.place(x=0, y=0, relwidth=1, relheight=1)
+        panel.lift()
+        controls["refresh_clip_info"]()
 
-    hide_slot()
-    root.after(1500, hide_slot)  # in case the video page lays its Slots out again after start
-    runtime["video_auto_panel"] = page
-    runtime["video_auto_refresh"] = controls["refresh_clip_info"]
-    return page
+    def show_slots():
+        panel.place_forget()  # the work goes on; the card shows where it is
+
+    tk.Button(header, text="↩ ย่อกลับ", command=show_slots, relief="flat",
+              bg="#FFFFFF", fg="#1E3A8A", cursor="hand2").pack(side="right", padx=8, pady=4)
+
+    # The card lies over Slot 2 itself, so the Slot keeps its place in the layout.
+    card = tk.Frame(slot_frame, bg="#EFF6FF", highlightthickness=2, highlightbackground="#60A5FA", cursor="hand2")
+    card.place(x=0, y=0, relwidth=1, relheight=1)
+    inner = tk.Frame(card, bg="#EFF6FF")
+    inner.place(relx=0.5, rely=0.5, anchor="center")
+    tk.Label(inner, text="🤖 ออโต้", bg="#EFF6FF", fg="#1E3A8A", font=("TkDefaultFont", 16, "bold")).pack()
+    tk.Label(inner, text="บท + เสียง → วิดีโอทั้งเรื่อง", bg="#EFF6FF", fg="#475569").pack()
+    tk.Label(inner, textvariable=controls["stage_var"], bg="#EFF6FF", fg="#2563EB",
+             font=("TkDefaultFont", 9, "bold")).pack(pady=(4, 0))
+    tk.Button(inner, text="เปิดหน้าออโต้", command=show_auto, relief="flat", bg="#2563EB", fg="#FFFFFF",
+              activebackground="#1D4ED8", activeforeground="#FFFFFF", cursor="hand2",
+              font=("TkDefaultFont", 10, "bold"), padx=18, pady=4).pack(pady=(8, 0))
+    for widget in (card, inner, *inner.winfo_children()):
+        if not isinstance(widget, tk.Button):
+            widget.bind("<Button-1>", show_auto)
+    card.lift()
+    runtime["video_auto_panel"] = panel
+    runtime["video_auto_show"] = show_auto
+    runtime["video_auto_hide"] = show_slots
+    return panel
 
 
 def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "image", slot_index: int = 1) -> dict:
@@ -4897,4 +4920,5 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
         return export_root() / work_dir_name
 
     runtime["auto_folder" if video_mode else "narrate_folder"] = page_folder
-    return {"open_project": open_project, "refresh_clip_info": refresh_clip_info, "busy": lambda: state["busy"]}
+    return {"open_project": open_project, "refresh_clip_info": refresh_clip_info, "busy": lambda: state["busy"],
+            "stage_var": stage_var}

@@ -2624,6 +2624,16 @@ try:
     g["_auto_upscale_video_1080p"] = _auto_upscale_video_1080p
 
     def _snapgen_current_export_folder():
+        # เล่าภาพ and Slot 2 ออโต้ open their own story folder, not the export folder.
+        try:
+            narrate_page = g.get("narrate_page")
+            if narrate_page is not None and narrate_page.winfo_manager() and g.get("narrate_folder"):
+                return g["narrate_folder"]()
+            auto_panel = g.get("video_auto_panel")
+            if auto_panel is not None and auto_panel.winfo_manager() and auto_panel.winfo_ismapped() and g.get("auto_folder"):
+                return g["auto_folder"]()
+        except Exception:
+            pass
         # Prefer the page that is actually visible.  This avoids opening the
         # previous page's folder when a compatibility wrapper forgot to update
         # current_mode during a tab switch.

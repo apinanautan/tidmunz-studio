@@ -1666,6 +1666,7 @@ def install_video_auto(g: dict, root: tk.Misc, slot_index: int = 1):
         placed = False
     if not placed:
         tk.Button(slot_frame, **toggle_style).place(relx=1.0, x=-6, y=2, anchor="ne")
+    runtime["video_auto_panel"] = panel
     runtime["video_auto_show"] = show_auto
     runtime["video_auto_hide"] = show_slot
     return panel
@@ -4919,4 +4920,11 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
             page.after(300, lambda: load_saved_project(last, quiet=True))
     except OSError:
         pass
+    def page_folder() -> Path:
+        """What the top-right 'เปิดโฟลเดอร์' opens on this page: the open story's folder."""
+        if state.get("folder") and os.path.isdir(state["folder"]):
+            return Path(state["folder"])
+        return export_root() / work_dir_name
+
+    runtime["auto_folder" if video_mode else "narrate_folder"] = page_folder
     return {"open_project": open_project, "refresh_clip_info": refresh_clip_info, "busy": lambda: state["busy"]}

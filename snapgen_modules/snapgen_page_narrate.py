@@ -2390,7 +2390,7 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
             context = with_retries("สร้าง Context", lambda: parse_json_reply(chat(context_from_analysis_request(analysis))))
             if not isinstance(context.get("characters"), list) or not context["characters"]:
                 raise RuntimeError("GPT คืน Context ไม่ครบ")
-            if True:
+            if not video_mode:  # ออโต้ takes faces, hair and outfits from the attached reference pictures
                 set_progress("context", 0.8, "สไตลิสต์ออกแบบหน้าตา ทรงผม และชุดตัวละคร ...")
                 try:
                     import snapgen_distinct_looks

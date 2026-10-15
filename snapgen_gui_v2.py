@@ -6002,7 +6002,7 @@ def _add_settings_maintenance_buttons(settings_win):
                     seen_update = True
                 if "อัปขึ้น GitHub" in text:
                     seen_publish = True
-                if text in {"จับ Account", "Account Capture", "Accounts"} or "จับ Account" in text:
+                if text in {"จับ Account", "Account Capture", "Accounts"} or "จับ Account" in text or "ส่วนขยาย ChatGPT" in text:
                     seen_account_hub = True
             for c in list(w.winfo_children()):
                 scan(c)
@@ -6211,7 +6211,7 @@ def _add_settings_maintenance_buttons(settings_win):
             manage = g.get("manage_bridge")
             if callable(manage):
                 manage()
-                status.set("เปิดตั้งค่า GPT แล้ว")
+                status.set("เปิดส่วนขยาย ChatGPT แล้ว")
             else:
                 status.set("ไม่พบหน้าต่าง GPT Bridge")
 
@@ -6239,7 +6239,7 @@ def _add_settings_maintenance_buttons(settings_win):
                 # other tool buttons so every button shares one row.
                 hub_btn = tk.Button(
                     parent,
-                    text="จับ Account",
+                    text="🧩 ส่วนขยาย ChatGPT",
                     command=open_account_capture_hub,
                     bg="#16A34A",
                     fg="white",
@@ -15639,11 +15639,79 @@ def _install_better_bridge_manager():
         refresh_accounts()
         refresh()
 
-    g["manage_bridge"] = manage_bridge_new
+    def manage_chrome_extension():
+        """ChatGPT now runs in each PC's own Chrome: show the extension's link, its folder and ChatGPT login."""
+        try:
+            grabbed = root.grab_current()
+            if grabbed:
+                grabbed.grab_release()
+        except Exception:
+            pass
+        import snapgen_chrome_relay
+        try:
+            info = snapgen_chrome_relay.start(lambda m: print(m, flush=True))
+            folder = info["extension_dir"]
+        except Exception as exc:
+            folder = f"(เตรียมโฟลเดอร์ไม่สำเร็จ: {exc})"
+        win = tk.Toplevel(root)
+        win.title("ส่วนขยาย ChatGPT (Chrome)")
+        win.geometry("640x360")
+        win.transient(root)
+        pad = {"padx": 14, "anchor": "w"}
+        tk.Label(win, text="ส่วนขยาย Tidmunz ChatGPT", font=(SNAPGEN_UI_FONT, 14, "bold")).pack(pady=(14, 2), **pad)
+        tk.Label(win, text="โปรแกรมส่งงานข้อความและรูปเข้า ChatGPT ใน Chrome ของเครื่องนี้ "
+                          "(เปิด Chrome และล็อกอิน ChatGPT ทิ้งไว้ระหว่างทำงาน)",
+                 fg="#475467", wraplength=600, justify="left").pack(**pad)
+        state_var = tk.StringVar()
+        state_label = tk.Label(win, textvariable=state_var, font=(SNAPGEN_UI_FONT, 12, "bold"))
+        state_label.pack(pady=(14, 10), **pad)
+
+        def refresh_state():
+            if not win.winfo_exists():
+                return
+            status = snapgen_chrome_relay.RELAY.status()
+            if status.get("connected"):
+                busy = " — กำลังทำงาน" if status.get("busy") else ""
+                state_var.set(f"🟢 เชื่อมต่อแล้ว{busy}")
+                state_label.config(fg="#15803D")
+            else:
+                state_var.set("🟡 ยังไม่เชื่อมต่อ — ติดตั้งส่วนขยายจากโฟลเดอร์ด้านล่าง แล้วเปิด Chrome ไว้")
+                state_label.config(fg="#B45309")
+            win.after(2000, refresh_state)
+
+        tk.Label(win, text="โฟลเดอร์ส่วนขยายของเครื่องนี้:", font=(SNAPGEN_UI_FONT, 10, "bold")).pack(**pad)
+        path_entry = tk.Entry(win, width=86)
+        path_entry.insert(0, folder)
+        path_entry.config(state="readonly")
+        path_entry.pack(padx=14, pady=(2, 6), fill="x")
+
+        def copy_path():
+            root.clipboard_clear()
+            root.clipboard_append(folder)
+            copied.set("คัดลอกแล้ว ✓")
+
+        copied = tk.StringVar()
+        row = tk.Frame(win)
+        row.pack(fill="x", padx=14)
+        tk.Button(row, text="📋 คัดลอกที่อยู่โฟลเดอร์", command=copy_path).pack(side="left")
+        tk.Label(row, textvariable=copied, fg="#15803D").pack(side="left", padx=8)
+        row2 = tk.Frame(win)
+        row2.pack(fill="x", padx=14, pady=(16, 0))
+        tk.Button(row2, text="🌐 เปิด ChatGPT (ล็อกอิน)", bg="#10A37F", fg="white",
+                  command=lambda: __import__("webbrowser").open("https://chatgpt.com/")).pack(side="left")
+        bottom = tk.Frame(win)
+        bottom.pack(side="bottom", fill="x", padx=14, pady=12)
+        tk.Button(bottom, text="ปิด", command=win.destroy).pack(side="right")
+        tk.Button(bottom, text="⚙ Bridge (ขั้นสูง)", fg="#667085", relief="flat",
+                  command=manage_bridge_new).pack(side="left")
+        refresh_state()
+
+    g["manage_bridge"] = manage_chrome_extension
+    g["manage_bridge_advanced"] = manage_bridge_new
     def rewire_bridge_buttons(w):
         try:
             if isinstance(w, tk.Button) and "Bridge" in str(w.cget("text")):
-                w.config(command=manage_bridge_new)
+                w.config(command=manage_chrome_extension)
         except Exception: pass
         for ch in w.winfo_children(): rewire_bridge_buttons(ch)
     if root:

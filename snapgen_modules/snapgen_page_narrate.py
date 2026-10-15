@@ -1956,7 +1956,7 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
         if video_mode:
             economy_var.set(bool(project.get("economy", True)))
         film_var.set(bool(project.get("film", True)))
-        style_var.set(project.get("style_mode") if project.get("style_mode") in STYLES else "ปกติ")
+        style_var.set(project.get("style_mode") if project.get("style_mode") in STYLES else last_style())
         save_project()
         refresh_all()
         refresh_clip_info()
@@ -4170,6 +4170,49 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
                if video_mode else "")
             + quota + "\n\nเริ่มสร้างรูปเลยไหม?")
 
+    def last_style_file() -> Path:
+        local = os.environ.get("LOCALAPPDATA") or str(Path.home() / "AppData" / "Local")
+        return Path(local) / "Tidmunz Studio" / "snapgen_data" / "narrate_last_style.json"
+
+    def last_style() -> str:
+        try:
+            value = json.loads(last_style_file().read_text(encoding="utf-8")).get("style")
+            return value if value in STYLES else "ปกติ"
+        except (OSError, ValueError, AttributeError):
+            return "ปกติ"
+
+    def remember_style(value: str) -> None:
+        try:
+            last_style_file().parent.mkdir(parents=True, exist_ok=True)
+            last_style_file().write_text(json.dumps({"style": value}, ensure_ascii=False), encoding="utf-8")
+        except OSError:
+            pass
+
+    def ask_style():
+        """Pick the picture style for this story; the last one used is selected."""
+        dialog = tk.Toplevel(page)
+        dialog.title("เลือกสไตล์ภาพของเรื่องนี้")
+        dialog.transient(page.winfo_toplevel())
+        dialog.resizable(False, False)
+        choice = tk.StringVar(value=style_var.get() if style_var.get() in STYLES else last_style())
+        result = {"value": None}
+        tk.Label(dialog, text="เรื่องนี้ใช้สไตล์ภาพแบบไหน?", font=("Segoe UI", 11, "bold")).pack(padx=18, pady=(14, 6), anchor="w")
+        for name in STYLES:
+            tk.Radiobutton(dialog, text=name, variable=choice, value=name, font=("Segoe UI", 10)).pack(padx=24, anchor="w")
+        tk.Label(dialog, text=f"(ครั้งก่อนใช้: {last_style()})", fg="#667085").pack(padx=18, pady=(6, 0), anchor="w")
+        buttons = tk.Frame(dialog)
+        buttons.pack(fill="x", padx=18, pady=12)
+
+        def ok():
+            result["value"] = choice.get()
+            remember_style(choice.get())
+            dialog.destroy()
+        tk.Button(buttons, text="เริ่มด้วยสไตล์นี้", command=ok, bg="#2563EB", fg="white").pack(side="right")
+        tk.Button(buttons, text="ยกเลิก", command=dialog.destroy).pack(side="right", padx=6)
+        dialog.grab_set()
+        dialog.wait_window()
+        return result["value"]
+
     def start_pipeline(only=None):
         project = state["project"]
         if state["busy"]:
@@ -4180,6 +4223,14 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
         if not project.get("audio"):
             messagebox.showinfo("เล่าภาพ", "เลือกไฟล์เสียงบรรยายก่อน", parent=page)
             return
+        if only is None and not project.get("style_chosen") and not any(
+                s.get("image") for s in project.get("scenes") or []):
+            # Before the style shapes the characters and pictures, ask once (people forget to switch it).
+            chosen = ask_style()
+            if chosen is None:
+                return
+            style_var.set(chosen)
+            project["style_chosen"] = True
         aspect = desired_aspect()
         if project.get("scenes") and project.get("aspect") and project["aspect"] != aspect:
             if video_mode:

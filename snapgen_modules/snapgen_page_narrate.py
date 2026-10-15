@@ -2226,15 +2226,16 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
         old = {hashlib.md5(Path(s["image"]).read_bytes()).hexdigest()
                for s in project.get("scenes") or [] if s.get("image") and os.path.isfile(s["image"])}
         old.update(project.get("rejected_hashes") or [])
+        # Each picture is drawn in a chat of its own: the story chat grows by ~2 MB per picture and, once it
+        # holds a few dozen, every new picture there took 3-8 minutes (the page and GPT re-read it all).
+        # Faces stay consistent through the attached references and the look written into the prompt.
         out = imgmod.generate_image(
             prompt, output_dir=str(out_dir), name_hint=name, is_edit=bool(encoded),
-            ref_images=encoded or None, aspect_ratio=aspect, save_sidecar=False,
-            conversation_state=project.setdefault("conversation", {}), conversation_save_fn=save_project,
+            ref_images=encoded or None, aspect_ratio=aspect, save_sidecar=False, temporary_chat=True,
         )
         if hashlib.md5(Path(out).read_bytes()).hexdigest() in old:
-            # The story chat handed back an old picture (GPT drew nothing new): ask once more in a fresh
-            # temporary chat so the scene really gets a new image.
-            log(f"{name}: ได้รูปเก่าซ้ำกลับมา — สร้างใหม่ในแชตชั่วคราว")
+            # An old picture came back (GPT drew nothing new): ask once more in another fresh chat.
+            log(f"{name}: ได้รูปเก่าซ้ำกลับมา — สร้างใหม่ในแชตใหม่")
             Path(out).unlink(missing_ok=True)
             out = imgmod.generate_image(
                 prompt, output_dir=str(out_dir), name_hint=name, is_edit=bool(encoded),

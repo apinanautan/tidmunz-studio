@@ -94,6 +94,8 @@ async function loop() {
         result = {error: String(e && e.message || e)};
       }
       try { await relay("/result", {id: job.id, ...result}); } catch (e) {}
+      // Leave the (possibly very long) chat so the tab does not keep it in memory between jobs.
+      try { const saved = (await chrome.storage.session.get("tabId")).tabId; if (saved) await chrome.tabs.update(saved, {url: "https://chatgpt.com/"}); } catch (e) {}
       if (job.type === "image") account.checked = 0;  // read the quota again after a picture
       badge("ON", "#10A37F");
     }

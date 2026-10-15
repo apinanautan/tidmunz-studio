@@ -16132,6 +16132,26 @@ def _install_image_bridge_status():
 
         root.after_idle(_match_mic_to_prompt_ref_height)
         root.after(300, _match_mic_to_prompt_ref_height)
+
+        if prompt_ref_toolbar_button is not None:
+            def _open_chatgpt_inside():
+                try:
+                    import snapgen_chatgpt_embed
+                    snapgen_chatgpt_embed.open_window(root)
+                except Exception as error:
+                    g["show_error"]("ChatGPT", str(error))
+
+            chatgpt_button = tk.Button(
+                mic_parent, text="🌐 ChatGPT", command=_open_chatgpt_inside,
+                bg="#10A37F", fg="#FFFFFF", activebackground="#0E8F6F", activeforeground="#FFFFFF",
+                relief="flat", bd=0, cursor="hand2",
+                font=prompt_ref_toolbar_button.cget("font"),
+                padx=prompt_ref_toolbar_button.cget("padx"), pady=prompt_ref_toolbar_button.cget("pady"),
+            )
+            # Packed right after Prompt-Ref, so it sits directly left of it.
+            chatgpt_button.pack(side="right", padx=(4, 4), pady=prompt_ref_pack.get("pady", 0),
+                                after=prompt_ref_toolbar_button)
+            g["chatgpt_inside_button"] = chatgpt_button
         g["global_voice_mic_button"] = global_voice_mic
         g["global_voice_mic_holder"] = global_voice_mic_holder
         g["global_voice_target"] = _global_voice_target

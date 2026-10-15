@@ -18834,6 +18834,16 @@ if root:
         threading.Thread(target=worker, daemon=True).start()
 
     root.after(4000, _startup_codex)
+
+    def _startup_chrome():
+        """Job queue for the "Tidmunz ChatGPT" Chrome extension (installed on each PC by hand)."""
+        try:
+            import snapgen_chrome_relay
+            snapgen_chrome_relay.start(lambda m: print(m, flush=True))
+        except Exception as exc:
+            print(f"[Chrome] เปิดคิวงานส่วนขยายไม่สำเร็จ: {exc}", flush=True)
+
+    root.after(1500, _startup_chrome)
     print("[SnapGen] พร้อมใช้งาน ✓")
     root.mainloop()
 

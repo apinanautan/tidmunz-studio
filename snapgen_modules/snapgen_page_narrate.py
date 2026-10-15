@@ -2347,12 +2347,31 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
             project["history_seeded"] = True
             return
         set_progress("plan", 0.0, "ส่งบทและ Context เข้าประวัติ GPT ของเรื่องนี้ (ครั้งเดียว) ...")
-        content = (
-            "บทและ SnapGen Context ของเรื่องนี้อยู่ด้านล่าง เก็บไว้ในประวัตินี้เพื่อใช้วางแผนฉากและสร้างรูปทุกครั้งต่อจากนี้ "
-            "ใช้ชื่อและหน้าตาตัวละครตาม Context ตรงตัว ตอบสั้นๆ ว่า OK เท่านั้น\n\nCONTEXT:\n"
-            + json.dumps(project.get("context") or {}, ensure_ascii=False)
-            + "\n\nFULL STORY:\n" + story_script()
-        )
+        part = story_script()
+        full = ""
+        if project.get("full_script"):
+            try:
+                full = read_script(project["full_script"])
+            except Exception as exc:
+                log(f"อ่านบทเต็มไม่ได้ ({exc}) — ส่งเฉพาะช่วงที่ทำ")
+        if full and _squash(full) != _squash(part):
+            # ออโต้: GPT knows the whole story first, then plans only the part this person is making.
+            content = (
+                "บทเต็มทั้งเรื่องและ SnapGen Context อยู่ด้านล่าง เก็บไว้ในประวัตินี้เพื่อใช้วางแผนฉาก สตอรี่บอร์ด และสร้างรูปทุกครั้งต่อจากนี้. "
+                "งานนี้ทำเฉพาะ 'ช่วงที่ต้องทำ' (ตรงกับเสียงบรรยายที่แนบ) แต่ต้องเข้าใจทั้งเรื่องก่อน: ใครเป็นใคร "
+                "เกิดอะไรก่อนหน้าและหลังจากนี้. ใช้ชื่อและหน้าตาตัวละครตาม Context ตรงตัว ตอบสั้นๆ ว่า OK เท่านั้น\n\nCONTEXT:\n"
+                + json.dumps(project.get("context") or {}, ensure_ascii=False)
+                + "\n\nFULL STORY (ทั้งเรื่อง):\n" + full
+                + "\n\nช่วงที่ต้องทำในงานนี้:\n" + part
+            )
+            log("ส่งบทเต็มทั้งเรื่อง + Context + ช่วงที่ทำ เข้า GPT")
+        else:
+            content = (
+                "บทและ SnapGen Context ของเรื่องนี้อยู่ด้านล่าง เก็บไว้ในประวัตินี้เพื่อใช้วางแผนฉากและสร้างรูปทุกครั้งต่อจากนี้ "
+                "ใช้ชื่อและหน้าตาตัวละครตาม Context ตรงตัว ตอบสั้นๆ ว่า OK เท่านั้น\n\nCONTEXT:\n"
+                + json.dumps(project.get("context") or {}, ensure_ascii=False)
+                + "\n\nFULL STORY:\n" + part
+            )
         with_retries("ส่งบทเข้าประวัติ", lambda: chat(content))
         project["history_seeded"] = True
         save_project()
@@ -2378,6 +2397,13 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
         if shared:
             context = shared["context"]
             log("ใช้ Context ของเรื่องนี้จากหน้า Prompt-Ref — ไม่วิเคราะห์บทใหม่")
+            if video_mode:
+                # The whole story sits next to the Context (the file it was built from).
+                source = str(shared.get("source_name") or "")
+                full = Path(str(shared.get("path") or "")).with_name(source) if source else None
+                if full and full.is_file():
+                    project["full_script"] = str(full)
+                    log(f"บทเต็มทั้งเรื่อง: {full.name}")
         else:
             # Same two-step method as Prompt-Ref: facts with evidence first,
             # then the full SnapGen Context built only from those facts.

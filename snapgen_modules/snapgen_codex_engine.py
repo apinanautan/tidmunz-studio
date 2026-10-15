@@ -69,7 +69,8 @@ def account_codex_home(accounts_dir: Path, account: str | None) -> Path | None:
 
 
 def engine_wanted() -> bool:
-    return os.environ.get("SNAPGEN_ENGINE", "auto").strip().lower() != "web"
+    # Keep existing web stories on their original provider. Codex is opt-in.
+    return os.environ.get("SNAPGEN_ENGINE", "web").strip().lower() == "codex"
 
 
 class CodexTransport:

@@ -451,6 +451,8 @@ def install(bridge_dir, log=print) -> bool:
     robust_changed = _install_robust_upload(bridge_dir, log)
     helper_changed = _install_cursor_message_id_helper(bridge_dir, log)
     conversation_error_changed = _install_conversation_not_found_error(bridge_dir, log)
+    from snapgen_bridge_web_error_patch import install as _install_web_errors
+    conversation_error_changed = _install_web_errors(bridge_dir, log) or conversation_error_changed
     from snapgen_bridge_image_cursor_patch import install as _install_image_cursor
     image_cursor_changed = _install_image_cursor(bridge_dir, log)
     from snapgen_bridge_vision_cursor_patch import install as _install_vision_cursor

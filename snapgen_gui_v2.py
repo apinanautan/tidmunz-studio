@@ -963,6 +963,12 @@ def _snapgen_friendly_bridge_error(msg):
             except Exception:
                 pass
         return limit_text
+    if "model not found" in lowered or "chatgpt_unsupported_model" in lowered:
+        return (
+            "ChatGPT ปฏิเสธโมเดลในคำขอของ Bridge — ข้อผิดพลาดนี้ไม่ได้ยืนยันว่าประวัติเรื่องหาย\n"
+            "ตรวจโมเดลและจับคำขอที่ส่งสำเร็จจาก Chrome ของบัญชีเดิมก่อน ยังไม่ต้องกดเริ่มเรื่องใหม่\n\n"
+            "รายละเอียดเดิม:\n" + raw
+        )
     if "codex history moved" in lowered:
         return ("ประวัติ GPT ของเรื่องนี้อยู่บนเว็บ ChatGPT แบบเดิม ซึ่งเปิดต่อไม่ได้แล้วหลังเปลี่ยนมาใช้ Codex — "
                 "เริ่มเรื่องใหม่ (ส่งบทเข้าประวัติใหม่) 1 ครั้ง แล้วทำต่อได้ตามปกติ")
@@ -18803,7 +18809,9 @@ if root:
     root.after(2500, _startup_auto_update)
 
     def _startup_codex():
-        """ChatGPT now goes through the official Codex CLI: install it once and ask to sign in once."""
+        """Prepare Codex only when explicitly selected; web remains the default."""
+        if os.environ.get("SNAPGEN_ENGINE", "web").strip().lower() != "codex":
+            return
         def worker():
             try:
                 import snapgen_codex_setup

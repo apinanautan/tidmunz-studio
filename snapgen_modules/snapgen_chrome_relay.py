@@ -84,6 +84,8 @@ class _Relay:
         self.last_seen = 0.0
         self.version = ""
         self.email = ""  # the ChatGPT account the Chrome profile is logged into
+        self.images = ""  # pictures left today, as chatgpt.com reports it
+        self.reset = ""
         self.token = ""
         self.port = 0
 
@@ -129,7 +131,7 @@ class _Relay:
     def status(self) -> dict:
         return {"connected": time.time() - self.last_seen < CONNECTED_WITHIN, "last_seen": self.last_seen,
                 "queue": len(self.pending), "busy": len(self.waiting), "extension_version": self.version,
-                "email": self.email}
+                "email": self.email, "images_left": self.images, "images_reset": self.reset}
 
 
 RELAY = _Relay()
@@ -150,7 +152,7 @@ class _Handler(BaseHTTPRequestHandler):
 
     def _query(self):
         url = urlparse(self.path)
-        return url.path, {k: v[-1] for k, v in parse_qs(url.query).items()}
+        return url.path, {k: v[-1] for k, v in parse_qs(url.query, keep_blank_values=True).items()}
 
     def _allowed(self, query) -> bool:
         return secrets.compare_digest(str(query.get("token") or ""), RELAY.token)
@@ -178,6 +180,8 @@ class _Handler(BaseHTTPRequestHandler):
             RELAY.version = str(query.get("v") or RELAY.version)
             if "email" in query:
                 RELAY.email = str(query.get("email") or "")
+            if "images" in query:
+                RELAY.images, RELAY.reset = str(query.get("images") or ""), str(query.get("reset") or "")
             job = RELAY.next_job(min(float(query.get("wait") or 25), 30))
             return self._send(200, job) if job else self._send(204)
         self._send(404, {"error": "not found"})

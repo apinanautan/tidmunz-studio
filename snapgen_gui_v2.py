@@ -16062,10 +16062,31 @@ def _install_image_bridge_status():
         who = str(state.get("email") or "").split("@")[0]
         return True, "ส่วนขยาย Chrome: เชื่อมต่อแล้ว ✓" + (f" ({who})" if who else "")
 
+    def show_chrome_quota():
+        """Pictures left for the account in the program's Chrome, as chatgpt.com itself reports it."""
+        try:
+            import snapgen_chrome_relay
+            from datetime import datetime
+            state = snapgen_chrome_relay.RELAY.status()
+            left = str(state.get("images_left") or "")
+            if not left:
+                return
+            reset = ""
+            try:
+                when = datetime.fromisoformat(str(state.get("images_reset") or "")).astimezone()
+                reset = f" · รีเซ็ต {when:%d/%m %H:%M}"
+            except ValueError:
+                pass
+            quota_var.set(f"โควตารูปคงเหลือ: {left}{reset}")
+        except Exception:
+            pass
+
     def render_light():
         """Show the Chrome extension in place of the Bridge (ChatGPT work now runs in Chrome)."""
         color, text = last_light["color"], last_light["text"]
         connected, label = chrome_link_state()
+        if connected:
+            show_chrome_quota()
         parts = text.split(" | ")
         if parts and parts[0].startswith("Bridge"):
             parts[0] = label

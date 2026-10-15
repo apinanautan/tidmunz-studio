@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Tidmunz ChatGPT",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Connects the Tidmunz Studio desktop app on this PC to your own ChatGPT tab, so the app's text and picture jobs run in ChatGPT.",
   "background": {
     "service_worker": "background.js"

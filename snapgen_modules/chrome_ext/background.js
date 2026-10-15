@@ -42,17 +42,29 @@ function badge(text, color) {
   try { chrome.action.setBadgeText({text}); chrome.action.setBadgeBackgroundColor({color}); } catch (e) {}
 }
 
-// Which ChatGPT account this Chrome profile is logged into (shown in Tidmunz).
-let account = {email: "", checked: 0};
+// Which ChatGPT account this Chrome profile is logged into and its picture quota (shown in Tidmunz).
+let account = {email: "", images: "", reset: "", checked: 0};
 async function chatgptAccount() {
-  if (Date.now() - account.checked < 60000) return account.email;
+  if (Date.now() - account.checked < 120000) return account;
+  const next = {email: "", images: "", reset: "", checked: Date.now()};
   try {
     const session = await (await fetch("https://chatgpt.com/api/auth/session", {credentials: "include"})).json();
-    account = {email: (session && session.user && session.user.email) || "", checked: Date.now()};
-  } catch (e) {
-    account = {email: "", checked: Date.now()};
-  }
-  return account.email;
+    next.email = (session && session.user && session.user.email) || "";
+    if (session && session.accessToken) {
+      // The same call chatgpt.com makes when it opens: it reports what is left of each limit.
+      const init = await (await fetch("https://chatgpt.com/backend-api/conversation/init", {
+        method: "POST", credentials: "include",
+        headers: {"Authorization": "Bearer " + session.accessToken, "Content-Type": "application/json"},
+        body: JSON.stringify({requested_default_model: null, conversation_id: null,
+                              timezone_offset_min: new Date().getTimezoneOffset(), conversation_origin: null})})).json();
+      const image = (init.limits_progress || []).find(f => f.feature_name === "image_gen");
+      const blocked = (init.blocked_features || []).find(f => f.name === "image_gen" || f.feature_name === "image_gen");
+      if (blocked) { next.images = "0"; next.reset = blocked.resets_after || blocked.reset_after || ""; }
+      else if (image) { next.images = String(image.remaining); next.reset = image.reset_after || ""; }
+    }
+  } catch (e) {}
+  account = next;
+  return account;
 }
 
 async function loop() {
@@ -62,8 +74,9 @@ async function loop() {
     for (;;) {
       let job = null;
       try {
-        const email = await chatgptAccount();
-        job = await relay(`/next?wait=25&v=${chrome.runtime.getManifest().version}&email=${encodeURIComponent(email)}`);
+        const who = await chatgptAccount();
+        job = await relay(`/next?wait=25&v=${chrome.runtime.getManifest().version}&email=${encodeURIComponent(who.email)}` +
+                          `&images=${encodeURIComponent(who.images)}&reset=${encodeURIComponent(who.reset)}`);
         badge("ON", "#10A37F");
       } catch (e) {
         badge("OFF", "#9CA3AF");  // Tidmunz is not open: look again later
@@ -79,6 +92,7 @@ async function loop() {
         result = {error: String(e && e.message || e)};
       }
       try { await relay("/result", {id: job.id, ...result}); } catch (e) {}
+      if (job.type === "image") account.checked = 0;  // read the quota again after a picture
       badge("ON", "#10A37F");
     }
   } finally {

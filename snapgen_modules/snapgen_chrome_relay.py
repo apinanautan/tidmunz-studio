@@ -99,6 +99,8 @@ class _Relay:
         self.images = ""  # pictures left today, as chatgpt.com reports it
         self.reset = ""
         self.plan = ""
+        self.images_full = 0  # the highest "remaining" seen: ChatGPT shows it until it starts counting
+        self.used = ""  # pictures the account made in the last 24 hours (its ChatGPT library, every PC)
         self.opened_at = 0.0
         self.token = ""
         self.port = 0
@@ -170,7 +172,8 @@ class _Relay:
                 "images_estimate": estimate_left(self.email, self.reset, self.images),
                 "queue": len(self.pending), "busy": len(self.waiting), "extension_version": self.version,
                 "email": self.email, "images_left": self.images, "images_reset": self.reset,
-                "plan": self.plan}
+                "plan": self.plan, "images_used": self.used,
+                "images_full": self.images_full}
 
 
 def _usage_file() -> Path:
@@ -264,8 +267,12 @@ class _Handler(BaseHTTPRequestHandler):
                 RELAY.email = str(query.get("email") or "")
             if "images" in query:
                 RELAY.images, RELAY.reset = str(query.get("images") or ""), str(query.get("reset") or "")
+                if RELAY.images.isdigit():
+                    RELAY.images_full = max(RELAY.images_full, int(RELAY.images))
             if "plan" in query:
                 RELAY.plan = str(query.get("plan") or "")
+            if "used" in query:
+                RELAY.used = str(query.get("used") or "")
             if _newer_on_disk(RELAY.version):
                 # Tidmunz updated the extension's files: the extension reloads itself from the folder.
                 return self._send(200, {"reload": True})

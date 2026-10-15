@@ -43,10 +43,10 @@ function badge(text, color) {
 }
 
 // Which ChatGPT account this Chrome profile is logged into and its picture quota (shown in Tidmunz).
-let account = {email: "", images: "", reset: "", plan: "", checked: 0};
+let account = {email: "", images: "", reset: "", plan: "", used: "", checked: 0};
 async function chatgptAccount() {
   if (Date.now() - account.checked < 120000) return account;
-  const next = {email: "", images: "", reset: "", plan: "", checked: Date.now()};
+  const next = {email: "", images: "", reset: "", plan: "", used: "", checked: Date.now()};
   try {
     const session = await (await fetch("https://chatgpt.com/api/auth/session", {credentials: "include"})).json();
     next.email = (session && session.user && session.user.email) || "";
@@ -62,6 +62,14 @@ async function chatgptAccount() {
       const blocked = (init.blocked_features || []).find(f => f.name === "image_gen" || f.feature_name === "image_gen");
       if (blocked) { next.images = "0"; next.reset = blocked.resets_after || blocked.reset_after || ""; }
       else if (image) { next.images = String(image.remaining); next.reset = image.reset_after || ""; }
+      // ChatGPT's "remaining" stays at the full number until the limit is near. The account's picture
+      // library holds every picture made on it (from every PC), so it tells how many the last 24 hours took.
+      try {
+        const library = await (await fetch("https://chatgpt.com/backend-api/my/recent/image_gen?limit=200", {
+          credentials: "include", headers: {"Authorization": "Bearer " + session.accessToken}})).json();
+        const since = Date.now() / 1000 - 86400;
+        if (Array.isArray(library.items)) next.used = String(library.items.filter(i => (i.created_at || 0) > since).length);
+      } catch (e) {}
     }
   } catch (e) {}
   account = next;
@@ -77,7 +85,8 @@ async function loop() {
       try {
         const who = await chatgptAccount();
         job = await relay(`/next?wait=25&v=${chrome.runtime.getManifest().version}&email=${encodeURIComponent(who.email)}` +
-                          `&images=${encodeURIComponent(who.images)}&reset=${encodeURIComponent(who.reset)}&plan=${encodeURIComponent(who.plan)}`);
+                          `&images=${encodeURIComponent(who.images)}&reset=${encodeURIComponent(who.reset)}&plan=${encodeURIComponent(who.plan)}` +
+                          `&used=${encodeURIComponent(who.used)}`);
         badge("ON", "#10A37F");
       } catch (e) {
         badge("OFF", "#9CA3AF");  // Tidmunz is not open: look again later

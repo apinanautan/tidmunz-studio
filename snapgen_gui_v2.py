@@ -16211,9 +16211,21 @@ def _install_image_bridge_status():
         try:
             import snapgen_chrome_relay
             state = snapgen_chrome_relay.RELAY.status()
-            left = str(state.get("images_left") or "—")  # ChatGPT's own number: shared by every PC on the account
+            # ChatGPT's own "remaining" stays at the full number until the limit is near, so the pictures
+            # the account made in the last 24 hours (its library: every PC) are taken off it.
+            left = str(state.get("images_left") or "").strip()
+            used = str(state.get("images_used") or "").strip()
             plan = str(state.get("plan") or "").strip()
-            quota_var.set(f"โควตารูป: {left}" + (f" · {plan.capitalize()}" if plan else ""))
+            full = int(state.get("images_full") or 0)
+            if left == "0":
+                text = "โควตารูป: หมด"
+            elif left.isdigit() and int(left) < full:  # near the limit ChatGPT counts down itself
+                text = f"โควตารูป: เหลือ {left}/{full}"
+            elif left.isdigit() and used.isdigit():
+                text = f"โควตารูป: เหลือ ~{max(0, int(left) - int(used))}/{left} (24 ชม. ใช้ {used})"
+            else:
+                text = f"โควตารูป: {left or '—'}"
+            quota_var.set(text + (f" · {plan.capitalize()}" if plan else ""))
         except Exception:
             pass
 

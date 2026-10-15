@@ -41,6 +41,7 @@ class _Relay:
         self.waiting: dict[str, dict] = {}  # job id -> {"event", "result"}
         self.last_seen = 0.0
         self.version = ""
+        self.email = ""  # the ChatGPT account the Chrome profile is logged into
         self.token = ""
         self.port = 0
 
@@ -67,6 +68,13 @@ class _Relay:
     # Bridge side
     def run(self, job: dict) -> dict:
         job = dict(job)
+        expected = expected_account()
+        if expected:
+            if self.email and self.email.lower() != expected.lower():
+                return {"error": f"Chrome ล็อกอิน ChatGPT บัญชี {self.email} แต่งานนี้ต้องใช้ {expected} — "
+                                 "เปิด Chrome โปรไฟล์ที่ล็อกอินบัญชีบริษัทแล้วติดตั้งส่วนขยายในโปรไฟล์นั้น",
+                        "wrong_account": True}
+            job["expected_email"] = expected  # the page checks again right before sending
         job["id"] = uuid.uuid4().hex
         slot = {"event": threading.Event(), "result": None}
         self.waiting[job["id"]] = slot
@@ -84,8 +92,25 @@ class _Relay:
             self.waiting.pop(job["id"], None)
 
     def status(self) -> dict:
+        expected = expected_account()
         return {"connected": time.time() - self.last_seen < CONNECTED_WITHIN, "last_seen": self.last_seen,
-                "queue": len(self.pending), "busy": len(self.waiting), "extension_version": self.version}
+                "queue": len(self.pending), "busy": len(self.waiting), "extension_version": self.version,
+                "email": self.email, "expected_email": expected,
+                "account_ok": not expected or not self.email or self.email.lower() == expected.lower()}
+
+
+def expected_account() -> str:
+    """The company ChatGPT account Chrome must be logged into ("" = any account)."""
+    try:
+        return str(json.loads((data_dir() / "chrome_account.json").read_text(encoding="utf-8")).get("email") or "").strip()
+    except (OSError, ValueError, AttributeError):
+        return ""
+
+
+def set_expected_account(email: str) -> None:
+    path = data_dir() / "chrome_account.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"email": email.strip()}), encoding="utf-8")
 
 
 RELAY = _Relay()
@@ -132,6 +157,8 @@ class _Handler(BaseHTTPRequestHandler):
             return self._send(403, {"error": "bad token"})
         if path == "/next":
             RELAY.version = str(query.get("v") or RELAY.version)
+            if "email" in query:
+                RELAY.email = str(query.get("email") or "")
             job = RELAY.next_job(min(float(query.get("wait") or 25), 30))
             return self._send(200, job) if job else self._send(204)
         self._send(404, {"error": "not found"})

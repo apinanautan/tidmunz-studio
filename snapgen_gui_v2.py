@@ -15655,7 +15655,7 @@ def _install_better_bridge_manager():
             folder = f"(เตรียมโฟลเดอร์ไม่สำเร็จ: {exc})"
         win = tk.Toplevel(root)
         win.title("ส่วนขยาย ChatGPT (Chrome)")
-        win.geometry("640x360")
+        win.geometry("660x480")
         win.transient(root)
         pad = {"padx": 14, "anchor": "w"}
         tk.Label(win, text="ส่วนขยาย Tidmunz ChatGPT", font=(SNAPGEN_UI_FONT, 14, "bold")).pack(pady=(14, 2), **pad)
@@ -15670,7 +15670,11 @@ def _install_better_bridge_manager():
             if not win.winfo_exists():
                 return
             status = snapgen_chrome_relay.RELAY.status()
-            if status.get("connected"):
+            account_var.set("ChatGPT ใน Chrome ล็อกอินบัญชี: " + (status.get("email") or "— (ยังไม่รู้ / ยังไม่ล็อกอิน)"))
+            if status.get("connected") and not status.get("account_ok"):
+                state_var.set(f"🔴 ผิดบัญชี — Chrome ใช้ {status.get('email')} แต่ต้องใช้ {status.get('expected_email')}")
+                state_label.config(fg="#B91C1C")
+            elif status.get("connected"):
                 busy = " — กำลังทำงาน" if status.get("busy") else ""
                 state_var.set(f"🟢 เชื่อมต่อแล้ว{busy}")
                 state_label.config(fg="#15803D")
@@ -15679,7 +15683,26 @@ def _install_better_bridge_manager():
                 state_label.config(fg="#B45309")
             win.after(2000, refresh_state)
 
-        tk.Label(win, text="โฟลเดอร์ส่วนขยายของเครื่องนี้:", font=(SNAPGEN_UI_FONT, 10, "bold")).pack(**pad)
+        account_var = tk.StringVar()
+        tk.Label(win, textvariable=account_var, fg="#334155").pack(**pad)
+        expected_row = tk.Frame(win)
+        expected_row.pack(fill="x", padx=14, pady=(4, 12))
+        tk.Label(expected_row, text="บัญชีบริษัทที่ต้องใช้ (อีเมล):").pack(side="left")
+        expected_entry = tk.Entry(expected_row, width=34)
+        expected_entry.insert(0, snapgen_chrome_relay.expected_account())
+        expected_entry.pack(side="left", padx=6)
+        saved_var = tk.StringVar()
+
+        def save_expected():
+            snapgen_chrome_relay.set_expected_account(expected_entry.get())
+            saved_var.set("บันทึกแล้ว ✓" if expected_entry.get().strip() else "ไม่กำหนด (ใช้บัญชีไหนก็ได้)")
+
+        tk.Button(expected_row, text="บันทึก", command=save_expected).pack(side="left")
+        tk.Label(expected_row, textvariable=saved_var, fg="#15803D").pack(side="left", padx=6)
+        tk.Label(win, text="ถ้ากำหนดไว้ แล้ว Chrome ล็อกอินบัญชีอื่น โปรแกรมจะไม่ส่งงาน "
+                          "(ใช้ Chrome โปรไฟล์ที่ล็อกอินบัญชีบริษัท แล้วติดตั้งส่วนขยายในโปรไฟล์นั้น)",
+                 fg="#667085", wraplength=600, justify="left").pack(**pad)
+        tk.Label(win, text="โฟลเดอร์ส่วนขยายของเครื่องนี้:", font=(SNAPGEN_UI_FONT, 10, "bold")).pack(pady=(10, 0), **pad)
         path_entry = tk.Entry(win, width=86)
         path_entry.insert(0, folder)
         path_entry.config(state="readonly")
@@ -16044,10 +16067,13 @@ def _install_image_bridge_status():
             return False, "ส่วนขยาย Chrome: —"
         if not state.get("connected"):
             return False, "ส่วนขยาย Chrome: ยังไม่เชื่อมต่อ"
+        if not state.get("account_ok"):
+            return False, f"ส่วนขยาย Chrome: ผิดบัญชี ({state.get('email') or '?'})"
         if state.get("busy"):
             waiting = f" (รอคิว {state['queue']})" if state.get("queue") else ""
             return True, f"ส่วนขยาย Chrome: กำลังทำงาน{waiting}"
-        return True, "ส่วนขยาย Chrome: เชื่อมต่อแล้ว ✓"
+        who = str(state.get("email") or "").split("@")[0]
+        return True, "ส่วนขยาย Chrome: เชื่อมต่อแล้ว ✓" + (f" ({who})" if who else "")
 
     def render_light():
         """Show the Chrome extension in place of the Bridge (ChatGPT work now runs in Chrome)."""

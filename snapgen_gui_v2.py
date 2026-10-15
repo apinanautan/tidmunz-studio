@@ -11948,6 +11948,20 @@ def _open_prompt_bank_ai():
             except Exception as e:
                 g["show_error"]("Prompt Preview failed", str(e))
         def summarize_context():
+            existing = _shared_context_payload()
+            if existing:
+                # Pictures may already be made with this Context's names: a new Context from GPT can rename
+                # characters/places, so updating needs a deliberate manual delete of the team file first.
+                path = existing.get("path") or ""
+                set_context_state("error", "มี Context ของเรื่องนี้แล้ว — อัปเดตไม่ได้",
+                                  "ถ้าจะอัปเดตจริง ให้ลบไฟล์ Context ของทีมด้วยตัวเองก่อน (ชื่ออาจไม่ตรงกับรูปที่ทำไปแล้ว)")
+                messagebox.showwarning(
+                    "อัปเดต Context",
+                    "เรื่องนี้มี Context ที่ทีมแตกไว้แล้ว — โปรแกรมไม่อัปเดตให้\n\n"
+                    "⚠ ถ้าอัปเดตใหม่ GPT อาจตั้งชื่อตัวละคร/สถานที่ใหม่ ชื่อจะไม่ตรงกับรูปที่ทำไปแล้ว\n\n"
+                    f"ถ้าต้องการอัปเดตจริง ให้ลบไฟล์นี้ด้วยตัวเองก่อน แล้วกดอัปเดตอีกครั้ง:\n{path}",
+                    parent=cw)
+                return
             try:
                 selected_story = _ensure_prompt_ref_story_text()
             except Exception as exc:
@@ -12061,6 +12075,23 @@ def _open_prompt_bank_ai():
         sum_btn = _minimal_button(row2, "✨ อัปเดต Context ในประวัติเดิม", summarize_context, "primary", padx=14, pady=7, font=(SNAPGEN_UI_FONT, 9, "bold"))
         sum_btn.pack(side="left")
         tk.Label(row2, text="สรุป · ตรวจ · บันทึกอัตโนมัติ | ไม่สร้างรายละเอียดสมมุติให้เอง", bg="#FFFFFF", fg="#64748B").pack(side="left", padx=(12, 0))
+        context_risk_var = tk.StringVar(value="")
+        tk.Label(cw, textvariable=context_risk_var, bg="#FFFFFF", fg="#DC2626",
+                 font=(SNAPGEN_UI_FONT, 9, "bold"), anchor="w", justify="left").pack(fill="x", padx=16, pady=(0, 6))
+
+        def refresh_context_risk():
+            try:
+                if not cw.winfo_exists():
+                    return
+                context_risk_var.set(
+                    "⚠ เรื่องนี้มี Context ของทีมแล้ว — ห้ามอัปเดตใหม่ ชื่อตัวละคร/สถานที่อาจไม่ตรงกับรูปที่ทำไปแล้ว "
+                    "(ถ้าจำเป็นต้องอัปเดต ให้ลบไฟล์ .tidmunz-context.json ข้างไฟล์บทด้วยตัวเองก่อน)"
+                    if _shared_context_payload() else "")
+                cw.after(3000, refresh_context_risk)
+            except tk.TclError:
+                pass
+
+        refresh_context_risk()
         _minimal_button(row2, "Save", save_context, "success", width=8, padx=12, pady=7).pack(side="right")
         set_context_state("idle", "พร้อมอัปเดต Context", st.get())
         # Pack the expandable editor last, so the status card and primary

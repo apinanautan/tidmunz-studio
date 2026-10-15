@@ -1,19 +1,38 @@
 // Tidmunz ChatGPT: runs Tidmunz Studio's ChatGPT jobs in this Chrome's own ChatGPT tab.
-// Tidmunz (127.0.0.1, see config.js) hands out one job at a time; this worker types the prompt,
-// attaches reference pictures, waits for ChatGPT to finish and sends back the text / pictures.
-importScripts("config.js");
+// Tidmunz (127.0.0.1) hands out one job at a time; this worker types the prompt, attaches
+// reference pictures, waits for ChatGPT to finish and sends back the text / pictures.
+// Pairing: a folder install gets port + token from config.js; the Chrome Web Store build
+// asks Tidmunz for them at /pair (Tidmunz only answers requests coming from an extension).
+try { importScripts("config.js"); } catch (e) { self.TZ_CONFIG = null; }
 
-const BASE = `http://127.0.0.1:${self.TZ_CONFIG.port}`;
-const TOKEN = self.TZ_CONFIG.token;
+const PORTS = [8766, 8767, 8768];
 const JOB_LIMIT_MS = 12 * 60 * 1000;
 let running = false;
+let link = self.TZ_CONFIG || null;  // {port, token}
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
+async function pair() {
+  if (self.TZ_CONFIG) return self.TZ_CONFIG;
+  for (const port of PORTS) {
+    try {
+      const response = await fetch(`http://127.0.0.1:${port}/pair`);
+      if (response.ok) {
+        const data = await response.json();
+        if (data && data.token) return {port, token: data.token};
+      }
+    } catch (e) {}
+  }
+  return null;
+}
+
 async function relay(path, body) {
-  const url = `${BASE}${path}${path.includes("?") ? "&" : "?"}token=${encodeURIComponent(TOKEN)}`;
+  if (!link) link = await pair();
+  if (!link) throw new Error("Tidmunz is not open");
+  const url = `http://127.0.0.1:${link.port}${path}${path.includes("?") ? "&" : "?"}token=${encodeURIComponent(link.token)}`;
   const opts = body === undefined ? {} : {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)};
   const response = await fetch(url, opts);
+  if (response.status === 403 && !self.TZ_CONFIG) link = null;  // Tidmunz restarted with a new token: pair again
   if (response.status === 204) return null;
   if (!response.ok) throw new Error(`relay ${response.status}`);
   return response.json();

@@ -2,9 +2,30 @@
   "manifest_version": 3,
   "name": "Tidmunz ChatGPT",
   "version": "1.0.0",
-  "description": "Lets Tidmunz Studio on this PC send its ChatGPT jobs (text and pictures) to your own ChatGPT tab.",
-  "background": {"service_worker": "background.js"},
-  "permissions": ["tabs", "scripting", "alarms", "storage"],
-  "host_permissions": ["https://chatgpt.com/*", "http://127.0.0.1/*"],
-  "action": {"default_title": "Tidmunz ChatGPT"}
+  "description": "Connects the Tidmunz Studio desktop app on this PC to your own ChatGPT tab, so the app's text and picture jobs run in ChatGPT.",
+  "background": {
+    "service_worker": "background.js"
+  },
+  "permissions": [
+    "tabs",
+    "scripting",
+    "alarms",
+    "storage"
+  ],
+  "host_permissions": [
+    "https://chatgpt.com/*",
+    "http://127.0.0.1/*"
+  ],
+  "action": {
+    "default_title": "Tidmunz ChatGPT",
+    "default_icon": {
+      "16": "icon16.png",
+      "48": "icon48.png"
+    }
+  },
+  "icons": {
+    "16": "icon16.png",
+    "48": "icon48.png",
+    "128": "icon128.png"
+  }
 }

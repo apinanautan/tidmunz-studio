@@ -3,8 +3,9 @@
 
 Runs inside Tidmunz Studio on 127.0.0.1 only. The Bridge posts a job to /job and
 waits; the extension long-polls /next, runs the job in the user's own ChatGPT tab
-and posts /result. Every call except /status needs the token that Tidmunz writes
-into the extension's config.js and into chrome_relay.json for the Bridge.
+and posts /result. Every call except /status and /pair needs the token. A folder
+install reads it from config.js; the Web Store build gets it from /pair, which
+answers Chrome extensions only. The Bridge reads it from chrome_relay.json.
 """
 from __future__ import annotations
 
@@ -118,6 +119,15 @@ class _Handler(BaseHTTPRequestHandler):
         path, query = self._query()
         if path == "/status":
             return self._send(200, RELAY.status())
+        if path == "/pair":
+            # The Web Store build of the extension has no config.js: hand it the token, but only to a
+            # Chrome extension (web pages send their own https:// Origin and cannot fake this one).
+            origin = str(self.headers.get("Origin") or "")
+            allowed = _allowed_extension_ids()
+            extension_id = origin[len("chrome-extension://"):] if origin.startswith("chrome-extension://") else ""
+            if not extension_id or (allowed and extension_id not in allowed):
+                return self._send(403, {"error": "extensions only"})
+            return self._send(200, {"token": RELAY.token})
         if not self._allowed(query):
             return self._send(403, {"error": "bad token"})
         if path == "/next":
@@ -140,6 +150,19 @@ class _Handler(BaseHTTPRequestHandler):
         if path == "/job":
             return self._send(200, RELAY.run(body))
         self._send(404, {"error": "not found"})
+
+
+# Chrome Web Store id of "Tidmunz ChatGPT" once published; an empty set accepts any extension id.
+STORE_EXTENSION_IDS: set[str] = set()
+
+
+def _allowed_extension_ids() -> set[str]:
+    ids = set(STORE_EXTENSION_IDS)
+    try:
+        ids.update(json.loads((data_dir() / "chrome_extension_ids.json").read_text(encoding="utf-8")))
+    except (OSError, ValueError, TypeError):
+        pass
+    return ids
 
 
 def _write_extension(source: Path, token: str, port: int) -> None:

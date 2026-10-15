@@ -2087,6 +2087,27 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
             raise Stopped()
 
     # ── Bridge calls (this story's own GPT history) ──
+    def open_bridge(request) -> dict:
+        """POST to the Bridge; an error says what the Bridge said, not just "HTTP Error 409: Conflict"."""
+        try:
+            with urllib.request.urlopen(request, timeout=600) as response:
+                return json.loads(response.read().decode("utf-8", errors="replace"))
+        except urllib.error.HTTPError as exc:
+            detail = exc.read().decode("utf-8", errors="replace")
+            try:
+                error = json.loads(detail).get("error") or {}
+                if error.get("raw_provider_error") == "ChatGPT conversation failed: 404 " or (
+                        error.get("code") == "chatgpt_conversation_not_found" and not json.loads(
+                            request.data.decode("utf-8")).get("metadata")):
+                    # Even a brand-new chat is refused: the account's capture no longer matches ChatGPT.
+                    raise RuntimeError(
+                        "ChatGPT ไม่รับแชตใหม่จากบัญชีนี้ (404) — ข้อมูลที่จับบัญชีไว้ใน Bridge ใช้ไม่ได้แล้ว "
+                        "เปิด ⚙ Bridge Manager แล้วจับบัญชีใหม่ (ล็อกอิน ChatGPT ใน Chrome ไว้ก่อน)") from exc
+                detail = error.get("message") or detail
+            except (ValueError, AttributeError):
+                pass
+            raise RuntimeError(f"Bridge HTTP {exc.code}: {detail[:400]}") from exc
+
     def chat(content: str) -> str:
         project = state["project"]
         conversation = project.setdefault("conversation", {})
@@ -2965,8 +2986,7 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
             headers={"Authorization": "Bearer local-dev-key", "Content-Type": "application/json; charset=utf-8"},
             method="POST")
         with g.get("_bridge_queue_lock") or threading.Lock():
-            with urllib.request.urlopen(request, timeout=600) as response:
-                data = json.loads(response.read().decode("utf-8", errors="replace"))
+            data = open_bridge(request)
         message = ((data.get("choices") or [{}])[0].get("message") or {}).get("content") or ""
         return str(message)
 
@@ -3038,8 +3058,7 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
             g["_chatgpt_api_base"]() + "/chat/completions", data=json.dumps(body).encode("utf-8"),
             headers={"Authorization": "Bearer local-dev-key", "Content-Type": "application/json"}, method="POST")
         with g.get("_bridge_queue_lock") or threading.Lock():
-            with urllib.request.urlopen(request, timeout=600) as response:
-                data = json.loads(response.read().decode("utf-8", errors="replace"))
+            data = open_bridge(request)
         reply = ((data.get("choices") or [{}])[0].get("message") or {}).get("content") or ""
         found = {}
         for item in (parse_json_reply(str(reply)) or {}).get("bad") or []:
@@ -3461,8 +3480,7 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
             g["_chatgpt_api_base"]() + "/chat/completions", data=json.dumps(body).encode("utf-8"),
             headers={"Authorization": "Bearer local-dev-key", "Content-Type": "application/json"}, method="POST")
         with g.get("_bridge_queue_lock") or threading.Lock():
-            with urllib.request.urlopen(request, timeout=600) as response:
-                data = json.loads(response.read().decode("utf-8", errors="replace"))
+            data = open_bridge(request)
         return parse_json_reply(str(((data.get("choices") or [{}])[0].get("message") or {}).get("content") or "")) or {}
 
     def review_clip_prompt(scene, index):

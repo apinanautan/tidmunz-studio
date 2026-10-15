@@ -1719,6 +1719,20 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
         return sorted(os.path.splitext(n)[0].strip() for n in os.listdir(folder)
                       if os.path.splitext(n)[1].lower() in (".png", ".jpg", ".jpeg", ".webp"))
 
+    def context_beside_attachments():
+        """ออโต้: the story's Context JSON sits with the attachment folder (in it or its parent folder)."""
+        import snapgen_shared_context
+        folder = attachment_folder()
+        if not folder:
+            return None
+        for place in (Path(folder), Path(folder).parent):
+            for path in sorted(place.glob("*" + snapgen_shared_context.SUFFIX)):
+                payload = snapgen_shared_context.load(path.with_name(path.name[: -len(snapgen_shared_context.SUFFIX)] + ".docx"))
+                if payload:
+                    log(f"ใช้ Context จากโฟลเดอร์ไฟล์แนบ: {path.name}")
+                    return payload
+        return None
+
     def attachments_for(scene):
         """Video flow: the Image page's attachments, matched by name like Image AI does."""
         text = " ".join([scene_prompt(scene), " ".join(scene.get("characters") or []), str(scene.get("location") or ""),
@@ -2350,7 +2364,9 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
         try:
             import snapgen_shared_context
             # "ทำใหม่ตั้งแต่วิเคราะห์บท" asks GPT again in เล่าภาพ; ออโต้ always takes Prompt-Ref's Context.
-            if not project.pop("force_new_context", False) or video_mode:
+            if video_mode:
+                shared = context_beside_attachments() or snapgen_shared_context.find(project["script"])
+            elif not project.pop("force_new_context", False):
                 shared = snapgen_shared_context.find(project["script"])
         except Exception:
             pass

@@ -1389,10 +1389,17 @@ def generate_image(prompt, *, output_dir=None, name_hint=None,
         # "unknown ChatGPT account alias" after its account was captured again.
         # The main story / Ref histories are excluded on purpose: they only restart from an explicit
         # new-story action (or pressing Use), because a new chat there loses the story.
-        save_fn = {
+        owners = {
             id(_story_face_conversation): _save_story_face_conversation,
             id(_prop_conversation): _save_prop_conversation,
-        }.get(id(current_history)) or (conversation_save_fn if current_history is conversation_state else None)
+        }
+        if "codex history moved" in str(text).casefold():
+            # ChatGPT now goes through Codex: a history made on the ChatGPT website can never be
+            # opened again, so even the main story / Ref continue in a new Codex history.
+            owners.update({id(_story_conversation): _save_story_conversation,
+                           id(_ref_story_conversation): _save_ref_story_conversation})
+        save_fn = owners.get(id(current_history)) or (
+            conversation_save_fn if current_history is conversation_state else None)
         if (
             lost_history_reset
             or not isinstance(current_history, dict)
@@ -1413,7 +1420,9 @@ def generate_image(prompt, *, output_dir=None, name_hint=None,
         payload.pop("chatgpt_account", None)
         if callable(save_fn):
             save_fn()
-        log("[image-gen] แชตเดิมอยู่ในบัญชี ChatGPT อื่น — เริ่มแชตใหม่ของเรื่องนี้ในบัญชีปัจจุบัน")
+        log("[image-gen] ประวัติเดิมอยู่บนเว็บ ChatGPT — เริ่มประวัติใหม่ของเรื่องนี้ผ่าน Codex"
+            if "codex history moved" in str(text).casefold()
+            else "[image-gen] แชตเดิมอยู่ในบัญชี ChatGPT อื่น — เริ่มแชตใหม่ของเรื่องนี้ในบัญชีปัจจุบัน")
         return True
 
     current_history = None

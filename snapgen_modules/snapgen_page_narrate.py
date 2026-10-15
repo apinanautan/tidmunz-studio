@@ -2100,8 +2100,8 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
                         request.data.decode("utf-8")).get("metadata"):
                     # Even a brand-new chat is refused: the account's capture no longer matches ChatGPT.
                     raise RuntimeError(
-                        "ChatGPT ไม่รับแชตใหม่จากบัญชีนี้ (404) — ข้อมูลที่จับบัญชีไว้ใน Bridge ใช้ไม่ได้แล้ว "
-                        "เปิด ⚙ Bridge Manager แล้วจับบัญชีใหม่ (ล็อกอิน ChatGPT ใน Chrome ไว้ก่อน)") from exc
+                        "ChatGPT ไม่รับแชตใหม่จากบัญชีนี้ (404) — เปิด ⚙ Bridge Manager แล้วกด "
+                        "🔑 ล็อกอิน ChatGPT (ช่องทางใหม่ผ่าน Codex)") from exc
                 detail = error.get("message") or detail
             except (ValueError, AttributeError):
                 pass
@@ -2122,6 +2122,7 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
             data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
             headers={"Authorization": "Bearer local-dev-key", "Content-Type": "application/json; charset=utf-8"},
             method="POST")
+        moved = False
         lock = g.get("_bridge_queue_lock") or threading.Lock()
         with lock:
             wait_free = g.get("_wait_bridge_free")
@@ -2131,8 +2132,20 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
                 with urllib.request.urlopen(request, timeout=600) as response:
                     data = json.loads(response.read().decode("utf-8", errors="replace"))
             except urllib.error.HTTPError as exc:
-                detail = exc.read().decode("utf-8", errors="replace")[:600]
-                raise RuntimeError(f"Bridge HTTP {exc.code}: {detail}") from exc
+                detail = exc.read().decode("utf-8", errors="replace")
+                moved = "codex history moved" in detail and body.get("metadata")
+                if not moved:
+                    raise RuntimeError(f"Bridge HTTP {exc.code}: {detail[:600]}") from exc
+        if moved:
+            # ChatGPT now goes through Codex, which cannot open a history made on the ChatGPT
+            # website: the story starts its Codex history (script and Context first), then asks again.
+            log("ประวัติ GPT ของเรื่องนี้อยู่บนเว็บ ChatGPT — เริ่มประวัติใหม่ผ่าน Codex "
+                "ส่งบทและ Context ให้ก่อน แผน รูป และคลิปที่ทำแล้วยังอยู่ครบ")
+            project["conversation"] = {}
+            project["history_seeded"] = False
+            save_project()
+            ensure_story_in_history()
+            return chat(content)
         if data.get("error"):
             raise RuntimeError(json.dumps(data["error"], ensure_ascii=False)[:600])
         conversation_id, parent_id = g["_extract_bridge_cursor"](data)

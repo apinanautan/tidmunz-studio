@@ -963,6 +963,9 @@ def _snapgen_friendly_bridge_error(msg):
             except Exception:
                 pass
         return limit_text
+    if "codex history moved" in lowered:
+        return ("ประวัติ GPT ของเรื่องนี้อยู่บนเว็บ ChatGPT แบบเดิม ซึ่งเปิดต่อไม่ได้แล้วหลังเปลี่ยนมาใช้ Codex — "
+                "เริ่มเรื่องใหม่ (ส่งบทเข้าประวัติใหม่) 1 ครั้ง แล้วทำต่อได้ตามปกติ")
     if "cloudflare browser challenge" in lowered or "chatgpt_browser_challenge" in lowered:
         return (
             "Cloudflare ปฏิเสธ Chrome session ก่อนคำขอถึง ChatGPT — SnapGen หยุดงานนี้และไม่ยิงซ้ำ\n\n"
@@ -15440,6 +15443,14 @@ def _install_better_bridge_manager():
                 email = str(info.get("email") or stored.get("email_masked") or "พร้อมใช้งาน")
                 tk.Label(rowa, text=email, anchor="w", fg="#333").pack(side="left", fill="x", expand=True)
                 is_current = (acct == current_account)
+                try:
+                    import snapgen_codex_setup
+                    signed = (snapgen_codex_setup.account_home(BRIDGE_DIR, acct) / "auth.json").is_file()
+                except Exception:
+                    signed = False
+                tk.Button(rowa, text=("ChatGPT ✓" if signed else "ล็อกอิน"), width=9,
+                          bg=("#10A37F" if signed else "#F59E0B"), fg="white",
+                          command=lambda a=acct: login_chatgpt(a)).pack(side="right", padx=(4, 0))
                 if primary:
                     tk.Button(rowa, text="Use", width=5, bg=("#0EA5E9" if is_current else "#9CA3AF"), fg="white", command=lambda a=acct: use_account(a)).pack(side="right", padx=(4,0))
                     tk.Button(rowa, text="🗑", width=2, fg="#B71C1C", command=lambda a=acct: delete_account(a)).pack(side="right")
@@ -15620,11 +15631,24 @@ def _install_better_bridge_manager():
                 except Exception as e:
                     log_to(log_box, "❌ เพิ่ม account ไม่สำเร็จ: "+str(e))
             threading.Thread(target=worker, daemon=True).start()
+        def login_chatgpt(account=None):
+            """ChatGPT's own login page (through the official Codex CLI) — no capture needed."""
+            def worker():
+                try:
+                    import snapgen_codex_setup
+                    name = account or snapgen_codex_setup.active_account(BRIDGE_DIR)
+                    snapgen_codex_setup.start_login(
+                        BRIDGE_DIR, name, lambda m: log_to(log_box, m),
+                        on_done=lambda ok: root.after(0, refresh_accounts) if ok else None)
+                except Exception as e:
+                    log_to(log_box, "❌ เปิดหน้าล็อกอิน ChatGPT ไม่สำเร็จ: " + str(e))
+            threading.Thread(target=worker, daemon=True).start()
         row=tk.Frame(win); row.pack(fill="x", padx=8, pady=(0,8))
         tk.Button(row,text="📦 ติดตั้ง",command=install).pack(side="left")
         tk.Button(row,text="▶ เริ่ม",command=start).pack(side="left",padx=(6,0))
         tk.Button(row,text="⏹ หยุด",command=stop).pack(side="left",padx=(6,0))
-        tk.Button(row,text="🔑 เพิ่ม Account",command=add_account,bg="#673AB7",fg="white").pack(side="left",padx=(12,0))
+        tk.Button(row,text="🔑 ล็อกอิน ChatGPT",command=login_chatgpt,bg="#10A37F",fg="white").pack(side="left",padx=(12,0))
+        tk.Button(row,text="🔑 เพิ่ม Account",command=add_account,bg="#673AB7",fg="white").pack(side="left",padx=(6,0))
         tk.Button(row,text="🔄 ตรวจสอบ",command=refresh).pack(side="left",padx=(6,0))
         tk.Button(row,text="ปิด",command=win.destroy).pack(side="right")
         refresh_accounts()
@@ -18777,6 +18801,31 @@ if root:
         _check_github_update(root, g.get("snap_status_var"), interactive=False)
 
     root.after(2500, _startup_auto_update)
+
+    def _startup_codex():
+        """ChatGPT now goes through the official Codex CLI: install it once and ask to sign in once."""
+        def worker():
+            try:
+                import snapgen_codex_setup
+                snapgen_codex_setup.ensure_codex(lambda m: print(m, flush=True))
+                if snapgen_codex_setup.logged_in(BRIDGE_DIR):
+                    return
+                account = snapgen_codex_setup.active_account(BRIDGE_DIR)
+
+                def ask():
+                    if messagebox.askyesno(
+                            "ล็อกอิน ChatGPT",
+                            "ChatGPT เปลี่ยนระบบ — โปรแกรมเปลี่ยนไปใช้ช่องทางทางการ (Codex) แล้ว\n"
+                            "ต้องล็อกอิน ChatGPT ใหม่ 1 ครั้งต่อเครื่อง (ใช้บัญชีเดิม)\n\n"
+                            "กด Yes เพื่อเปิดหน้าล็อกอินในเบราว์เซอร์", parent=root):
+                        threading.Thread(target=lambda: snapgen_codex_setup.start_login(
+                            BRIDGE_DIR, account, lambda m: print(m, flush=True)), daemon=True).start()
+                root.after(0, ask)
+            except Exception as exc:
+                print(f"[Codex] เตรียม Codex ไม่สำเร็จ: {exc}", flush=True)
+        threading.Thread(target=worker, daemon=True).start()
+
+    root.after(4000, _startup_codex)
     print("[SnapGen] พร้อมใช้งาน ✓")
     root.mainloop()
 

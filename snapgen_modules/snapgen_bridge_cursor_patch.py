@@ -462,6 +462,12 @@ def install(bridge_dir, log=print) -> bool:
         # Optional nicer rate-limit message: a Bridge with a different layout
         # must still start, or every update leaves the team with no Bridge.
         log(f"[Bridge] ข้ามการแจ้งลิมิตรูปแบบละเอียด: {rate_limit_error}")
+    from snapgen_bridge_codex_patch import install as _install_codex
+    try:
+        vision_cursor_changed = _install_codex(bridge_dir, log) or vision_cursor_changed
+    except Exception as codex_error:
+        # The website route still works without it, so a Bridge with another layout must still start.
+        log(f"[Bridge] ยังส่งผ่าน Codex ไม่ได้: {codex_error}")
     path = Path(bridge_dir) / "chatgpt_api" / "api" / "openai_compat.py"
     if not path.is_file():
         raise RuntimeError(f"ไม่พบ Bridge source: {path}")

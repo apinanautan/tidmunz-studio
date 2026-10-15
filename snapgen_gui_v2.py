@@ -16160,7 +16160,7 @@ def _install_image_bridge_status():
         try:
             import snapgen_chrome_relay
             state = snapgen_chrome_relay.RELAY.status()
-            left = str(state.get("images_left") or "—")
+            left = str(state.get("images_estimate") or state.get("images_left") or "—")
             plan = str(state.get("plan") or "").strip()
             quota_var.set(f"โควตารูป: {left}" + (f" · {plan.capitalize()}" if plan else ""))
         except Exception:
@@ -16170,8 +16170,7 @@ def _install_image_bridge_status():
         """Show the Chrome extension in place of the Bridge (ChatGPT work now runs in Chrome)."""
         color, text = last_light["color"], last_light["text"]
         connected, label = chrome_link_state()
-        if connected:
-            show_chrome_quota()
+        show_chrome_quota()  # last known numbers stay on screen even while Chrome is busy or closed
         parts = text.split(" | ")
         if parts and parts[0].startswith("Bridge"):
             parts[0] = label

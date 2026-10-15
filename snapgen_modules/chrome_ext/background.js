@@ -85,6 +85,7 @@ async function loop() {
         continue;
       }
       if (!job) continue;
+      if (job.reload) { chrome.runtime.reload(); return; }  // Tidmunz updated this folder: load the new files
       badge("…", "#F59E0B");
       let result;
       try {

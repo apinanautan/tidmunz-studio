@@ -186,6 +186,9 @@ class _Handler(BaseHTTPRequestHandler):
                 RELAY.images, RELAY.reset = str(query.get("images") or ""), str(query.get("reset") or "")
             if "plan" in query:
                 RELAY.plan = str(query.get("plan") or "")
+            if _newer_on_disk(RELAY.version):
+                # Tidmunz updated the extension's files: the extension reloads itself from the folder.
+                return self._send(200, {"reload": True})
             job = RELAY.next_job(min(float(query.get("wait") or 25), 30))
             return self._send(200, job) if job else self._send(204)
         self._send(404, {"error": "not found"})
@@ -217,6 +220,18 @@ def _allowed_extension_ids() -> set[str]:
     except (OSError, ValueError, TypeError):
         pass
     return ids
+
+
+def _version_tuple(text: str) -> tuple:
+    return tuple(int(x) for x in str(text or "0").split(".") if x.isdigit())
+
+
+def _newer_on_disk(running: str) -> bool:
+    try:
+        on_disk = json.loads((extension_dir() / "manifest.json").read_text(encoding="utf-8")).get("version")
+    except (OSError, ValueError):
+        return False
+    return bool(running) and _version_tuple(on_disk) > _version_tuple(running)
 
 
 def _write_extension(source: Path, token: str, port: int) -> None:

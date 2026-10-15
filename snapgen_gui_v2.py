@@ -15659,8 +15659,8 @@ def _install_better_bridge_manager():
         win.transient(root)
         pad = {"padx": 14, "anchor": "w"}
         tk.Label(win, text="ส่วนขยาย Tidmunz ChatGPT", font=(SNAPGEN_UI_FONT, 14, "bold")).pack(pady=(14, 2), **pad)
-        tk.Label(win, text="โปรแกรมส่งงานข้อความและรูปเข้า ChatGPT ใน Chrome ของเครื่องนี้ "
-                          "(เปิด Chrome และล็อกอิน ChatGPT ทิ้งไว้ระหว่างทำงาน)",
+        tk.Label(win, text="โปรแกรมส่งงานข้อความและรูปเข้า ChatGPT ใน Chrome ของโปรแกรม "
+                          "(หน้าต่าง Chrome แยกที่โปรแกรมเปิดเอง — เปิดทิ้งไว้ระหว่างทำงาน)",
                  fg="#475467", wraplength=600, justify="left").pack(**pad)
         state_var = tk.StringVar()
         state_label = tk.Label(win, textvariable=state_var, font=(SNAPGEN_UI_FONT, 12, "bold"))
@@ -15670,38 +15670,21 @@ def _install_better_bridge_manager():
             if not win.winfo_exists():
                 return
             status = snapgen_chrome_relay.RELAY.status()
-            account_var.set("ChatGPT ใน Chrome ล็อกอินบัญชี: " + (status.get("email") or "— (ยังไม่รู้ / ยังไม่ล็อกอิน)"))
-            if status.get("connected") and not status.get("account_ok"):
-                state_var.set(f"🔴 ผิดบัญชี — Chrome ใช้ {status.get('email')} แต่ต้องใช้ {status.get('expected_email')}")
-                state_label.config(fg="#B91C1C")
-            elif status.get("connected"):
+            account_var.set("ใช้บัญชี ChatGPT: " + (status.get("email") or "— (ยังไม่ล็อกอินใน Chrome ของโปรแกรม)"))
+            if status.get("connected"):
                 busy = " — กำลังทำงาน" if status.get("busy") else ""
                 state_var.set(f"🟢 เชื่อมต่อแล้ว{busy}")
                 state_label.config(fg="#15803D")
             else:
-                state_var.set("🟡 ยังไม่เชื่อมต่อ — ติดตั้งส่วนขยายจากโฟลเดอร์ด้านล่าง แล้วเปิด Chrome ไว้")
+                state_var.set("🟡 ยังไม่เชื่อมต่อ — เปิด Chrome ของโปรแกรม แล้วติดตั้งส่วนขยายจากโฟลเดอร์ด้านล่าง")
                 state_label.config(fg="#B45309")
             win.after(2000, refresh_state)
 
         account_var = tk.StringVar()
         tk.Label(win, textvariable=account_var, fg="#334155").pack(**pad)
-        expected_row = tk.Frame(win)
-        expected_row.pack(fill="x", padx=14, pady=(4, 12))
-        tk.Label(expected_row, text="บัญชีบริษัทที่ต้องใช้ (อีเมล):").pack(side="left")
-        expected_entry = tk.Entry(expected_row, width=34)
-        expected_entry.insert(0, snapgen_chrome_relay.expected_account())
-        expected_entry.pack(side="left", padx=6)
-        saved_var = tk.StringVar()
-
-        def save_expected():
-            snapgen_chrome_relay.set_expected_account(expected_entry.get())
-            saved_var.set("บันทึกแล้ว ✓" if expected_entry.get().strip() else "ไม่กำหนด (ใช้บัญชีไหนก็ได้)")
-
-        tk.Button(expected_row, text="บันทึก", command=save_expected).pack(side="left")
-        tk.Label(expected_row, textvariable=saved_var, fg="#15803D").pack(side="left", padx=6)
-        tk.Label(win, text="ถ้ากำหนดไว้ แล้ว Chrome ล็อกอินบัญชีอื่น โปรแกรมจะไม่ส่งงาน "
-                          "(ใช้ Chrome โปรไฟล์ที่ล็อกอินบัญชีบริษัท แล้วติดตั้งส่วนขยายในโปรไฟล์นั้น)",
-                 fg="#667085", wraplength=600, justify="left").pack(**pad)
+        tk.Label(win, text="งานไปเข้าบัญชีที่ล็อกอินใน Chrome ของโปรแกรม — จะสลับบัญชี ให้ล็อกเอาต์/ล็อกอิน "
+                          "ChatGPT ในหน้าต่าง Chrome ของโปรแกรม (ไม่เกี่ยวกับ Chrome ประจำเครื่อง)",
+                 fg="#667085", wraplength=620, justify="left").pack(pady=(0, 8), **pad)
         tk.Label(win, text="โฟลเดอร์ส่วนขยายของเครื่องนี้:", font=(SNAPGEN_UI_FONT, 10, "bold")).pack(pady=(10, 0), **pad)
         path_entry = tk.Entry(win, width=86)
         path_entry.insert(0, folder)
@@ -15720,8 +15703,14 @@ def _install_better_bridge_manager():
         tk.Label(row, textvariable=copied, fg="#15803D").pack(side="left", padx=8)
         row2 = tk.Frame(win)
         row2.pack(fill="x", padx=14, pady=(16, 0))
-        tk.Button(row2, text="🌐 เปิด ChatGPT (ล็อกอิน)", bg="#10A37F", fg="white",
-                  command=lambda: __import__("webbrowser").open("https://chatgpt.com/")).pack(side="left")
+        def open_program_chrome():
+            if not snapgen_chrome_relay.open_program_chrome():
+                messagebox.showerror("ส่วนขยาย ChatGPT", "ไม่พบ Google Chrome ในเครื่องนี้", parent=win)
+
+        tk.Button(row2, text="🌐 เปิด Chrome ของโปรแกรม", bg="#10A37F", fg="white",
+                  command=open_program_chrome).pack(side="left")
+        tk.Label(row2, text="← ติดตั้งส่วนขยายและล็อกอิน ChatGPT ในหน้าต่างนี้ (ครั้งเดียว)",
+                 fg="#667085").pack(side="left", padx=8)
         bottom = tk.Frame(win)
         bottom.pack(side="bottom", fill="x", padx=14, pady=12)
         tk.Button(bottom, text="ปิด", command=win.destroy).pack(side="right")
@@ -16067,8 +16056,6 @@ def _install_image_bridge_status():
             return False, "ส่วนขยาย Chrome: —"
         if not state.get("connected"):
             return False, "ส่วนขยาย Chrome: ยังไม่เชื่อมต่อ"
-        if not state.get("account_ok"):
-            return False, f"ส่วนขยาย Chrome: ผิดบัญชี ({state.get('email') or '?'})"
         if state.get("busy"):
             waiting = f" (รอคิว {state['queue']})" if state.get("queue") else ""
             return True, f"ส่วนขยาย Chrome: กำลังทำงาน{waiting}"
@@ -18955,6 +18942,15 @@ if root:
             snapgen_chrome_relay.start(lambda m: print(m, flush=True))
         except Exception as exc:
             print(f"[Chrome] เปิดคิวงานส่วนขยายไม่สำเร็จ: {exc}", flush=True)
+            return
+
+        def open_if_needed():
+            # The extension is installed in the program's Chrome: open that window so work can start.
+            if (not snapgen_chrome_relay.RELAY.status()["connected"]
+                    and snapgen_chrome_relay.extension_in_program_chrome()):
+                snapgen_chrome_relay.open_program_chrome()
+                print("[Chrome] เปิด Chrome ของโปรแกรมสำหรับส่วนขยาย ChatGPT", flush=True)
+        _snapgen_after(8000, open_if_needed)
 
     root.after(1500, _startup_chrome)
     print("[SnapGen] พร้อมใช้งาน ✓")

@@ -42,7 +42,7 @@ function badge(text, color) {
   try { chrome.action.setBadgeText({text}); chrome.action.setBadgeBackgroundColor({color}); } catch (e) {}
 }
 
-// Which ChatGPT account this Chrome profile is logged into (Tidmunz refuses jobs for the wrong one).
+// Which ChatGPT account this Chrome profile is logged into (shown in Tidmunz).
 let account = {email: "", checked: 0};
 async function chatgptAccount() {
   if (Date.now() - account.checked < 60000) return account.email;
@@ -143,9 +143,6 @@ async function pageSend(job) {
   const sleep = ms => new Promise(r => setTimeout(r, ms));
   const session = await (await fetch("/api/auth/session")).json();
   if (!session || !session.accessToken) return {error: "ChatGPT is logged out in Chrome — log in, then try again"};
-  const email = (session.user && session.user.email) || "";
-  if (job.expected_email && email.toLowerCase() !== job.expected_email.toLowerCase())
-    return {error: `wrong ChatGPT account in Chrome: ${email || "unknown"} (Tidmunz needs ${job.expected_email})`, wrong_account: true};
   let before = [];  // messages already in the chat: everything else is this job's answer
   if (job.conversation_id) {
     const check = await fetch(`/backend-api/conversation/${job.conversation_id}`,

@@ -30,6 +30,48 @@ def data_dir() -> Path:
     return Path(local) / "Tidmunz Studio" / "snapgen_data"
 
 
+def program_chrome_profile() -> Path:
+    """Tidmunz's own Chrome profile (also used for account capture): the extension and the ChatGPT
+    login live here, apart from the user's everyday Chrome."""
+    local = os.environ.get("LOCALAPPDATA") or str(Path.home() / "AppData" / "Local")
+    return Path(local) / "TidMunStudio" / "SnapGenChromeProfile"
+
+
+def extension_in_program_chrome() -> bool:
+    """The program's Chrome has loaded our extension folder (Chrome records its path in the profile)."""
+    marker = str(extension_dir()).replace("\\", "\\\\").lower()
+    for name in ("Secure Preferences", "Preferences"):
+        try:
+            text = (program_chrome_profile() / "Default" / name).read_text(encoding="utf-8", errors="ignore").lower()
+        except OSError:
+            continue
+        if "tidmunz chatgpt" in text or marker in text or "chrome_extension" in text and "tidmunz" in text:
+            return True
+    return False
+
+
+def chrome_exe() -> str | None:
+    for base in (os.environ.get("PROGRAMFILES"), os.environ.get("PROGRAMFILES(X86)"), os.environ.get("LOCALAPPDATA")):
+        if base:
+            path = Path(base) / "Google" / "Chrome" / "Application" / "chrome.exe"
+            if path.is_file():
+                return str(path)
+    return shutil.which("chrome")
+
+
+def open_program_chrome(url: str = "https://chatgpt.com/") -> bool:
+    """Open (or bring forward) Tidmunz's own Chrome window."""
+    chrome = chrome_exe()
+    if not chrome:
+        return False
+    profile = program_chrome_profile()
+    profile.mkdir(parents=True, exist_ok=True)
+    import subprocess
+    subprocess.Popen([chrome, f"--user-data-dir={profile}", "--profile-directory=Default", "--new-window", url],
+                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, close_fds=True)
+    return True
+
+
 def extension_dir() -> Path:
     return data_dir() / "chrome_extension"
 
@@ -68,13 +110,6 @@ class _Relay:
     # Bridge side
     def run(self, job: dict) -> dict:
         job = dict(job)
-        expected = expected_account()
-        if expected:
-            if self.email and self.email.lower() != expected.lower():
-                return {"error": f"Chrome ล็อกอิน ChatGPT บัญชี {self.email} แต่งานนี้ต้องใช้ {expected} — "
-                                 "เปิด Chrome โปรไฟล์ที่ล็อกอินบัญชีบริษัทแล้วติดตั้งส่วนขยายในโปรไฟล์นั้น",
-                        "wrong_account": True}
-            job["expected_email"] = expected  # the page checks again right before sending
         job["id"] = uuid.uuid4().hex
         slot = {"event": threading.Event(), "result": None}
         self.waiting[job["id"]] = slot
@@ -92,25 +127,9 @@ class _Relay:
             self.waiting.pop(job["id"], None)
 
     def status(self) -> dict:
-        expected = expected_account()
         return {"connected": time.time() - self.last_seen < CONNECTED_WITHIN, "last_seen": self.last_seen,
                 "queue": len(self.pending), "busy": len(self.waiting), "extension_version": self.version,
-                "email": self.email, "expected_email": expected,
-                "account_ok": not expected or not self.email or self.email.lower() == expected.lower()}
-
-
-def expected_account() -> str:
-    """The company ChatGPT account Chrome must be logged into ("" = any account)."""
-    try:
-        return str(json.loads((data_dir() / "chrome_account.json").read_text(encoding="utf-8")).get("email") or "").strip()
-    except (OSError, ValueError, AttributeError):
-        return ""
-
-
-def set_expected_account(email: str) -> None:
-    path = data_dir() / "chrome_account.json"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps({"email": email.strip()}), encoding="utf-8")
+                "email": self.email}
 
 
 RELAY = _Relay()

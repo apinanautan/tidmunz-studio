@@ -2275,6 +2275,13 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
             shutil.move(str(out), str(target))
         return str(target)
 
+    def error_cause(exc) -> str:
+        """The part of a Bridge error that says what really went wrong (it sits after 'Raw error:')."""
+        text = str(exc)
+        if "Raw error:" in text:
+            return text.split("Raw error:", 1)[1].strip().rstrip('"}').strip()
+        return text
+
     def with_retries(label, action, attempts=3):
         last = None
         for attempt in range(1, attempts + 1):
@@ -2298,7 +2305,7 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
                         f"บัญชี ChatGPT ({alias}) ใช้ไม่ได้ (401 ต้องล็อกอินใหม่) — "
                         "กด Use บัญชีที่ใช้ได้ใน Bridge แล้วกด ▶ ทำต่อ เรื่องจะย้ายไปบัญชีนั้นเอง "
                         "(หรือล็อกอินบัญชีนี้ใหม่ถ้าอยากใช้ประวัติเดิม)") from exc
-                log(f"❌ {label} ครั้งที่ {attempt}: {str(exc)[:200]}")
+                log(f"❌ {label} ครั้งที่ {attempt}: {error_cause(exc)[:240]}")
                 if "GPT said:" in str(exc) or "safety policy" in text:
                     # GPT refused this prompt: asking the same thing again only burns time.
                     raise
@@ -2844,11 +2851,16 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
                      "characters": sc.get("characters") or [], "location": sc.get("location", "")}
                     for i, sc in enumerate(scenes[b:b + batch_size], start=b)]
             before = scenes[b - 1].get("prompt", "")[:200] if b else ""
-            try:
-                reply = parse_json_reply(gpt_text(cinematographer_request(rows, before, era,
-                                                                          project.get("style_mode") == "เรื่องผี")))
-            except Exception as exc:
-                log(f"ผู้กำกับภาพปรับฉาก {b + 1}-{b + len(rows)} ไม่ได้ ({str(exc)[:100]}) — ใช้แผนเดิม")
+            request = cinematographer_request(rows, before, era, project.get("style_mode") == "เรื่องผี")
+            reply = None
+            for attempt in (1, 2):
+                try:
+                    reply = parse_json_reply(gpt_text(request))
+                    break
+                except Exception as exc:
+                    log(f"ผู้กำกับภาพปรับฉาก {b + 1}-{b + len(rows)} ครั้งที่ {attempt} ไม่ได้: {error_cause(exc)[:240]}")
+            if reply is None:
+                log(f"ผู้กำกับภาพข้ามฉาก {b + 1}-{b + len(rows)} — ใช้แผนเดิม")
                 continue
             for item in reply.get("scenes") or []:
                 try:

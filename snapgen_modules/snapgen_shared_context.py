@@ -90,6 +90,38 @@ def load(story_path, suffix=SUFFIX) -> dict | None:
     return payload
 
 
+def find(story_path, suffix=SUFFIX) -> dict | None:
+    """The team Context for this story even when the story file was opened from another copy.
+
+    Next to the file and a Context with the same story name in the usual places
+    (Downloads, Desktop, Documents, OneDrive, shared drives D-H). The oldest one wins: pictures
+    were made with it, and a later re-analysis must not rename the characters."""
+    if not story_path:
+        return None
+    own = load(story_path, suffix)
+    name = Path(str(story_path)).stem + suffix
+    home = Path.home()
+    roots = [home / "Downloads", home / "Desktop", home / "Documents", home / "OneDrive"]
+    roots += [Path(f"{d}:/") for d in "DEFGH" if Path(f"{d}:/").exists()]
+    candidates = []
+    for root in roots:
+        if not root.is_dir():
+            continue
+        for depth in ("", "*/", "*/*/", "*/*/*/"):
+            try:
+                candidates += [p for p in root.glob(depth + name) if p.is_file()]
+            except OSError:
+                continue
+    payloads = [own] if own else []
+    for path in dict.fromkeys(candidates):
+        payload = load(path.with_name(path.name[: -len(suffix)] + ".docx"), suffix)
+        if payload:
+            payloads.append(payload)
+    if not payloads:
+        return None
+    return min(payloads, key=lambda p: str(p.get("saved_at") or "9999"))
+
+
 def matches_story(payload, story_text) -> bool:
     """False only when both hashes are known and differ (story was edited)."""
     expected = str((payload or {}).get("story_sha256") or "")

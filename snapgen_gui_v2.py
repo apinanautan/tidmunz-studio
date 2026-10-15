@@ -7194,9 +7194,9 @@ def _export_shared_context(master):
     story = _selected_story_original_path()
     if not story:
         return
-    existing = _shared_context.load(story)
-    if existing and _shared_context.same_context(existing["context"], master):
-        return  # unchanged: avoid rewriting the shared drive file
+    existing = _shared_context.find(story)
+    if existing:
+        return  # a team Context already exists for this story: never replace it (pictures use its names)
     error = _shared_context.save(story, master, _selected_story_text())
     if error:
         print(f"[SnapGen] shared context not saved: {error}")
@@ -7213,7 +7213,7 @@ if callable(_write_context_master_local):
 def _shared_context_payload(require_story_match=False):
     if _shared_context is None:
         return None
-    payload = _shared_context.load(_selected_story_original_path())
+    payload = _shared_context.find(_selected_story_original_path())
     if payload and require_story_match and not _shared_context.matches_story(payload, _selected_story_text()):
         return None
     return payload

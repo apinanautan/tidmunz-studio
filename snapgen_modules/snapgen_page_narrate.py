@@ -2350,7 +2350,7 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
         try:
             import snapgen_shared_context
             if not project.pop("force_new_context", False):  # "ทำใหม่ตั้งแต่วิเคราะห์บท" asks GPT again
-                shared = snapgen_shared_context.load(project["script"])
+                shared = snapgen_shared_context.find(project["script"])
         except Exception:
             pass
         if shared:
@@ -2414,8 +2414,10 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
                 log(f"จัดรูปแบบ Context ไม่ได้ ใช้ตามที่ GPT ตอบ: {exc}")
             try:
                 import snapgen_shared_context
-                snapgen_shared_context.save(project["script"], context, script)
-                log("บันทึก Context ไว้ข้างไฟล์บทแล้ว — หน้า Prompt-Ref และคนในทีมใช้ต่อได้")
+                # Never replace a team Context (pictures may already use its names).
+                if snapgen_shared_context.find(project["script"]) is None:
+                    snapgen_shared_context.save(project["script"], context, script)
+                    log("บันทึก Context ไว้ข้างไฟล์บทแล้ว — หน้า Prompt-Ref และคนในทีมใช้ต่อได้")
             except Exception:
                 pass
         (folder / "context.json").write_text(json.dumps(context, ensure_ascii=False, indent=2), encoding="utf-8")

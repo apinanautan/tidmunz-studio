@@ -68,7 +68,12 @@ def open_program_chrome(url: str = "https://chatgpt.com/") -> bool:
     profile = program_chrome_profile()
     profile.mkdir(parents=True, exist_ok=True)
     import subprocess
-    subprocess.Popen([chrome, f"--user-data-dir={profile}", "--profile-directory=Default", "--new-window", url],
+    # A minimized or covered Chrome window normally pauses its tabs: ChatGPT then never finishes loading
+    # (no composer) and pictures crawl. These switches keep the program's window working in the background.
+    keep_working = ["--disable-backgrounding-occluded-windows", "--disable-renderer-backgrounding",
+                    "--disable-background-timer-throttling"]
+    subprocess.Popen([chrome, f"--user-data-dir={profile}", "--profile-directory=Default", *keep_working,
+                      "--new-window", url],
                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, close_fds=True)
     return True
 

@@ -1792,7 +1792,7 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
                 state["project"]["film"] = bool(film_var.get())
                 state["project"].get("done", {}).pop("video", None)  # the next video uses the new choice
                 save_project()
-        tk.Checkbutton(options, text="ฟิลเตอร์ฟิล์มเก่า (เรื่องผี)", variable=film_var,
+        tk.Checkbutton(options, text="ฟิลเตอร์ฟิล์มเก่า", variable=film_var,
                        command=film_changed, bg=bg).pack(side="left", padx=(0, 14))
     tk.Checkbutton(options, text="ใส่ซับไตเติล", variable=subtitle_var, bg=bg).pack(side="left", padx=(0, 10))
     tk.Checkbutton(options, text="หยุดให้ตรวจแผนก่อนสร้างรูป", variable=review_var, bg=bg).pack(side="left")
@@ -1958,7 +1958,7 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
         subtitle_var.set(bool(project.get("subtitles", subtitle_var.get())))
         if video_mode:
             economy_var.set(bool(project.get("economy", True)))
-        film_var.set(bool(project.get("film", True)))
+        film_var.set(bool(project.get("film", STYLES.get(project.get("style_mode") or "ปกติ", {}).get("film", False))))
         style_var.set(project.get("style_mode") if project.get("style_mode") in STYLES else last_style())
         save_project()
         refresh_all()
@@ -3338,7 +3338,8 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
             else:
                 style = STYLES.get(project.get("style_mode") or "ปกติ", STYLES["ปกติ"])
                 motion = "still" if style["still"] else scene.get("motion", "zoom_in")
-                film_on = bool(style.get("film") and project.get("film", True))
+                # The checkbox decides, whatever the style; a story never set uses its style's default.
+                film_on = bool(project.get("film", style.get("film", False)))
                 if style.get("zoom_only"):
                     motion = ("zoom_in", "zoom_out")[i % 2]  # in, out, in, out … at the same slow speed
                 run(["-i", scene["image"], "-vf", zoompan_filter(motion, frames, width, height,
@@ -4317,6 +4318,8 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
             if not has_words and script_dialogues(story_script()):
                 project["done"].pop("transcribe", None)
         project["image_count"] = wanted
+        if not video_mode:
+            project["film"] = bool(film_var.get())  # what the checkbox shows is what the video gets
         project.update({"aspect": aspect,
                         "subtitles": bool(subtitle_var.get()),
                         "style_mode": style_var.get() if style_var.get() in STYLES else "ปกติ"})

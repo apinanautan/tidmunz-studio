@@ -60,6 +60,11 @@ def chrome_exe() -> str | None:
     return shutil.which("chrome")
 
 
+# Set by the ChatGPT page of the main window: it pulls the program's Chrome inside itself, so the window
+# starts out of sight instead of popping up as a second browser.
+INSIDE_PROGRAM = False
+
+
 def open_program_chrome(url: str = "https://chatgpt.com/") -> bool:
     """Open (or bring forward) Tidmunz's own Chrome window."""
     chrome = chrome_exe()
@@ -72,8 +77,9 @@ def open_program_chrome(url: str = "https://chatgpt.com/") -> bool:
     # (no composer) and pictures crawl. These switches keep the program's window working in the background.
     keep_working = ["--disable-backgrounding-occluded-windows", "--disable-renderer-backgrounding",
                     "--disable-background-timer-throttling"]
+    out_of_sight = ["--window-position=-20000,-20000"] if INSIDE_PROGRAM else []
     subprocess.Popen([chrome, f"--user-data-dir={profile}", "--profile-directory=Default", *keep_working,
-                      "--new-window", url],
+                      *out_of_sight, "--new-window", url],
                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, close_fds=True)
     return True
 

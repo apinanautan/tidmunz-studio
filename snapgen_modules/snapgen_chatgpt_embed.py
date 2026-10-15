@@ -2,9 +2,9 @@
 """Show the program's own Chrome (ChatGPT) inside a Tidmunz window.
 
 The Chrome window that runs the "Tidmunz ChatGPT" extension is re-parented into a
-Tk frame, so the user does not need a separate browser window and cannot minimize
-it by accident. Closing the Tidmunz window hands the Chrome window back to the
-desktop unchanged; Chrome itself keeps running.
+page of the main window (the 🌐 ChatGPT button), so there is no separate browser
+window to minimize by accident. When Tidmunz closes, the Chrome window goes back
+to the desktop unchanged; Chrome itself keeps running.
 """
 from __future__ import annotations
 
@@ -142,58 +142,121 @@ class EmbeddedChrome:
         user32.SetWindowPos(hwnd, None, 80, 60, 1200, 820, SWP_NOZORDER | SWP_FRAMECHANGED)
         user32.ShowWindow(hwnd, SW_SHOW)
 
+class ChatGPTPage:
+    """A page of the main window (below the top bar) that holds the program's Chrome.
 
-_open_window = [None]
+    Hidden means moved out of sight, not unmapped: Chrome stays a visible window, so ChatGPT keeps
+    working in the background exactly as when the page is shown.
+    """
 
+    def __init__(self, root: tk.Misc, top_bar: tk.Widget | None, log=print) -> None:
+        self.root = root
+        self.top_bar = top_bar
+        self.log = log
+        self.shown = False
+        self.page = tk.Frame(root, bg="#111827")
+        self.note = tk.Label(self.page, text="กำลังหา Chrome ของโปรแกรม…", bg="#111827", fg="#E5E7EB",
+                             font=("Segoe UI", 11))
+        self.host = tk.Frame(self.page, bg="#111827")
+        self.host.pack(fill="both", expand=True)
+        self.embed = EmbeddedChrome(self.host)
+        self.host.bind("<Configure>", self.embed.fit)
+        # Tk tells the frame before its own window goes away: Chrome must leave first or it is destroyed too.
+        self.host.bind("<Destroy>", lambda e: self.embed.release())
+        root.bind("<Configure>", lambda e: self.layout() if e.widget is root else None, add="+")
+        self.pids: set[int] = set()
+        self.pids_at = 0.0
+        self.searching = False
+        self.opened = False
+        self.layout()
+        relay.INSIDE_PROGRAM = True
+        root.after(1000, self.watch)
 
-def open_window(root: tk.Misc, log=print) -> None:
-    """Open (or bring forward) the Tidmunz window that holds the program's Chrome."""
-    win = _open_window[0]
-    if win is not None and win.winfo_exists():
-        win.deiconify()
-        win.lift()
-        return
-    win = tk.Toplevel(root)
-    _open_window[0] = win
-    win.title("ChatGPT — Chrome ของโปรแกรม")
-    win.geometry("1280x860")
-    win.configure(bg="#111827")
-    note = tk.Label(win, text="กำลังเปิด Chrome ของโปรแกรม…", bg="#111827", fg="#E5E7EB", font=("Segoe UI", 11))
-    note.pack(side="top", fill="x", pady=2)
-    host = tk.Frame(win, bg="#111827")
-    host.pack(fill="both", expand=True)
-    embed = EmbeddedChrome(host)
-    host.bind("<Configure>", embed.fit)
+    def top(self) -> int:
+        try:
+            bar = self.top_bar
+            return max(0, bar.winfo_rooty() + bar.winfo_height() - self.root.winfo_rooty()) if bar else 0
+        except tk.TclError:
+            return 0
 
-    def closing():
-        embed.release()
-        _open_window[0] = None
-        win.destroy()
+    def layout(self) -> None:
+        y = self.top()
+        x = 0 if self.shown else -(self.root.winfo_width() + 200)
+        self.page.place(in_=self.root, x=x, y=y, relwidth=1, relheight=1, height=-y)
+        if self.shown:
+            self.page.lift()
 
-    win.protocol("WM_DELETE_WINDOW", closing)
-    # Tk tells the frame before its own window goes away: Chrome must leave first or it is destroyed too.
-    host.bind("<Destroy>", lambda e: embed.release())
+    def show(self) -> None:
+        self.shown = True
+        self.layout()
+        if not self.attached():
+            self.note.pack(side="top", fill="x", before=self.host)
+            self.opened = True  # the user asked for it: open the program's Chrome when it is closed
+            self.search()
 
-    def attach_when_found(hwnd):
-        if not win.winfo_exists():
+    def hide(self, _event=None) -> None:
+        if self.shown:
+            self.shown = False
+            self.layout()
+
+    def toggle(self) -> None:
+        self.hide() if self.shown else self.show()
+
+    def attached(self) -> bool:
+        hwnd = self.embed.hwnd
+        return bool(hwnd and user32.IsWindow(hwnd) and user32.GetParent(hwnd) == self.host.winfo_id())
+
+    def watch(self) -> None:
+        """Keep the program's Chrome inside this page, also when it was opened (again) by a job."""
+        try:
+            if not self.attached():
+                self.embed.hwnd = None
+                self.search()
+        finally:
+            self.root.after(2000, self.watch)
+
+    def search(self) -> None:
+        if self.searching:
             return
+        self.searching = True
+        want_open, self.opened = self.opened, False
+
+        def work():
+            hwnd = None
+            try:
+                if time.time() - self.pids_at > (20 if self.pids else 8):
+                    self.pids, self.pids_at = program_chrome_pids(), time.time()
+                windows = chrome_windows(self.pids) if self.pids else []
+                if windows:
+                    hwnd = windows[0]
+                elif want_open:
+                    hwnd = find_or_open()
+                    self.pids_at = 0.0
+            finally:
+                self.searching = False
+            try:
+                self.root.after(0, lambda: self.attach(hwnd, want_open))
+            except Exception:
+                pass
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def attach(self, hwnd, asked: bool) -> None:
         if not hwnd:
-            note.config(text="หา Chrome ของโปรแกรมไม่พบ — กด 🧩 ส่วนขยาย ChatGPT ใน ⚙ เพื่อตรวจการติดตั้ง", fg="#FCA5A5")
+            if asked:
+                self.note.config(text="หา Chrome ของโปรแกรมไม่พบ — กด ⚙ › 🧩 ส่วนขยาย ChatGPT เพื่อตรวจการติดตั้ง",
+                                 fg="#FCA5A5")
+            return
+        if self.attached():
             return
         try:
-            win.update_idletasks()
-            embed.attach(hwnd)
-            note.config(text="Chrome ของโปรแกรม (ส่วนขยาย Tidmunz ChatGPT ทำงานในนี้) — ปิดหน้าต่างนี้ Chrome จะแยกออกไปเป็นหน้าต่างปกติ",
-                        fg="#9CA3AF", font=("Segoe UI", 9))
+            self.root.update_idletasks()
+            self.embed.attach(hwnd)
+            self.note.pack_forget()
         except Exception as error:
-            note.config(text=f"ฝัง Chrome ไม่สำเร็จ: {error}", fg="#FCA5A5")
-            log(f"[ChatGPT embed] {error}")
+            self.note.config(text=f"ฝัง Chrome ไม่สำเร็จ: {error}", fg="#FCA5A5")
+            self.log(f"[ChatGPT page] {error}")
 
-    def search():
-        hwnd = find_or_open()
-        try:
-            root.after(0, lambda: attach_when_found(hwnd))
-        except Exception:
-            pass
 
-    threading.Thread(target=search, daemon=True).start()
+def install(root: tk.Misc, top_bar: tk.Widget | None, log=print) -> ChatGPTPage:
+    return ChatGPTPage(root, top_bar, log)

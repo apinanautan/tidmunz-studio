@@ -16144,12 +16144,33 @@ def _install_image_bridge_status():
         root.after(300, _match_mic_to_prompt_ref_height)
 
         if prompt_ref_toolbar_button is not None:
+            chatgpt_page = [None]
+            try:
+                # The program's Chrome lives in this page from the start, out of sight until shown.
+                import snapgen_chatgpt_embed
+                chatgpt_page[0] = snapgen_chatgpt_embed.install(root, mode_frame or mic_parent)
+                g["chatgpt_page"] = chatgpt_page[0]
+            except Exception as _chatgpt_page_error:
+                print(f"[SnapGen] ChatGPT page failed: {_chatgpt_page_error}")
+
             def _open_chatgpt_inside():
-                try:
-                    import snapgen_chatgpt_embed
-                    snapgen_chatgpt_embed.open_window(root)
-                except Exception as error:
-                    g["show_error"]("ChatGPT", str(error))
+                if chatgpt_page[0] is None:
+                    g["show_error"]("ChatGPT", "หน้า ChatGPT ใช้ไม่ได้ในเครื่องนี้")
+                    return
+                chatgpt_page[0].toggle()
+
+            def _hide_chatgpt_on_page_buttons():
+                # Any page tab on the left of the top bar goes back to that page.
+                if chatgpt_page[0] is None or mode_frame is None:
+                    return
+                for tab in mode_frame.winfo_children():
+                    try:
+                        if isinstance(tab, tk.Button) and tab.winfo_manager() == "pack"                                 and tab.pack_info().get("side") == "left":
+                            tab.bind("<Button-1>", chatgpt_page[0].hide, add="+")
+                    except Exception:
+                        pass
+
+            root.after(3000, _hide_chatgpt_on_page_buttons)
 
             chatgpt_button = tk.Button(
                 mic_parent, text="🌐 ChatGPT", command=_open_chatgpt_inside,

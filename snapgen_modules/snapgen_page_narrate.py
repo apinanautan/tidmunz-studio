@@ -2446,6 +2446,57 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
         project["history_seeded"] = True
         save_project()
 
+    def team_context_file():
+        """The shared Context sidecar this story uses (next to the attachments, or found by story name)."""
+        project = state["project"]
+        if project.get("context_file") and os.path.isfile(project["context_file"]):
+            return Path(project["context_file"])
+        import snapgen_shared_context
+        folder = attachment_folder()
+        for place in ([Path(folder), Path(folder).parent] if folder else []):
+            for path in sorted(place.glob("*" + snapgen_shared_context.SUFFIX)):
+                return path
+        found = snapgen_shared_context.find(project["script"])
+        return Path(found["path"]) if found and found.get("path") else None
+
+    def story_time_note() -> str:
+        """Lock this part's time of day to the team's timeline (made once from the whole story)."""
+        import snapgen_story_timeline as timeline_mod
+        project = state["project"]
+        path = team_context_file()
+        try:
+            data = json.loads(path.read_text(encoding="utf-8")) if path else {}
+        except (OSError, ValueError):
+            data = {}
+        shared = data.get("context") if isinstance(data.get("context"), dict) else data
+        full = ""
+        if project.get("full_script"):
+            try:
+                full = read_script(project["full_script"])
+            except Exception:
+                full = ""
+        full = full or story_script()
+        timeline = (shared or {}).get("timeline") or (project.get("context") or {}).get("timeline") or []
+        if not timeline:
+            log("Context ของทีมยังไม่มีเส้นเวลา (กลางวัน/กลางคืนของแต่ละช่วง) — ให้ GPT อ่านทั้งเรื่องแล้วเขียนครั้งเดียว")
+            timeline = timeline_mod.parse(parse_json_reply(with_retries("เส้นเวลาเรื่อง", lambda: gpt_text(timeline_mod.request(full)))))
+            if timeline and path:
+                try:
+                    if timeline_mod.add_to_sidecar(path, timeline):
+                        log(f"บันทึกเส้นเวลาลง Context ของทีมแล้ว ({len(timeline)} ช่วง): {path.name}")
+                    else:  # another PC wrote one first: everyone uses that one
+                        data = json.loads(path.read_text(encoding="utf-8"))
+                        timeline = (data.get("context") or data).get("timeline") or timeline
+                except OSError as exc:
+                    log(f"เขียนเส้นเวลาลง Context ของทีมไม่ได้ ({exc}) — ใช้ในงานนี้อย่างเดียว")
+        if not timeline:
+            return ""
+        project.setdefault("context", {})["timeline"] = timeline
+        rows = timeline_mod.sections_for(timeline, full, story_script())
+        if rows:
+            log("เวลาในเรื่องของท่อนนี้: " + " → ".join(r["time"] for r in rows))
+        return timeline_mod.note(rows)
+
     # ── stages ──
     def stage_context():
         project, folder = state["project"], Path(state["folder"])
@@ -2467,6 +2518,8 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
         if shared:
             context = shared["context"]
             log("ใช้ Context ของเรื่องนี้จากหน้า Prompt-Ref — ไม่วิเคราะห์บทใหม่")
+            if shared.get("path"):
+                project["context_file"] = str(shared["path"])  # the team's file: the timeline is kept there
             if video_mode:
                 # The whole story sits next to the Context (the file it was built from).
                 source = str(shared.get("source_name") or "")
@@ -2819,7 +2872,7 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
         names = [c.get("name") for c in context.get("characters", []) if c.get("name")]
         era = (context.get("story") or {}).get("era") or ""
         if video_mode:
-            # Shots are cut at sentence starts by the program; GPT writes each one.
+            era += story_time_note()  # day / night of this part, the same on every PC of the team
             def ask(prompt):
                 check_stop()
                 return with_retries("วางแผนคลิป", lambda: parse_json_reply(chat(prompt)))

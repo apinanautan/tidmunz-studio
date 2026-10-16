@@ -2377,11 +2377,23 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
                     # GPT refused this prompt: asking the same thing again only burns time.
                     raise
                 if "conversation_not_found" in text or ("conversation" in text and ("not found" in text or "404" in text)):
-                    # One story = one GPT history. Never open a replacement
-                    # chat silently; the user decides with the explicit button.
-                    raise HistoryLost(
-                        "ประวัติ GPT ของเรื่องนี้หายไป (ถูกลบหรือเปลี่ยนบัญชี) — โปรแกรมไม่เปิดประวัติใหม่ให้เอง "
-                        "ถ้าต้องการทำต่อในประวัติใหม่ กดปุ่ม 'เริ่มประวัติ GPT ใหม่'") from exc
+                    # The chat is gone from the account Chrome is logged into (chats deleted, or another
+                    # account). Nothing is lost: the story and Context live in files, so a new chat in the
+                    # current account gets them again and the work goes on (once per run).
+                    if state.get("history_renewed"):
+                        raise HistoryLost(
+                            "ประวัติ GPT ของเรื่องนี้หายไป และเริ่มประวัติใหม่แล้วก็ยังใช้ไม่ได้ — "
+                            "ดูว่า ChatGPT ใน 🌐 ChatGPT ล็อกอินอยู่ แล้วกดเริ่มอีกครั้ง") from exc
+                    state["history_renewed"] = True
+                    project = state["project"]
+                    project["conversation"] = {}
+                    project["image_chat"] = {}
+                    project["history_seeded"] = False
+                    save_project()
+                    log("ประวัติ GPT เดิมของเรื่องนี้ไม่มีในบัญชีที่ล็อกอินอยู่ (ถูกลบหรือเปลี่ยนบัญชี) — "
+                        "เริ่มประวัติใหม่ในบัญชีนี้ ส่งบทและ Context ให้ก่อน แผน รูป และคลิปที่ทำแล้วยังอยู่ครบ")
+                    ensure_story_in_history()
+                    continue
                 time.sleep(3 * attempt)
         raise RuntimeError(f"{label} ไม่สำเร็จ: {last}")
 
@@ -4530,6 +4542,7 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
         project = state["project"]
         if state["busy"]:
             return
+        state["history_renewed"] = False  # a lost chat may be replaced once per run
         if not project or not project.get("script"):
             messagebox.showinfo("เล่าภาพ", "เลือกไฟล์บทก่อน", parent=page)
             return
@@ -4739,6 +4752,7 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
                 parent=page):
             return
         project["conversation"] = {}
+        project["image_chat"] = {}  # the picture chats were in the old account / history too
         project["history_seeded"] = False
         save_project()
         log("เริ่มประวัติ GPT ใหม่แล้ว — กดเริ่มเพื่อทำต่อ (จะส่งบทและ Context เข้าประวัติใหม่ก่อน)")

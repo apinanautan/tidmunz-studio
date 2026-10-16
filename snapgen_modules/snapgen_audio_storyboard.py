@@ -143,13 +143,34 @@ def make(g: dict, source: Path, number: int, audio: Path, title: str, log, redo:
         narration = transcribe(audio, log)
         if not narration:
             raise RuntimeError("ฟังเสียงท่อนนี้ไม่ออก (ไม่มีคำบรรยาย)")
-        if not conversation.get("conversation_id"):
-            log("เริ่มแชตสตอรี่บอร์ดของเรื่องนี้")
-            _chat(g, conversation, _intro(title))
-            _save(source, entry)
         earlier = sorted(int(n) for n in parts if int(n) != number)
+
+        def start_chat(note=""):
+            # A new chat (first part, or the old one is gone from this account): the parts already
+            # planned go in with it, so the next part still continues them.
+            conversation.clear()
+            done = [(n, outputs(source, n)[1]) for n in earlier]
+            plans = "\n\n".join(f"— ท่อน {n} —\n{p.read_text(encoding='utf-8')[:1500]}" for n, p in done if p.is_file())
+            log(note or "เริ่มแชตสตอรี่บอร์ดของเรื่องนี้")
+            _chat(g, conversation, _intro(title) + (
+                "\n\nแผนช็อตของท่อนที่ทำไว้แล้ว (ให้ทำต่อจากนี้):\n" + plans[-9000:] if plans else ""))
+            _save(source, entry)
+
+        def lost(exc) -> bool:
+            text = str(exc).lower()
+            return "conversation_not_found" in text or ("conversation" in text and ("not found" in text or "404" in text))
+
+        if not conversation.get("conversation_id"):
+            start_chat()
         log(f"สตอรี่บอร์ดท่อน {number}: ให้ GPT วางมุมกล้อง…")
-        plan = _chat(g, conversation, _plan_request(number, narration, earlier))
+        try:
+            plan = _chat(g, conversation, _plan_request(number, narration, earlier))
+        except Exception as exc:
+            if not lost(exc):
+                raise
+            start_chat("แชตสตอรี่บอร์ดเดิมไม่มีในบัญชีที่ล็อกอินอยู่ (ถูกลบหรือเปลี่ยนบัญชี) — "
+                       "เริ่มแชตใหม่ในบัญชีนี้ พร้อมแผนของท่อนที่ทำแล้ว")
+            plan = _chat(g, conversation, _plan_request(number, narration, earlier))
         _save(source, entry)
         folder(source).mkdir(parents=True, exist_ok=True)
         plan_path.write_text(f"ท่อน {number}\n\nคำบรรยาย:\n{narration}\n\n{plan}\n", encoding="utf-8")

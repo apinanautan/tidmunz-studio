@@ -1581,7 +1581,17 @@ PROMPT_CHECK = (
     "6) ถ้าช็อตนี้ไม่มีบทพูด (ไม่มีบรรทัด 'บทพูดของ …' ในข้อมูลช็อต) ต้องไม่มีใครพูด คุยกัน เปิดปากพูด หรือตะโกน "
     "(คำอย่าง 'พูดคุย' 'อธิบาย' 'บอก' 'ถาม' ต้องเปลี่ยนเป็นท่าทาง/สีหน้า เช่น 'นั่งฟังกันเงียบๆ'); "
     "7) ถ้า [เปิดภาพ] มีคนหันหลังให้กล้อง เห็นแผ่นหลัง หรือเป็นไหล่ในมุมข้ามไหล่ คำสั่งต้องระบุชื่อคนนั้นว่าคงหันหลังตลอดคลิป "
-    "ห้ามหันหน้ามาทางกล้อง และห้ามมีจังหวะที่ให้คนนั้นหันมา (หน้าจะไม่ตรงกับตัวละคร) — ถ้าไม่มี ถือว่าไม่ผ่านและเพิ่มให้. "
+    "ห้ามหันหน้ามาทางกล้อง และห้ามมีจังหวะที่ให้คนนั้นหันมา (หน้าจะไม่ตรงกับตัวละคร) — ถ้าไม่มี ถือว่าไม่ผ่านและเพิ่มให้; "
+    "8) ปัญหาที่ผู้ใช้เคยแจ้งของช็อตนี้ (ถ้ามีในข้อมูลช็อต) ต้องถูกแก้ชัดเจนในคำสั่ง และต้องไม่เหลือการกระทำหรือการเคลื่อนกล้อง "
+    "ที่ทำให้ปัญหานั้นเกิดซ้ำ — นี่คือข้อสำคัญที่สุด; "
+    "9) ไม่มีคำสั่งขัดกันเอง: [จังหวะ]/[กล้อง] ต้องไม่สั่งสิ่งที่ข้อห้ามห้ามไว้ (เช่น ห้ามเดิน แต่จังหวะให้ก้าวเข้าหาบ้าน "
+    "หรือกล้องตามหลังคนเดิน) — ถ้าขัด ให้ตัดการกระทำนั้นออก; "
+    "10) คนที่ต้องอยู่กับที่ ให้เขียนเชิงบวกว่า 'ยืน/นั่งอยู่ตรงตำแหน่งเดิม เท้าแนบพื้น ขยับแค่ศีรษะ มือ สีหน้า' "
+    "และอย่าเขียนคำกริยาเคลื่อนที่ (เดิน ก้าว เข้าใกล้ เดินไปหา) กับคนนั้นเลยแม้ในรูปปฏิเสธ เพราะ AI วิดีโอทำตามคำที่เห็น; "
+    "11) กล้อง: ใช้กล้องนิ่งหรือเคลื่อนช้ามาก 1 ทิศ ถ้ากล้องดอลลี่เข้าหาคนที่ต้องอยู่กับที่ ให้เปลี่ยนเป็นกล้องนิ่ง "
+    "(ภาพที่ขยายเข้าทำให้ AI สร้างคนเดินเข้าไป); "
+    "12) กระชับ: การกระทำหลักไม่เกิน 1–2 อย่างต่อคลิป video_prompt ไม่เกินประมาณ 900 ตัวอักษร "
+    "ตัดคำซ้ำ คำบรรยายฉากที่ยาวเกิน และข้อห้ามที่ซ้ำกับบรรทัดอื่น. "
     "ถ้าผ่านทุกข้อ ตอบ pass=true. ถ้าไม่ผ่าน ใส่ problems และเขียนใหม่: video_prompt = ส่วนหลักของคำสั่ง "
     "(รูปแบบเดิม [เปิดภาพ] [จังหวะ] [ร่างกาย] [กล้อง] [บรรยากาศ] เฉพาะช็อตนี้), anatomy = ร่างกายของคนในเฟรมนี้สั้นๆ (รูปลักษณ์เท่านั้น), "
     "continuity = สภาพที่มองเห็นบนตัวที่ต้องคงไว้ (ว่างได้). "
@@ -3807,8 +3817,12 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
                 seen = (f"\nภาพเริ่มต้นจริง (บรรยายโดยผู้ที่ดูรูปนี้แล้ว): {scene['seen']}" if scene.get("seen")
                         else "\nภาพเริ่มต้นจริง: ไม่มีคำบรรยายจากผู้ดูรูป — ข้ามข้อ 0 และห้ามลบหรือเปลี่ยนรายละเอียดใน [เปิดภาพ] "
                              "(ทิศที่หันหน้า/หันหลัง ตำแหน่ง สิ่งที่ถือ) เพราะ [เปิดภาพ] เขียนโดยผู้ที่ดูรูปจริงแล้ว")
+                fixes = " / ".join(str(n) for n in scene.get("fix_notes") or [])
+                reported = (f"\nปัญหาที่ผู้ใช้เคยแจ้งของช็อตนี้ (ต้องแก้ให้หาย): {fixes}"
+                            + (f" — ห้ามเด็ดขาด: {scene['fix_forbid']}" if scene.get("fix_forbid") else "")) if fixes else ""
                 reply = gpt_look(PROMPT_CHECK.format(seconds=scene.get("clip_seconds") or "",
-                                                     anchor=story_anchor(index) + seen, request=clip_prompt(scene)))
+                                                     anchor=story_anchor(index) + seen + reported,
+                                                     request=clip_prompt(scene)))
             except (Stopped, HistoryLost, RateLimited):
                 raise
             except Exception as exc:
@@ -3898,10 +3912,8 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
         scene["clip_cuts"] = cuts
         verdict, reason, until = ("trim", f"ตัดฉากเองที่วินาที {cuts[0]:g}", cuts[0] - 0.15) if cuts else ("pass", "", None)
         try:
-            if state.get("upload_quota_out"):
-                raise LookupError  # no ChatGPT upload quota left: the local check decides
-            # GPT looks at every clip (one upload each), not only those with a detected jump: walking,
-            # changed faces and broken bodies happen inside one continuous shot too.
+            if not cuts or state.get("upload_quota_out"):
+                raise LookupError  # one continuous shot (or no upload quota left): the local check decides
             url, step = frames_sheet_url(clip, length, scene.get("image"))
             speech = (f"มีบทพูด: {scene['dialogue']} พูดว่า “{scene.get('line', '')}” ปากขยับตรงกับคำพูด คนอื่นไม่พูด"
                       if scene.get("dialogue") else "ช็อตนี้ไม่มีบทพูด ทุกคนต้องปิดปาก ไม่ขยับปากพูดหรือตะโกน")

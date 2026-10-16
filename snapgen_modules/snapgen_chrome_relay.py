@@ -122,6 +122,8 @@ class _Relay:
         self.last_seen = time.time()
         if result.get("images"):
             count_pictures(self.email, self.reset, len(result["images"]))
+        if result.get("error"):  # the whole message, in the program's log (pages may shorten what they show)
+            print(f"[Chrome] งาน ChatGPT ไม่สำเร็จ: {str(result['error'])[:600]}", flush=True)
         slot = self.waiting.get(str(result.get("id") or ""))
         if slot:
             slot["result"] = result

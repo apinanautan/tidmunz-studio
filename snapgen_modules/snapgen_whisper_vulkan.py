@@ -142,6 +142,19 @@ def _words(segment):
     return words
 
 
+def on_segment_time(words, start, end):
+    """Word times on the audio's own clock.
+
+    With --vad, whisper.cpp maps segment times back to the audio but leaves token times on the
+    speech-only clock, so they fall earlier by every silence cut before them. Shift the words so
+    the first one starts with its segment, and keep them inside it.
+    """
+    if not words or words[0][0] >= start - 0.3:
+        return words
+    shift = start - words[0][0]
+    return [[round(min(end, a + shift), 2), round(min(end, b + shift), 2), text] for a, b, text in words]
+
+
 def transcribe(audio, initial_prompt="", words=False, log=print):
     """Return faster-whisper-shaped segments [{start, end, text, words}]."""
     exe, model, vad = ensure(log)
@@ -182,7 +195,8 @@ def transcribe(audio, initial_prompt="", words=False, log=print):
                 "start": offsets.get("from", 0) / 1000,
                 "end": offsets.get("to", 0) / 1000,
                 "text": text,
-                "words": _words(segment) if words else [],
+                "words": on_segment_time(_words(segment), offsets.get("from", 0) / 1000,
+                                         offsets.get("to", 0) / 1000) if words else [],
             })
         return segments
     finally:

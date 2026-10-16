@@ -573,6 +573,14 @@ def correct_with_script(segments: list, script: str) -> list:
         size = len(heard)
         window = text[cursor:cursor + size * 3 + 120]
         blocks = [b for b in SequenceMatcher(None, heard, window, autojunk=False).get_matching_blocks() if b.size >= 2]
+        # Two-letter pieces ("ก็", "จ่") match anywhere in the window: the passage may only be a little longer
+        # than what was heard, or it swallows the next sentences (their words then get this sentence's time,
+        # and every cut after it comes early).
+        anchors = [b for b in blocks if b.size >= 3] or blocks
+        if anchors:
+            first = anchors[0].b
+            reach = first + int(size * 1.3) + 15
+            blocks = [b for b in blocks if b.b >= first and b.b + b.size <= reach]
         matched = sum(b.size for b in blocks)
         if blocks and size and matched / size >= 0.6:
             start, end = blocks[0].b, blocks[-1].b + blocks[-1].size
@@ -601,6 +609,20 @@ def correct_with_script(segments: list, script: str) -> list:
                 continue
         fixed.append(dict(seg))
     return fixed
+
+
+def repair_transcript(segments: list, script: str) -> tuple[list, bool]:
+    """Transcripts corrected before the length limit: a sentence may hold the next sentences' script text
+    (shots then come early and repeat). Match again from what Whisper really heard (its word pieces)."""
+    def letters(text):
+        return len(_NOT_MATCHED.sub("", str(text or "")))
+
+    heard = ["".join(str(w[2]) for w in s.get("words") or [] if len(w) >= 3) for s in segments]
+    swollen = any(h and letters(s["text"]) > letters(h) * 1.6 + 10 for s, h in zip(segments, heard))
+    if not swollen or not all(heard) or not script:
+        return segments, False
+    raw = [dict(s, text=h) for s, h in zip(segments, heard)]
+    return correct_with_script(raw, script), True
 
 
 def limit_scenes(scenes: list, target: int, duration: float) -> list:
@@ -978,6 +1000,10 @@ def _char_time(seg: dict, k: int, n: int) -> float:
     """Time of character k of n in a sentence: from Whisper word times when kept, else even spread."""
     start, end = float(seg["start"]), float(seg["end"])
     words = [w for w in seg.get("words") or [] if len(w) >= 3 and _NOT_MATCHED.sub("", str(w[2]))]
+    if words and float(words[0][0]) < start - 0.3:
+        # Transcripts from the GPU (whisper.cpp) route before the fix: word times on the speech-only clock.
+        import snapgen_whisper_vulkan
+        words = snapgen_whisper_vulkan.on_segment_time(words, start, end)
     if words:
         sizes = [len(_NOT_MATCHED.sub("", str(w[2]))) for w in words]
         target = k / max(1, n) * sum(sizes)
@@ -2742,6 +2768,10 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
         check_script_matches_audio()
         ensure_story_in_history()
         segments = json.loads((folder / "transcript.json").read_text(encoding="utf-8"))
+        segments, repaired = repair_transcript(segments, story_script())
+        if repaired:
+            (folder / "transcript.json").write_text(json.dumps(segments, ensure_ascii=False, indent=2), encoding="utf-8")
+            log("ข้อความถอดเสียงเดิมยาวเกินเสียงจริง (ช็อตจะมาก่อนเสียง) — จับคู่กับบทใหม่แล้ว")
         context = project.get("context") or {}
         names = [c.get("name") for c in context.get("characters", []) if c.get("name")]
         era = (context.get("story") or {}).get("era") or ""

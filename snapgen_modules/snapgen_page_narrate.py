@@ -307,6 +307,23 @@ def merge_forbid(*lists) -> str:
     return ", ".join(dict.fromkeys(w for w in words if w))
 
 
+# Body faults GPT repeats for every person ("แขนที่สามบนตัวทัด", "นิ้วเกินบนมือย้อย" ...): one general line
+# of VIDEO_NEGATIVE already says it for everyone.
+BODY_BOILERPLATE = re.compile(
+    r"(แขน|ขา|มือ|เท้า|นิ้ว|ศีรษะ|หัว|ใบหน้า|ดวงตา|ตา|ฟัน|คอ|ไหล่|ข้อมือ|ลำตัว|ร่าง)(ที่สาม|เกิน|ขาด|ซ้อน|เพิ่ม|ใหม่บน|แยก|บิด|ยืด|ทะลุ|งอก|หลุด|ลอย|จม|เบี้ยว|ผิด)")
+FORBID_KEEP = 18  # a video model follows a short list; a long one is mostly ignored
+
+
+def compact_forbid(shot_items: str, *general: str, keep: int = FORBID_KEEP) -> str:
+    """The negative list a clip request really carries: this shot's own points first (staying in place,
+    speaking and facing first of all), at most ``keep`` of them, then the short general lists."""
+    items = list(dict.fromkeys(w.strip() for w in str(shot_items or "").split(",") if w.strip()))
+    items = [w for w in items if not BODY_BOILERPLATE.search(w)]
+    urgent = [w for w in items if any(k in w for k in STAY_WORDS + ("พูด", "ปาก", "หันหน้า", "หันกลับ", "ตัวละครใหม่"))]
+    chosen = list(dict.fromkeys(urgent + items))[:keep]
+    return merge_forbid(", ".join(chosen), *general)
+
+
 GHOST_HINT = re.compile(r"ผี|วิญญาณ|ปีศาจ|อมนุษย์|กระสือ|กระหัง|ปอบ|เปรต|พราย|โพง|ตานี|ตะเคียน|ซอมบี้|ยักษ์")
 
 
@@ -3741,7 +3758,7 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
         silent = "" if scene.get("dialogue") else NO_TALK_NEGATIVE
         turned = "คนที่หันหลังหันหน้ามาทางกล้อง" if any(word in opening for word in BACK_TURNED_WORDS) else ""
         prompt += ("\nNegative — ห้ามปรากฏเด็ดขาดตลอดทั้งคลิป: "
-                   f"{merge_forbid(scene.get('forbid'), body_forbid, silent, turned, VIDEO_NEGATIVE)}")
+                   f"{compact_forbid(scene.get('forbid'), body_forbid, silent, turned, VIDEO_NEGATIVE)}")
         return prompt
 
     def gpt_look(text: str, images=()) -> dict:

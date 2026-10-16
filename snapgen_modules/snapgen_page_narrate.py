@@ -3731,12 +3731,14 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
         # Speech is stated at the top of every request, both ways: video models weigh the opening lines most.
         speech = (f"[บทพูด] มีบทพูด: {scene['dialogue']} พูดว่า “{scene.get('line', '')}” ขยับปากพูดด้วยความเร็วปกติ "
                   "คนอื่นในเฟรมไม่พูด" if scene.get("dialogue") else f"[บทพูด] {NO_TALK_LINE}")
-        # "ห้ามเดิน" deep in a long negative list is not followed (and naming the walk invites it):
-        # whoever must not leave their spot is told, positively and first, to stay standing in place.
+        # The user's 🛠 fix of this shot ("it walked into the house by itself") is its own section, read first:
+        # never mixed into the shot's main forbidden list. Whoever the fix keeps from leaving their spot is
+        # told positively to stay in place (naming the walk only invites it).
+        fix_forbid = str(scene.get("fix_forbid") or "")
         names = [str(c) for c in scene.get("characters") or []]
         planned = " ".join(str(scene.get(k) or "") for k in ("prompt", "video_prompt_planned"))
         rooted = [n for n in names if any(n in item and any(w in item for w in STAY_WORDS)
-                                          for item in str(scene.get("forbid") or "").split(","))
+                                          for item in fix_forbid.split(","))
                   and not any(f"{n}{gap}{w}" in planned for gap in ("", " ") for w in ("เดิน", "ก้าว", "วิ่ง"))]
         if rooted:
             who = ", ".join(rooted)
@@ -3744,6 +3746,10 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
                       "ขยับได้แค่ศีรษะ มือ ลมหายใจ และสีหน้า "
                       f"({who}: stays planted on the same spot for the whole clip, both feet fixed on the ground; "
                       "only head, hands, breathing and face move)\n" + prompt)
+        if fix_forbid:
+            notes = " / ".join(str(n) for n in (scene.get("fix_notes") or [])[-3:])
+            prompt = ("[แก้ปัญหาของช็อตนี้] " + (f"คลิปก่อนหน้ามีปัญหา: {notes} — " if notes else "")
+                      + f"ครั้งนี้ห้ามเด็ดขาด: {fix_forbid}\n" + prompt)
         prompt = ONE_SHOT_RULE + "\n" + speech + "\n" + prompt
         prompt += "\nไม่มีตัวหนังสือในภาพ ตัวละครหน้าตาเหมือนในภาพเริ่มต้นตลอดคลิป"
         opening = str(scene.get("video_prompt") or scene.get("prompt") or "")
@@ -3757,8 +3763,8 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
         # Negative prompt: this shot's (GPT + 🛠 problems seen) + each body's + what AI video always breaks.
         silent = "" if scene.get("dialogue") else NO_TALK_NEGATIVE
         turned = "คนที่หันหลังหันหน้ามาทางกล้อง" if any(word in opening for word in BACK_TURNED_WORDS) else ""
-        prompt += ("\nNegative — ห้ามปรากฏเด็ดขาดตลอดทั้งคลิป: "
-                   f"{compact_forbid(scene.get('forbid'), body_forbid, silent, turned, VIDEO_NEGATIVE)}")
+        main = compact_forbid(scene.get("forbid"), body_forbid, silent, turned, VIDEO_NEGATIVE)
+        prompt += "\nNegative — ห้ามปรากฏเด็ดขาดตลอดทั้งคลิป: " + merge_forbid(fix_forbid, main)
         return prompt
 
     def gpt_look(text: str, images=()) -> dict:
@@ -4757,11 +4763,10 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
                         scene["video_prompt"] = str(reply["video_prompt"]).strip()
                     scene.setdefault("fix_notes", []).append(problem)
                     forbid = merge_forbid(reply.get("negative"), reply.get("forbid"))
-                    if forbid:  # repeated at the end of every clip request of this shot
-                        scene["forbid"] = ", ".join(dict.fromkeys(
-                            [w.strip() for w in (scene.get("forbid", "") + "," + forbid).split(",") if w.strip()]))
+                    if forbid:  # the fix's own bans: kept apart and sent first, not lost in the shot's main list
+                        scene["fix_forbid"] = merge_forbid(scene.get("fix_forbid"), forbid)
                     log(f"🛠 ช็อต {i + 1}: {reply.get('change') or 'เขียน prompt ใหม่แล้ว'}"
-                        + (f" · ห้ามเด็ดขาด: {scene['forbid']}" if scene.get("forbid") else ""))
+                        + (f" · ห้ามเด็ดขาด (แก้ปัญหา): {scene['fix_forbid']}" if scene.get("fix_forbid") else ""))
                     if not video_mode:
                         redraw.append(i)  # เล่าภาพ: the picture is the result
                     save_project()

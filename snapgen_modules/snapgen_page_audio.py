@@ -39,6 +39,8 @@ def install(g: dict, root: tk.Misc) -> tk.Frame:
     busy = [False]
     quick_buttons = {}
     history_buttons = {}
+    storyboard_buttons = {}
+    storyboard_busy = set()
     waveform = {
         "samples": [], "duration": 0.0, "start": 0.0, "end": 0.0,
         "drag": None, "items": {}, "playing": False, "play_token": 0,
@@ -242,6 +244,22 @@ def install(g: dict, root: tk.Misc) -> tk.Frame:
                 activebackground="#C7E3FA" if finished else "#E2E8F0",
                 fg="#1E5F8A" if finished else "#334155",
                 activeforeground="#1E5F8A" if finished else "#334155",
+            )
+        try:
+            import snapgen_audio_storyboard
+            boarded = snapgen_audio_storyboard.done_parts(source) if source.is_file() else set()
+        except Exception:
+            boarded = set()
+        for number, button in storyboard_buttons.items():
+            row = saved_ranges.get(str(number))
+            available = isinstance(row, dict) and Path(str(row.get("file") or "")).is_file()
+            made = number in boarded
+            button.config(
+                state="normal" if available or made else "disabled",
+                bg="#DCFCE7" if made else ("#DCEEFF" if available else "#F1F5F9"),
+                activebackground="#BBF7D0" if made else "#C7E3FA",
+                fg="#166534" if made else ("#1E5F8A" if available else "#94A3B8"),
+                disabledforeground="#94A3B8",
             )
         for number, button in history_buttons.items():
             available = str(number) in saved_ranges
@@ -1232,21 +1250,86 @@ def install(g: dict, root: tk.Misc) -> tk.Frame:
     quick_content.pack(fill="both", expand=True)
     quick_box = tk.Frame(quick_content, bg="#FFFFFF")
     history_box = tk.Frame(quick_content, bg="#FFFFFF")
+    storyboard_box = tk.Frame(quick_content, bg="#FFFFFF")
     quick_box.grid(row=0, column=0, sticky="nsew")
     history_box.grid(row=0, column=0, sticky="nsew")
+    storyboard_box.grid(row=0, column=0, sticky="nsew")
     quick_content.grid_rowconfigure(0, weight=1)
     quick_content.grid_columnconfigure(0, weight=1)
 
     def show_quick_page(page_name):
-        if page_name == "save":
-            quick_box.tkraise()
-            save_tab.config(bg="#DCEEFF", fg="#1E5F8A")
-            history_tab.config(bg="#F1F5F9", fg="#64748B")
-        else:
-            history_box.tkraise()
-            history_tab.config(bg="#DCEEFF", fg="#1E5F8A")
-            save_tab.config(bg="#F1F5F9", fg="#64748B")
+        pages = {"save": (quick_box, save_tab), "history": (history_box, history_tab),
+                 "storyboard": (storyboard_box, storyboard_tab)}
+        for name, (frame, tab) in pages.items():
+            if name == page_name:
+                frame.tkraise()
+                tab.config(bg="#DCEEFF", fg="#1E5F8A")
+            else:
+                tab.config(bg="#F1F5F9", fg="#64748B")
         refresh_quick_buttons()
+
+    def show_storyboard(number, plan, image_path):
+        """The part's storyboard sheet and shot plan, with a button to make it again."""
+        window = tk.Toplevel(root)
+        window.title(f"สตอรี่บอร์ด ท่อน {number} — {story_title_var.get()}")
+        window.geometry("1100x820")
+        window.configure(bg="#FFFFFF")
+        top = tk.Frame(window, bg="#FFFFFF")
+        top.pack(fill="x", padx=8, pady=6)
+        tk.Button(top, text="เปิดรูปเต็ม", command=lambda: os.startfile(str(image_path)),
+                  bg="#2563EB", fg="white", relief="flat", padx=12, pady=4).pack(side="left")
+        tk.Button(top, text="เปิดโฟลเดอร์", command=lambda: os.startfile(str(Path(image_path).parent)),
+                  bg="#D97706", fg="white", relief="flat", padx=12, pady=4).pack(side="left", padx=6)
+        tk.Button(top, text="ทำท่อนนี้ใหม่", command=lambda: (window.destroy(), make_storyboard(number, redo=True)),
+                  bg="#64748B", fg="white", relief="flat", padx=12, pady=4).pack(side="right")
+        try:
+            from PIL import Image, ImageTk
+            picture = Image.open(image_path)
+            picture.thumbnail((1080, 480))
+            photo = ImageTk.PhotoImage(picture)
+            label_image = tk.Label(window, image=photo, bg="#FFFFFF")
+            label_image.image = photo
+            label_image.pack(padx=8)
+        except Exception as exc:
+            tk.Label(window, text=f"เปิดรูปไม่ได้: {exc}", bg="#FFFFFF", fg="#DC2626").pack()
+        text = tk.Text(window, wrap="word", font=(SNAPGEN_UI_FONT, 10), bg="#F8FAFC", relief="flat")
+        text.pack(fill="both", expand=True, padx=8, pady=8)
+        text.insert("1.0", plan)
+
+    def make_storyboard(number, redo=False):
+        source = Path(source_var.get().strip())
+        row = load_saved_ranges(source).get(str(number)) if source.is_file() else None
+        audio = Path(str((row or {}).get("file") or ""))
+        try:
+            import snapgen_audio_storyboard
+            image_path, plan_path = snapgen_audio_storyboard.outputs(source, number)
+        except Exception as exc:
+            write(f"ERROR: {exc}")
+            return
+        if not redo and image_path.is_file() and plan_path.is_file():
+            show_storyboard(number, plan_path.read_text(encoding="utf-8"), image_path)
+            return
+        if not audio.is_file():
+            messagebox.showwarning("สตอรี่บอร์ด", f"ยังไม่มีไฟล์เสียงท่อน {number} — กดบันทึกท่อนนี้ก่อน")
+            return
+        if number in storyboard_busy:
+            return
+        storyboard_busy.add(number)
+        storyboard_buttons[number].config(text="…")
+
+        def worker():
+            try:
+                plan, picture = snapgen_audio_storyboard.make(
+                    g, source, number, audio, story_title_var.get(), write, redo=redo)
+                write(f"เสร็จ: สตอรี่บอร์ดท่อน {number} → {picture}")
+                root.after(0, lambda: show_storyboard(number, plan, picture))
+            except Exception as exc:
+                write(f"ERROR สตอรี่บอร์ดท่อน {number}: {exc}")
+            finally:
+                storyboard_busy.discard(number)
+                root.after(0, lambda: (storyboard_buttons[number].config(text=str(number)), refresh_quick_buttons()))
+
+        threading.Thread(target=worker, daemon=True).start()
 
     save_tab = tk.Button(
         quick_tabs, text="บันทึก", command=lambda: show_quick_page("save"),
@@ -1262,9 +1345,17 @@ def install(g: dict, root: tk.Misc) -> tk.Frame:
     )
     history_tab._audio_quick_tab = True
     history_tab.pack(side="left", padx=(4, 0))
+    storyboard_tab = tk.Button(
+        quick_tabs, text="สตอรี่บอร์ด", command=lambda: show_quick_page("storyboard"),
+        bg="#F1F5F9", fg="#64748B", relief="flat", padx=14, pady=4,
+        font=(SNAPGEN_UI_FONT, 9, "bold"),
+    )
+    storyboard_tab._audio_quick_tab = True
+    storyboard_tab.pack(side="left", padx=(4, 0))
     for column in range(10):
         quick_box.grid_columnconfigure(column, minsize=52, uniform="audio_quick")
         history_box.grid_columnconfigure(column, minsize=52, uniform="audio_history")
+        storyboard_box.grid_columnconfigure(column, minsize=52, uniform="audio_storyboard")
     for number in range(1, 21):
         quick_button = tk.Button(
             quick_box, text=str(number), command=lambda value=number: convert(value),
@@ -1285,6 +1376,15 @@ def install(g: dict, root: tk.Misc) -> tk.Frame:
         history_button.grid(row=(number - 1) // 10, column=(number - 1) % 10,
                             padx=2, pady=2, ipadx=6, ipady=6)
         history_buttons[number] = history_button
+        storyboard_button = tk.Button(
+            storyboard_box, text=str(number), command=lambda value=number: make_storyboard(value),
+            bg="#F1F5F9", activebackground="#E2E8F0", fg="#94A3B8",
+            disabledforeground="#94A3B8", relief="flat", width=4, height=1,
+            padx=0, pady=2, font=(SNAPGEN_UI_FONT, 11, "bold"), state="disabled",
+        )
+        storyboard_button.grid(row=(number - 1) // 10, column=(number - 1) % 10,
+                               padx=2, pady=2, ipadx=6, ipady=6)
+        storyboard_buttons[number] = storyboard_button
     show_quick_page("save")
     refresh_quick_buttons()
     # Read-only handles for deterministic UI verification; runtime logic does

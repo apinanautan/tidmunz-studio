@@ -447,10 +447,14 @@ def contact_sheet_data_url(scenes) -> str:
 
 
 IMAGE_CHECK_PROMPT = (
-    "ภาพนี้รวมรูปฉากทั้งหมด {total} ฉากของวิดีโอเรื่องเล่าไทยไว้ในรูปเดียว แต่ละช่องมีเลขฉาก (SCENE n) ตรวจครบทุกช่องแล้วบอกฉากที่ใช้ไม่ได้: "
-    "1) เป็นภาพหลายช่อง/คอลลาจ/ตารางในรูปเดียว 2) ฉาก บ้านเรือน หรือเครื่องแต่งกายไม่ใช่แบบไทย (เช่น จีน ญี่ปุ่น ตะวันตก){abroad} "
-    "3) มีตัวหนังสือ/ลายน้ำ 4) ภาพเสียหรือว่างเปล่า "
-    'ตอบ JSON เท่านั้น {{"bad":[{{"scene":n,"reason":"สั้นๆ"}}]}} ถ้าดีหมดตอบ {{"bad":[]}}')
+    "รูปที่แนบคือแผ่นสตอรี่บอร์ดของวิดีโอเรื่องเล่าไทย รวมรูปฉากทั้งหมด {total} ฉากไว้ในรูปเดียว: ช่องละ 1 ฉาก "
+    "เรียงซ้ายไปขวา บนลงล่าง และแต่ละช่องมีเลข SCENE n กำกับ (SCENE 1 = ฉากที่ 1). "
+    "ดูทีละช่องตามเลข เทียบกับ 'สิ่งที่ฉากนั้นต้องเป็น' ด้านล่าง แล้วบอกฉากที่ใช้ไม่ได้: "
+    "1) ช่องนั้นเป็นภาพหลายช่อง/คอลลาจ/ตารางซ้อนอยู่ในรูปเดียว 2) ฉาก บ้านเรือน หรือเครื่องแต่งกายไม่ใช่แบบไทย (เช่น จีน ญี่ปุ่น ตะวันตก){abroad} "
+    "3) มีตัวหนังสือ/ลายน้ำ 4) ภาพเสียหรือว่างเปล่า 5) ภาพไม่ตรงกับเหตุการณ์ของฉากนั้นอย่างชัดเจน "
+    "6) ตัวละครคนเดียวกันหน้าตาหรือชุดต่างไปจากช่องอื่นอย่างชัดเจน 7) กลางวัน/กลางคืนไม่ตรงกับเวลาของฉาก (ถ้าระบุ). "
+    "panels = จำนวนช่องที่มองเห็นจริงในรูปที่แนบ (ถ้าไม่เห็นรูปแนบ ให้ panels = 0 ห้ามเดา). "
+    'ตอบ JSON เท่านั้น {{"panels":0,"bad":[{{"scene":n,"reason":"สั้นๆ"}}]}} ถ้าดีหมด bad = []')
 
 
 class Stopped(Exception):
@@ -3402,7 +3406,13 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
         """One look by GPT at a numbered sheet of every scene (temporary chat, not the story history)."""
         story = (state["project"].get("context") or {}).get("story") or {}
         place = story.get("main_location") or ""
-        prompt = IMAGE_CHECK_PROMPT.format(total=sum(1 for s in scenes if s.get("image") and os.path.isfile(s["image"])), abroad=f" — สถานที่หลักของเรื่อง: {place}" if place else "")
+        total = sum(1 for s in scenes if s.get("image") and os.path.isfile(s["image"]))
+        prompt = IMAGE_CHECK_PROMPT.format(total=total, abroad=f" — สถานที่หลักของเรื่อง: {place}" if place else "")
+        # What each numbered panel should show, so GPT reads the sheet as a storyboard, panel by panel.
+        prompt += "\n\nสิ่งที่แต่ละฉากต้องเป็น:\n" + "\n".join(
+            f"SCENE {i + 1}: {(s.get('text') or '')[:90]}"
+            + (f" | ตัวละคร: {', '.join(map(str, s.get('characters') or []))}" if s.get("characters") else "")
+            for i, s in enumerate(scenes) if s.get("image") and os.path.isfile(s["image"]))
         body = {"model": "auto", "temporary_chat": True, "chatgpt_image_intercept": False, "messages": [{
             "role": "user", "content": [{"type": "text", "text": prompt},
                                         {"type": "image_url", "image_url": {"url": contact_sheet_data_url(scenes)}}]}]}
@@ -3412,8 +3422,16 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
         with g.get("_bridge_queue_lock") or threading.Lock():
             data = open_bridge(request)
         reply = ((data.get("choices") or [{}])[0].get("message") or {}).get("content") or ""
+        parsed = parse_json_reply(str(reply)) or {}
+        try:
+            panels = int(parsed.get("panels") or 0)
+        except (TypeError, ValueError):
+            panels = 0
+        if panels <= 0:
+            # GPT did not see the attached sheet (it once answered "all fine" with no picture attached).
+            raise RuntimeError("GPT ไม่เห็นรูปสตอรี่บอร์ดที่แนบ — ไม่นับว่าผ่าน")
         found = {}
-        for item in (parse_json_reply(str(reply)) or {}).get("bad") or []:
+        for item in parsed.get("bad") or []:
             try:
                 n = int(item.get("scene")) - 1
             except (TypeError, ValueError, AttributeError):

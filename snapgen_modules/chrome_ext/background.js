@@ -242,14 +242,23 @@ async function pageSend(job) {
   editor.focus();
   document.execCommand("selectAll", false, null);
   document.execCommand("insertText", false, job.prompt);
-  // Wait until the pictures are uploaded and ChatGPT lets us send.
+  // Wait until every picture sits in the composer and has finished uploading. The send button is
+  // enabled by the text alone, so pressing it early sent the words without the picture (an image
+  // check then answered "all fine" about a sheet it never saw).
   const until = Date.now() + 120000;
-  let send = null;
+  let send = null, attached = 0, settled = 0;
   while (Date.now() < until) {
     await sleep(800);
+    attached = [...form.querySelectorAll("button")].filter(b =>
+      /^(ลบ|remove)\s/i.test((b.getAttribute("aria-label") || "").trim())).length;
+    const uploading = form.querySelector('[role="progressbar"], [aria-busy="true"], circle[stroke-dasharray]');
     send = form.querySelector('button[type="submit"]');
-    if (send && !send.disabled) break;
+    const ready = send && !send.disabled && attached >= images.length && !uploading;
+    settled = ready ? settled + 1 : 0;
+    if (settled >= 2) break;  // ready twice in a row: the upload is really done
   }
+  if (images.length && attached < images.length)
+    return {error: `ChatGPT did not take the attached pictures (${attached}/${images.length} attached) — not sent`};
   if (!send || send.disabled) return {error: "ChatGPT did not accept the attachments / prompt in time"};
   send.click();
   return {ok: true, before, oldPointers};

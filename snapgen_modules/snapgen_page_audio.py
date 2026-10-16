@@ -41,6 +41,8 @@ def install(g: dict, root: tk.Misc) -> tk.Frame:
     history_buttons = {}
     storyboard_buttons = {}
     storyboard_busy = set()
+    transcript_buttons = {}
+    transcript_busy = set()
     waveform = {
         "samples": [], "duration": 0.0, "start": 0.0, "end": 0.0,
         "drag": None, "items": {}, "playing": False, "play_token": 0,
@@ -202,6 +204,9 @@ def install(g: dict, root: tk.Misc) -> tk.Frame:
                     done.add(number)
         return done
 
+    def transcript_path(source: Path, number: int) -> Path:
+        return source.parent / "audio_output" / "ถอดเสียง" / f"{number}.txt"
+
     def range_index_path(source: Path) -> Path:
         return source.parent / "audio_output" / "snapgen_audio_ranges.json"
 
@@ -254,6 +259,17 @@ def install(g: dict, root: tk.Misc) -> tk.Frame:
             row = saved_ranges.get(str(number))
             available = isinstance(row, dict) and Path(str(row.get("file") or "")).is_file()
             made = number in boarded
+            button.config(
+                state="normal" if available or made else "disabled",
+                bg="#DCFCE7" if made else ("#DCEEFF" if available else "#F1F5F9"),
+                activebackground="#BBF7D0" if made else "#C7E3FA",
+                fg="#166534" if made else ("#1E5F8A" if available else "#94A3B8"),
+                disabledforeground="#94A3B8",
+            )
+        for number, button in transcript_buttons.items():
+            row = saved_ranges.get(str(number))
+            available = isinstance(row, dict) and Path(str(row.get("file") or "")).is_file()
+            made = source.is_file() and transcript_path(source, number).is_file()
             button.config(
                 state="normal" if available or made else "disabled",
                 bg="#DCFCE7" if made else ("#DCEEFF" if available else "#F1F5F9"),
@@ -1251,15 +1267,17 @@ def install(g: dict, root: tk.Misc) -> tk.Frame:
     quick_box = tk.Frame(quick_content, bg="#FFFFFF")
     history_box = tk.Frame(quick_content, bg="#FFFFFF")
     storyboard_box = tk.Frame(quick_content, bg="#FFFFFF")
+    transcript_box = tk.Frame(quick_content, bg="#FFFFFF")
     quick_box.grid(row=0, column=0, sticky="nsew")
     history_box.grid(row=0, column=0, sticky="nsew")
     storyboard_box.grid(row=0, column=0, sticky="nsew")
+    transcript_box.grid(row=0, column=0, sticky="nsew")
     quick_content.grid_rowconfigure(0, weight=1)
     quick_content.grid_columnconfigure(0, weight=1)
 
     def show_quick_page(page_name):
         pages = {"save": (quick_box, save_tab), "history": (history_box, history_tab),
-                 "storyboard": (storyboard_box, storyboard_tab)}
+                 "storyboard": (storyboard_box, storyboard_tab), "transcript": (transcript_box, transcript_tab)}
         for name, (frame, tab) in pages.items():
             if name == page_name:
                 frame.tkraise()
@@ -1295,6 +1313,68 @@ def install(g: dict, root: tk.Misc) -> tk.Frame:
         text = tk.Text(window, wrap="word", font=(SNAPGEN_UI_FONT, 10), bg="#F8FAFC", relief="flat")
         text.pack(fill="both", expand=True, padx=8, pady=8)
         text.insert("1.0", plan)
+
+    def show_transcript(number, text, path):
+        """Part N's words, ready to copy."""
+        window = tk.Toplevel(root)
+        window.title(f"ถอดเสียง ท่อน {number} — {story_title_var.get()}")
+        window.geometry("760x520")
+        window.configure(bg="#FFFFFF")
+        top = tk.Frame(window, bg="#FFFFFF")
+        top.pack(fill="x", padx=8, pady=6)
+        box_text = tk.Text(window, wrap="word", font=(SNAPGEN_UI_FONT, 11), bg="#F8FAFC", relief="flat")
+
+        def copy_all():
+            root.clipboard_clear()
+            root.clipboard_append(box_text.get("1.0", "end").strip())
+            write(f"คัดลอกข้อความท่อน {number} แล้ว")
+
+        tk.Button(top, text="คัดลอกทั้งหมด", command=copy_all, bg="#2563EB", fg="white",
+                  relief="flat", padx=12, pady=4).pack(side="left")
+        tk.Button(top, text="เปิดโฟลเดอร์", command=lambda: os.startfile(str(Path(path).parent)),
+                  bg="#D97706", fg="white", relief="flat", padx=12, pady=4).pack(side="left", padx=6)
+        tk.Button(top, text="ถอดท่อนนี้ใหม่", command=lambda: (window.destroy(), make_transcript(number, redo=True)),
+                  bg="#64748B", fg="white", relief="flat", padx=12, pady=4).pack(side="right")
+        box_text.pack(fill="both", expand=True, padx=8, pady=(0, 8))
+        box_text.insert("1.0", text)
+
+    def make_transcript(number, redo=False):
+        """Whisper on this PC turns saved part N into text (no GPT, nothing leaves the computer)."""
+        source = Path(source_var.get().strip())
+        if not source.is_file():
+            return
+        path = transcript_path(source, number)
+        if not redo and path.is_file():
+            show_transcript(number, path.read_text(encoding="utf-8"), path)
+            return
+        row = load_saved_ranges(source).get(str(number))
+        audio = Path(str((row or {}).get("file") or ""))
+        if not audio.is_file():
+            messagebox.showwarning("ถอดเสียง", f"ยังไม่มีไฟล์เสียงท่อน {number} — กดบันทึกท่อนนี้ก่อน")
+            return
+        if number in transcript_busy:
+            return
+        transcript_busy.add(number)
+        transcript_buttons[number].config(text="…")
+        write(f"ถอดเสียงท่อน {number} …")
+
+        def worker():
+            try:
+                import snapgen_audio_storyboard
+                text = snapgen_audio_storyboard.transcribe(audio, write)
+                if not text:
+                    raise RuntimeError("ไม่ได้ยินเสียงพูดในท่อนนี้")
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(text, encoding="utf-8")
+                write(f"เสร็จ: ถอดเสียงท่อน {number} → {path}")
+                root.after(0, lambda: show_transcript(number, text, path))
+            except Exception as exc:
+                write(f"ERROR ถอดเสียงท่อน {number}: {exc}")
+            finally:
+                transcript_busy.discard(number)
+                root.after(0, lambda: (transcript_buttons[number].config(text=str(number)), refresh_quick_buttons()))
+
+        threading.Thread(target=worker, daemon=True).start()
 
     def make_storyboard(number, redo=False):
         source = Path(source_var.get().strip())
@@ -1352,10 +1432,18 @@ def install(g: dict, root: tk.Misc) -> tk.Frame:
     )
     storyboard_tab._audio_quick_tab = True
     storyboard_tab.pack(side="left", padx=(4, 0))
+    transcript_tab = tk.Button(
+        quick_tabs, text="ถอดเสียง", command=lambda: show_quick_page("transcript"),
+        bg="#F1F5F9", fg="#64748B", relief="flat", padx=14, pady=4,
+        font=(SNAPGEN_UI_FONT, 9, "bold"),
+    )
+    transcript_tab._audio_quick_tab = True
+    transcript_tab.pack(side="left", padx=(4, 0))
     for column in range(10):
         quick_box.grid_columnconfigure(column, minsize=52, uniform="audio_quick")
         history_box.grid_columnconfigure(column, minsize=52, uniform="audio_history")
         storyboard_box.grid_columnconfigure(column, minsize=52, uniform="audio_storyboard")
+        transcript_box.grid_columnconfigure(column, minsize=52, uniform="audio_transcript")
     for number in range(1, 21):
         quick_button = tk.Button(
             quick_box, text=str(number), command=lambda value=number: convert(value),
@@ -1386,6 +1474,16 @@ def install(g: dict, root: tk.Misc) -> tk.Frame:
         storyboard_button.grid(row=(number - 1) // 10, column=(number - 1) % 10,
                                padx=2, pady=2, ipadx=6, ipady=6)
         storyboard_buttons[number] = storyboard_button
+        transcript_button = tk.Button(
+            transcript_box, text=str(number), command=lambda value=number: make_transcript(value),
+            bg="#F1F5F9", activebackground="#E2E8F0", fg="#94A3B8",
+            disabledforeground="#94A3B8", relief="flat", width=4, height=1,
+            padx=0, pady=2, font=(SNAPGEN_UI_FONT, 11, "bold"), state="disabled",
+        )
+        transcript_button._audio_storyboard = True  # same size as the other number pads, own colours
+        transcript_button.grid(row=(number - 1) // 10, column=(number - 1) % 10,
+                               padx=2, pady=2, ipadx=6, ipady=6)
+        transcript_buttons[number] = transcript_button
     show_quick_page("save")
     refresh_quick_buttons()
     # Read-only handles for deterministic UI verification; runtime logic does

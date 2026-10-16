@@ -3427,8 +3427,11 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
             return
         clips_dir = folder / "clips"
         found = {}
+        used = {os.path.normcase(os.path.abspath(str(sc["clip"]))) for sc in scenes if sc.get("clip")}
         for i in missing:
             for name in (f"clip_{i + 1:03d}_สโลว์.mp4", f"clip_{i + 1:03d}.mp4"):
+                if os.path.normcase(os.path.abspath(str(clips_dir / name))) in used:
+                    continue  # another shot's clip (numbers shift when a shot is added)
                 if (clips_dir / name).is_file():
                     found[i] = clips_dir / name
                     break
@@ -4012,8 +4015,9 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
 
     def normal_clip_of(scene, index):
         """The normal-speed download a slow clip was made from, or None."""
-        for path in (scene.get("clip_normal"),
-                     Path(state["folder"]) / "clips" / f"clip_{index + 1:03d}_ปกติ.mp4"):
+        # The fallback follows this shot's own slow file name (numbers shift when a shot is added).
+        own = re.sub(r"_สโลว์$", "", Path(str(scene.get("clip") or f"clip_{index + 1:03d}")).stem)
+        for path in (scene.get("clip_normal"), Path(state["folder"]) / "clips" / f"{own}_ปกติ.mp4"):
             if path and os.path.isfile(str(path)):
                 return str(path)
         return None
@@ -4084,8 +4088,12 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
                     check_stop()
                     scene = scenes[i]
                     set_progress("clips", (n - 1) / len(todo), f"ทำสโลว์ใหม่ {n}/{len(todo)} (ช็อต {i + 1})")
-                    target = clips_dir / f"clip_{i + 1:03d}_สโลว์.mp4"
-                    fresh = clips_dir / f"clip_{i + 1:03d}_สโลว์_ใหม่.mp4"
+                    # Names from this shot's own clip file, not its number: after a shot is added the numbers
+                    # no longer match, and "clip_005_ปกติ" may be the next shot's file.
+                    own = Path(str(scene.get("clip") or f"clip_{i + 1:03d}.mp4")).stem
+                    base = re.sub(r"_(สโลว์|ปกติ)$", "", own)
+                    target = clips_dir / f"{base}_สโลว์.mp4"
+                    fresh = clips_dir / f"{base}_สโลว์_ใหม่.mp4"
                     fresh.unlink(missing_ok=True)
                     source = speed_source_of(scene, i)
                     made = ai_slow2x.make_ai_slow2x(source, str(fresh), log=log, recheck=True)
@@ -4094,7 +4102,7 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
                         continue
                     if str(scene.get("clip")) == source:
                         # A normal-speed shot made slow: its clip stays as the _ปกติ copy for hand editing.
-                        normal = clips_dir / f"clip_{i + 1:03d}_ปกติ.mp4"
+                        normal = clips_dir / f"{base}_ปกติ.mp4"
                         if os.path.abspath(source) != os.path.abspath(normal):
                             if normal.is_file():  # left over from an earlier slow version of this shot
                                 backup_dir = clips_dir / "_สำรอง"
@@ -4219,7 +4227,19 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
         clips_dir = Path(state["folder"]) / "clips"
         clips_dir.mkdir(exist_ok=True)
         # A shot made again never overwrites its earlier clips: they move to clips/_สำรอง with the time.
-        old = sorted(clips_dir.glob(f"clip_{index + 1:03d}.mp4")) + sorted(clips_dir.glob(f"clip_{index + 1:03d}_*.mp4"))
+        # Only files no other shot uses: after a shot is added or removed, file numbers no longer match
+        # shot numbers, and moving "clip_003*" once took the next shot's clip away (it was then made again).
+        def norm(path):
+            return os.path.normcase(os.path.abspath(str(path)))
+        others = {norm(sc.get(key)) for j, sc in enumerate(state["project"]["scenes"]) if j != index
+                  for key in ("clip", "clip_normal") if sc.get(key)}
+        own = [Path(scene[key]) for key in ("clip", "clip_normal")
+               if scene.get(key) and os.path.isfile(scene[key]) and norm(scene[key]) not in others]
+        numbered = sorted(clips_dir.glob(f"clip_{index + 1:03d}.mp4")) + sorted(clips_dir.glob(f"clip_{index + 1:03d}_*.mp4"))
+        old = list(dict.fromkeys(own + [p for p in numbered if norm(p) not in others]))
+        base = f"clip_{index + 1:03d}"
+        if any(norm(clips_dir / f"{base}{tail}.mp4") in others for tail in ("", "_สโลว์", "_ปกติ")):
+            base += "_" + time.strftime("%H%M%S")  # the plain name belongs to another shot's clip
         if old:
             backup_dir = clips_dir / "_สำรอง"
             backup_dir.mkdir(exist_ok=True)
@@ -4228,15 +4248,15 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
                 shutil.move(str(path), str(backup_dir / f"{path.stem}_เก่า_{stamp}{path.suffix}"))
             log(f"เก็บคลิปเดิมของช็อต {index + 1} ไว้ที่ clips/_สำรอง ({len(old)} ไฟล์)")
         if not scene.get("clip_slow"):
-            target = clips_dir / f"clip_{index + 1:03d}.mp4"
+            target = clips_dir / f"{base}.mp4"
             shutil.copy2(newest, target)
             return str(target)
         # Slow 2x shot: keep both speeds for hand editing; the slow one goes in the video.
-        target = clips_dir / f"clip_{index + 1:03d}_สโลว์.mp4"
+        target = clips_dir / f"{base}_สโลว์.mp4"
         shutil.copy2(newest, target)
         oldest = min(new_files, key=lambda f: f.stat().st_mtime)  # the download, before Slow 2x
         if oldest != newest:
-            normal = clips_dir / f"clip_{index + 1:03d}_ปกติ.mp4"
+            normal = clips_dir / f"{base}_ปกติ.mp4"
             shutil.copy2(oldest, normal)
             scene["clip_normal"] = str(normal)
         return str(target)

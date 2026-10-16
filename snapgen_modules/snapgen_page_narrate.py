@@ -1521,6 +1521,8 @@ def bodies_request(names: list, era: str) -> str:
     )
 
 
+# A forbidden item with one of these words means that person must stay where the first frame has them.
+STAY_WORDS = ("เดิน", "ก้าว", "วิ่ง", "ออกจากจุดเดิม", "ออกจากตำแหน่ง", "ย้ายตำแหน่ง", "ย้ายไป", "เข้าหา")
 # Every clip: things AI video often breaks, whatever the story.
 VIDEO_NEGATIVE = ("ตัวหนังสือ, ลายน้ำ, ตัวละครใหม่ที่ไม่มีในภาพเริ่มต้น, หน้าตาหรือร่างกายเปลี่ยนไปเองโดยบทไม่ได้สั่ง, "
                   "แขนขาหรือนิ้วเกินหรือหาย, ร่างกายบิดเบี้ยว, ภาพการ์ตูนหรืออนิเมะ, ฉากเปลี่ยนกะทันหัน, "
@@ -3712,6 +3714,19 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
         # Speech is stated at the top of every request, both ways: video models weigh the opening lines most.
         speech = (f"[บทพูด] มีบทพูด: {scene['dialogue']} พูดว่า “{scene.get('line', '')}” ขยับปากพูดด้วยความเร็วปกติ "
                   "คนอื่นในเฟรมไม่พูด" if scene.get("dialogue") else f"[บทพูด] {NO_TALK_LINE}")
+        # "ห้ามเดิน" deep in a long negative list is not followed (and naming the walk invites it):
+        # whoever must not leave their spot is told, positively and first, to stay standing in place.
+        names = [str(c) for c in scene.get("characters") or []]
+        planned = " ".join(str(scene.get(k) or "") for k in ("prompt", "video_prompt_planned"))
+        rooted = [n for n in names if any(n in item and any(w in item for w in STAY_WORDS)
+                                          for item in str(scene.get("forbid") or "").split(","))
+                  and not any(f"{n}{gap}{w}" in planned for gap in ("", " ") for w in ("เดิน", "ก้าว", "วิ่ง"))]
+        if rooted:
+            who = ", ".join(rooted)
+            prompt = (f"[อยู่กับที่] {who} อยู่ตรงตำแหน่งเดิมในภาพแรกตลอดทั้งคลิป เท้าทั้งสองแนบพื้นที่เดิม "
+                      "ขยับได้แค่ศีรษะ มือ ลมหายใจ และสีหน้า "
+                      f"({who}: stays planted on the same spot for the whole clip, both feet fixed on the ground; "
+                      "only head, hands, breathing and face move)\n" + prompt)
         prompt = ONE_SHOT_RULE + "\n" + speech + "\n" + prompt
         prompt += "\nไม่มีตัวหนังสือในภาพ ตัวละครหน้าตาเหมือนในภาพเริ่มต้นตลอดคลิป"
         opening = str(scene.get("video_prompt") or scene.get("prompt") or "")

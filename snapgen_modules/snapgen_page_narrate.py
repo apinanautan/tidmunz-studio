@@ -738,10 +738,12 @@ def segment_durations(starts: list, duration: float) -> list:
     return [max(0.5, round(e - s, 3)) for s, e in zip(starts, ends)]
 
 
-def clip_fit_filter(clip_seconds: float, target: float, width: int, height: int) -> str:
-    """Fit one AI clip to its narration slot: trim if long, slow (≤1.6x) then hold if short."""
+def clip_fit_filter(clip_seconds: float, target: float, width: int, height: int, spoken: bool = False) -> str:
+    """Fit one AI clip to its narration slot: trim if long, slow (≤1.6x) then hold if short.
+    A spoken line is never slowed: it plays at real speed from the line's first word (mouths match
+    the voice), and only its last frame is held if the slot is longer."""
     factor = 1.0
-    if clip_seconds > 0 and clip_seconds < target:
+    if clip_seconds > 0 and clip_seconds < target and not spoken:
         factor = min(1.6, target / clip_seconds)
     hold = max(0.0, target - clip_seconds * factor)
     vf = (f"setpts={factor:.4f}*PTS,fps={FPS},"
@@ -3893,7 +3895,7 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
         head = ""
         if 0.5 < until < usable:
             head, usable = f"trim=duration={until:.3f},setpts=PTS-STARTPTS,", until
-        return source, head + clip_fit_filter(usable, length, width, height)
+        return source, head + clip_fit_filter(usable, length, width, height, spoken=bool(scene.get("dialogue")))
 
     def review_clips_selected():
         """Button: run checker 2 on the selected shots (all shots when none selected)."""

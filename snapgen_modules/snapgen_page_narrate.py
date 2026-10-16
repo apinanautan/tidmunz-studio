@@ -397,6 +397,8 @@ def error_reason(error: str) -> str:
         return "โควตารูปหมด"
     if "รูปเก่าซ้ำ" in text:
         return "GPT ไม่วาดรูปใหม่ (ส่งรูปเก่ากลับมา) — ลองกด GPT ช่วยแก้ prompt"
+    if "Raw error:" in text:  # the Bridge's own wrapper says nothing; the cause is after this marker
+        return "ChatGPT ตอบผิดพลาด: " + text.split("Raw error:", 1)[1].strip()[:300]
     return text[:160]
 
 
@@ -3820,9 +3822,19 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
                 fixes = " / ".join(str(n) for n in scene.get("fix_notes") or [])
                 reported = (f"\nปัญหาที่ผู้ใช้เคยแจ้งของช็อตนี้ (ต้องแก้ให้หาย): {fixes}"
                             + (f" — ห้ามเด็ดขาด: {scene['fix_forbid']}" if scene.get("fix_forbid") else "")) if fixes else ""
-                reply = gpt_look(PROMPT_CHECK.format(seconds=scene.get("clip_seconds") or "",
-                                                     anchor=story_anchor(index) + seen + reported,
-                                                     request=clip_prompt(scene)))
+                question = PROMPT_CHECK.format(seconds=scene.get("clip_seconds") or "",
+                                               anchor=story_anchor(index) + seen + reported, request=clip_prompt(scene))
+                try:
+                    reply = gpt_look(question)
+                except (Stopped, HistoryLost, RateLimited):
+                    raise
+                except Exception as first:
+                    # A ChatGPT hiccup (page reloading, a busy tab) is common: one more try before giving up.
+                    text = first.read().decode("utf-8", errors="replace") if hasattr(first, "read") else str(first)
+                    log(f"ผู้ตรวจคำสั่งช็อต {index + 1} ขัดข้อง ({error_reason(text)}) — ลองอีกครั้ง")
+                    time.sleep(15)
+                    check_stop()
+                    reply = gpt_look(question)
             except (Stopped, HistoryLost, RateLimited):
                 raise
             except Exception as exc:

@@ -1598,15 +1598,25 @@ TRANSLATE_REQUEST = (
     "ปิดท้ายด้วยบรรทัด 'Negative: ...'. ตอบ JSON เท่านั้น: {{\"english\":\"\"}}\n\n{request}")
 # Checker 2: after the clip, a GPT look at its frames decides whether it can be used.
 CLIP_CHECK = (
-    "รูปแรกที่แนบคือเฟรมจากคลิปวิดีโอ AI ยาว {length} วินาที เรียงซ้ายไปขวา บนลงล่าง ทุก {step} วินาที "
-    "(เฟรมที่ k เริ่มนับ 0 = วินาทีที่ k×{step}); รูปที่สองคือภาพเริ่มต้นที่ตั้งใจไว้. "
-    "โปรแกรมตรวจพบภาพกระโดดที่วินาที: {cuts}. "
-    "ตัดสินคลิปนี้: pass = เป็นช็อตเดียวต่อเนื่อง (หรือตัดมุมกล้องในฉากเดิมกับคนเดิมแบบหนังทั่วไป) ตรงกับคำบรรยาย ตัวละครหน้าเดิม ร่างกายถูก; "
-    "trim = ช่วงแรกใช้ได้ แต่หลังจากนั้นตัดไปฉาก/สถานที่/เหตุการณ์อื่น ร่างกายพัง หรือคนที่หันหลังในภาพเริ่มต้นหันหน้ามา"
-    "เป็นหน้าคนอื่น — ใส่ use_until = วินาทีสุดท้ายที่ยังใช้ได้; "
-    "redo = ใช้ไม่ได้ตั้งแต่ต้น หรือส่วนที่ใช้ได้สั้นเกิน 2 วินาที. reason = เหตุผลสั้นๆ ภาษาไทย. "
-    "ตอบ JSON เท่านั้น: {{\"verdict\":\"pass\",\"use_until\":0,\"reason\":\"\"}}\n\n"
-    "ช็อตนี้ในเรื่อง:\n{anchor}\n\nคำสั่งที่ใช้สร้าง:\n{request}")
+    "คุณคือผู้ตรวจคุณภาพ (QC) วิดีโอของกองถ่ายภาพยนตร์ ละเอียด เข้มงวด และไม่ปล่อยผ่านสิ่งที่ผิด "
+    "หน้าที่คือดูเฟรมจริงทีละเฟรมแล้วตัดสินว่าคลิป AI นี้ใช้ในหนังได้หรือไม่ ห้ามเดาจากคำสั่ง ให้ดูจากภาพเท่านั้น\n\n"
+    "รูปที่แนบมี 1 รูป: ด้านบนซ้ายคือภาพเริ่มต้นที่ตั้งใจไว้ (ใช้เทียบ) ด้านล่างคือเฟรมจากคลิปยาว {length} วินาที "
+    "เรียงซ้ายไปขวา บนลงล่าง ทุก {step} วินาที (เฟรมที่ k นับจาก 0 = วินาทีที่ k×{step}). "
+    "โปรแกรมตรวจภาพกระโดดในเครื่องพบที่วินาที: {cuts}.\n\n"
+    "ตรวจทีละข้อ ทุกเฟรม:\n"
+    "1) ช็อตเดียวต่อเนื่อง: ไม่ตัดไปฉาก สถานที่ หรือเหตุการณ์อื่น\n"
+    "2) ตัวละคร: หน้า ทรงผม เสื้อผ้า อายุ เหมือนภาพเริ่มต้นทุกเฟรม ไม่กลายเป็นคนอื่น ไม่มีคนใหม่โผล่มา\n"
+    "3) ร่างกาย: นับแขน ขา มือ นิ้ว ศีรษะ ของทุกคนในทุกเฟรม ต้องครบและไม่เกิน ข้อต่อไม่บิดผิดทาง ไม่ละลาย ไม่ทะลุกัน\n"
+    "4) การเคลื่อนไหว: ทำตาม 'สิ่งที่ต้องเกิด' ด้านล่าง และไม่ทำสิ่งที่ห้าม เช่น คนที่ต้องอยู่กับที่ ห้ามเดิน ก้าว หรือเปลี่ยนตำแหน่ง "
+    "(เทียบตำแหน่งเท้าและระยะกับฉากหลังในเฟรมแรกกับเฟรมท้าย)\n"
+    "5) การพูด: {speech}\n"
+    "6) ทิศทาง: คนที่หันหลังในภาพเริ่มต้นต้องหันหลังตลอด\n"
+    "7) ไม่มีตัวหนังสือ ลายน้ำ หรือภาพการ์ตูน\n\n"
+    "ตัดสิน: pass = ผ่านทุกข้อ; trim = ช่วงแรกผ่านทุกข้อ แต่หลังจากนั้นผิด — use_until = วินาทีสุดท้ายที่ยังผ่านทุกข้อ; "
+    "redo = ผิดตั้งแต่ต้น หรือส่วนที่ผ่านสั้นกว่า 2 วินาที. ถ้าไม่แน่ใจว่าผิดหรือไม่ ให้ระบุใน problems และเลือกทางที่เข้มกว่า. "
+    "problems = รายการปัญหาที่เห็นจริง พร้อมวินาที (เช่น 'วินาที 6: ทัดก้าวเท้าเดินเข้าหาบ้าน'); reason = สรุปสั้นภาษาไทย. "
+    "ตอบ JSON เท่านั้น: {{\"verdict\":\"pass\",\"use_until\":0,\"problems\":[],\"reason\":\"\"}}\n\n"
+    "ช็อตนี้ในเรื่อง:\n{anchor}\n\nสิ่งที่ต้องเกิดในคลิป:\n{action}\n\nสิ่งที่ห้ามเด็ดขาด:\n{banned}")
 
 
 def image_data_url(path, max_side: int = 768) -> str:
@@ -3888,14 +3898,25 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
         scene["clip_cuts"] = cuts
         verdict, reason, until = ("trim", f"ตัดฉากเองที่วินาที {cuts[0]:g}", cuts[0] - 0.15) if cuts else ("pass", "", None)
         try:
-            if not cuts or state.get("upload_quota_out"):
-                raise LookupError  # one continuous shot (or no upload quota left): the local check decides
+            if state.get("upload_quota_out"):
+                raise LookupError  # no ChatGPT upload quota left: the local check decides
+            # GPT looks at every clip (one upload each), not only those with a detected jump: walking,
+            # changed faces and broken bodies happen inside one continuous shot too.
             url, step = frames_sheet_url(clip, length, scene.get("image"))
+            speech = (f"มีบทพูด: {scene['dialogue']} พูดว่า “{scene.get('line', '')}” ปากขยับตรงกับคำพูด คนอื่นไม่พูด"
+                      if scene.get("dialogue") else "ช็อตนี้ไม่มีบทพูด ทุกคนต้องปิดปาก ไม่ขยับปากพูดหรือตะโกน")
+            action = (scene.get("video_prompt_planned") or scene.get("video_prompt") or scene.get("prompt") or "")[:1500]
+            fixes = " / ".join(str(n) for n in scene.get("fix_notes") or [])
+            banned = merge_forbid(scene.get("fix_forbid"), compact_forbid(scene.get("forbid")))
+            if fixes:
+                banned = f"(ผู้ใช้เคยแจ้งปัญหาช็อตนี้: {fixes} — ตรวจข้อนี้เป็นพิเศษ) " + banned
             reply = gpt_look(CLIP_CHECK.format(step=step, length=round(length, 1), cuts=", ".join(f"{c:g}" for c in cuts) or "ไม่พบ",
-                                               anchor=story_anchor(index), request=clip_prompt(scene)), [url])
+                                               anchor=story_anchor(index), speech=speech, action=action, banned=banned), [url])
             answer = str(reply.get("verdict") or "").strip().lower()
             if answer in ("pass", "trim", "redo"):
-                verdict, reason = answer, str(reply.get("reason") or reason).strip()
+                problems = [str(p) for p in reply.get("problems") or [] if str(p).strip()]
+                verdict, reason = answer, (str(reply.get("reason") or reason).strip()
+                                           + (" · " + "; ".join(problems) if problems and answer != "pass" else ""))
                 if answer == "trim":
                     try:
                         until = float(reply.get("use_until") or until or 0) or until
@@ -3916,7 +3937,7 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
                 log(f"ผู้ตรวจคลิปช็อต {index + 1} ใช้ไม่ได้ ({text[:120]}) — ใช้ผลตรวจในเครื่อง")
         if verdict == "redo" and cuts:
             until = cuts[0] - 0.15  # until it is made again, use only the part before the jump
-        scene["clip_review"] = {"verdict": verdict, "reason": reason[:200]}
+        scene["clip_review"] = {"verdict": verdict, "reason": reason[:500]}
         if until and 0.5 < until < length:
             scene["clip_use_until"] = round(until, 2)
         else:

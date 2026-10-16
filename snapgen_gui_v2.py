@@ -17020,6 +17020,12 @@ def _modernize_snapgen_ui(root):
                 t = text.strip()
                 if hasattr(w, "_audio_quick_tab"):
                     return
+                if hasattr(w, "_audio_storyboard"):
+                    # ตัดเสียง storyboard numbers: the same size as the save / history numbers, their own colours.
+                    w.configure(relief="flat", bd=0, width=4, height=1, padx=0, pady=2,
+                                font=(SNAPGEN_UI_FONT, 11, "bold"), borderwidth=0,
+                                highlightthickness=0, overrelief="flat")
+                    return
                 if hasattr(w, "_audio_quick_finished"):
                     finished = bool(w._audio_quick_finished)
                     bg = "#DCEEFF" if finished else "#F1F5F9"
@@ -17351,6 +17357,14 @@ def _modernize_snapgen_ui(root):
             edit = edits.get(key)
             if not isinstance(edit, dict):
                 continue
+            # The key is the widget path, which shifts when an update adds a widget: an edit made on one
+            # page's button then lands on another page's button (ตัดเสียง's play button became "Storyboard").
+            # Apply it only to the button it was made for: same original label (or, for edits saved before
+            # the label was kept, a button already showing the edited label).
+            current = str(_button_originals[key].get("text") or "").strip()
+            made_for = str(edit.get("original_text") or "").strip()
+            if (made_for and made_for != current) or (not made_for and current != str(edit.get("text") or "").strip()):
+                continue
             options = {}
             for key in ("text", "bg", "activebackground", "width", "height"):
                 if key in edit:
@@ -17526,6 +17540,8 @@ def _modernize_snapgen_ui(root):
                 "activebackground": color_var.get().strip() or str(button.cget("activebackground")),
                 "width": max(1, width_var.get()), "height": max(1, height_var.get()),
             }
+            original_text = (_button_originals.get(_button_key(button)) or {}).get("text", before_edit.get("text"))
+            edit["original_text"] = str(original_text or "")  # which button this edit belongs to
             manager = button.winfo_manager()
             edit["manager"] = manager
             if manager == "grid":

@@ -1382,6 +1382,7 @@ def install(g: dict, root: tk.Misc) -> tk.Frame:
             disabledforeground="#94A3B8", relief="flat", width=4, height=1,
             padx=0, pady=2, font=(SNAPGEN_UI_FONT, 11, "bold"), state="disabled",
         )
+        storyboard_button._audio_storyboard = True  # the page skin sizes it like the save / history numbers
         storyboard_button.grid(row=(number - 1) // 10, column=(number - 1) % 10,
                                padx=2, pady=2, ipadx=6, ipady=6)
         storyboard_buttons[number] = storyboard_button

@@ -16217,15 +16217,16 @@ def _install_image_bridge_status():
             used = str(state.get("images_used") or "").strip()
             plan = str(state.get("plan") or "").strip()
             full = int(state.get("images_full") or 0)
+            # Just the pictures left and the plan, e.g. "110 Go".
             if left == "0":
-                text = "โควตารูป: หมด"
+                text = "หมด"
             elif left.isdigit() and int(left) < full:  # near the limit ChatGPT counts down itself
-                text = f"โควตารูป: เหลือ {left}/{full}"
+                text = left
             elif left.isdigit() and used.isdigit():
-                text = f"โควตารูป: เหลือ ~{max(0, int(left) - int(used))}/{left} (24 ชม. ใช้ {used})"
+                text = str(max(0, int(left) - int(used)))
             else:
-                text = f"โควตารูป: {left or '—'}"
-            quota_var.set(text + (f" · {plan.capitalize()}" if plan else ""))
+                text = left or "—"
+            quota_var.set(text + (f" {plan.capitalize()}" if plan else ""))
         except Exception:
             pass
 

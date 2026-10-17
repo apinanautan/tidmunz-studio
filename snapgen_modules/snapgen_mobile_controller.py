@@ -614,11 +614,26 @@ class MobileController:
                   "characters": self.app.get("_video_context_character_names", lambda: [])(),
                   "flags": flags, "prompts": prompts, "videos": self.videos,
                   "story": self._story_document(), "prompt_split": split_snapshot,
-                  "story_face": story_face,
+                  "story_face": story_face, "auto": self._auto_snapshot(),
                   "credit": credit, "ready": True}
         with self.lock:
             self.snapshot = result
             self.last_tick = time.monotonic()
+
+    def _auto_snapshot(self):
+        """The ออโต้ page (Slot 2 auto) as the phone shows it: progress, shots with pictures, the video."""
+        auto = self.g.get("mobile_auto") or {}
+        if not callable(auto.get("snapshot")):
+            return None
+        try:
+            data = dict(auto["snapshot"]())
+        except Exception as exc:
+            return {"title": "", "stage": "อ่านหน้าออโต้ไม่สำเร็จ", "log": safe_log(str(exc)), "shots": [], "stories": []}
+        data["log"] = safe_log(data.get("log", ""))
+        data["video"] = self.register_media(data["video"]) if data.get("video") else None
+        for shot in data.get("shots") or []:
+            shot["image"] = self.register_media(shot["image"]) if shot.get("image") else None
+        return data
 
     def _slot(self, request):
         i = request.get("slot")
@@ -684,6 +699,17 @@ class MobileController:
                 label = face["generate"](character_key, age)
                 return f"เริ่มสร้างหน้าตรง มุมข้าง และ Body ของ {label} แล้ว"
             raise ValueError("ไม่พบคำสั่งหน้านิทาน")
+        if str(action).startswith("auto_"):
+            auto = g.get("mobile_auto") or {}
+            if not auto:
+                raise ValueError("หน้าออโต้ยังไม่พร้อม กรุณาปิดเปิดโปรแกรมใหม่")
+            if action == "auto_open":
+                return auto["open"](str(data.get("name") or ""))
+            if action == "auto_start":
+                return auto["start"]()
+            if action == "auto_stop":
+                return auto["stop"]()
+            raise ValueError("ไม่พบคำสั่งหน้าออโต้")
         if action == "prompt_split_start":
             self._start_prompt_split(data.get("scene"))
             return "เริ่มสร้าง Storyboard + Prompt แล้ว รอดูผลในหน้านี้"

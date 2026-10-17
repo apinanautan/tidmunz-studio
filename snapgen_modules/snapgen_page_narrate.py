@@ -5139,5 +5139,54 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
         return export_root() / work_dir_name
 
     runtime["auto_folder" if video_mode else "narrate_folder"] = page_folder
+
+    if video_mode:
+        def mobile_snapshot() -> dict:
+            """What the phone's ออโต้ page shows (file paths: the mobile controller turns them into links)."""
+            project = state.get("project") or {}
+            shots = []
+            for i, sc in enumerate(project.get("scenes") or []):
+                image = sc.get("image") if sc.get("image") and os.path.isfile(str(sc["image"])) else ""
+                shots.append({"n": i + 1, "start": round(float(sc.get("start") or 0), 1),
+                              "text": str(sc.get("text") or "")[:140], "image": image,
+                              "clip": bool(sc.get("clip") and os.path.isfile(str(sc["clip"]))),
+                              "review": str((sc.get("clip_review") or {}).get("verdict") or ""),
+                              "error": str(sc.get("error") or sc.get("clip_error") or "")[:120]})
+            base = export_root() / work_dir_name
+            stories = sorted((p.parent for p in base.glob("*/project.json")), key=lambda p: p.stat().st_mtime,
+                             reverse=True)[:15] if base.is_dir() else []
+            video = str(project.get("last_video") or "")
+            try:
+                percent = float(bar.cget("value") or 0)
+            except (tk.TclError, ValueError):
+                percent = 0.0
+            return {"title": Path(state["folder"]).name if state.get("folder") else "", "busy": bool(state["busy"]),
+                    "stage": stage_var.get(), "detail": detail_var.get(), "percent": percent,
+                    "log": log_box.get("1.0", "end").strip()[-3000:], "shots": shots,
+                    "video": video if video and os.path.isfile(video) else "",
+                    "stories": [p.name for p in stories]}
+
+        def mobile_open(name: str) -> str:
+            folder = export_root() / work_dir_name / str(name)
+            if state["busy"]:
+                raise ValueError("ออโต้กำลังทำงานอยู่ — กดหยุดก่อนเปลี่ยนเรื่อง")
+            if not (folder / "project.json").is_file() or not load_saved_project(str(folder), quiet=True):
+                raise ValueError("เปิดเรื่องนี้ไม่ได้")
+            return f"เปิดเรื่อง {folder.name} แล้ว"
+
+        def mobile_start() -> str:
+            if state["busy"]:
+                raise ValueError("ออโต้กำลังทำงานอยู่แล้ว")
+            if not state.get("project"):
+                raise ValueError("ยังไม่ได้เปิดเรื่อง — เลือกเรื่องก่อน")
+            start_pipeline()
+            return "เริ่ม / ทำต่อแล้ว ดูความคืบหน้าในหน้านี้"
+
+        def mobile_stop() -> str:
+            request_stop()
+            return "สั่งหยุดแล้ว (หยุดหลังขั้นที่กำลังทำ)"
+
+        runtime["mobile_auto"] = {"snapshot": mobile_snapshot, "open": mobile_open,
+                                  "start": mobile_start, "stop": mobile_stop}
     return {"open_project": open_project, "refresh_clip_info": refresh_clip_info, "busy": lambda: state["busy"],
             "stage_var": stage_var}

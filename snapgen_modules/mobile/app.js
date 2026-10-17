@@ -119,7 +119,7 @@ function renderBusy(){if(!state)return;document.querySelectorAll('main button,ma
  if(el.id==='auto-button'&&state.image.auto?.running)busy=flight||!state.ready;
  el.disabled=!!busy;
  });}
-async function refresh(){try{const r=await fetch('/api/status',{cache:'no-store'});if(!r.ok)throw Error();state=await r.json();$('offline').hidden=!!state.ready;$('connection').textContent=state.ready?'● เชื่อมต่อโปรแกรมแล้ว':'○ รอโปรแกรม';render();}catch(_){if(state)state.ready=false;$('offline').hidden=false;$('connection').textContent='○ ขาดการเชื่อมต่อ';renderBusy();}}
+async function refresh(){try{const r=await fetch('/api/status',{cache:'no-store'});if(!r.ok)throw Error();state=await r.json();$('offline').hidden=!!state.ready;$('connection').textContent=state.ready?'● เชื่อมต่อโปรแกรมแล้ว':'○ รอโปรแกรม';render();renderAuto();}catch(_){if(state)state.ready=false;$('offline').hidden=false;$('connection').textContent='○ ขาดการเชื่อมต่อ';renderBusy();}}
 function dialog(title,html,context){dialogContext=context;$('dialog-title').textContent=title;$('dialog-body').innerHTML=html;if(!$('dialog').open)$('dialog').showModal();}
 function modelDialog(i){const d=slotData(i);dialog('Slot '+(i+1)+' settings',`<div class="form-grid"><label>Model<select id="model-choice"></select></label><label>Resolution<select id="model-resolution"></select></label><label>Aspect<select id="model-aspect"></select></label><label>Mode<select id="model-mode"></select></label><label>วินาที<select id="model-duration"></select></label></div><p class="hint">การตั้งค่าจะบันทึกลง Slot เดียวกับบนคอม</p><div class="dialog-actions"><button data-ui="close-dialog">ยกเลิก</button><button class="green" data-ui="save-model">OK · บันทึก</button></div>`,{kind:'model',slot:i});options($('model-choice'),state.models,d.config.model);modelFields(d.config);}
 function modelFields(previous={}){const o=state.model_options[$('model-choice').value];for(const key of ['resolution','aspect','mode','duration'])options($('model-'+key),o[key],o[key].includes(previous[key])?previous[key]:o[key][0]);}
@@ -148,6 +148,7 @@ document.addEventListener('change',async e=>{const el=e.target;try{
  }catch(error){notify(error.message,true);}});
 document.addEventListener('click',async e=>{const b=e.target.closest('button,[data-tab]');if(!b||b.disabled)return;const i=Number(b.dataset.slot);try{
  if(b.dataset.tab){tab(b.dataset.tab);return;}
+ if(b.dataset.auto){await command('auto_'+b.dataset.auto,b.dataset.auto==='open'?{name:$('auto-story').value}:{});return;}
  if(b.dataset.action){const payload=b.dataset.action.startsWith('video_')?videoFields(i):b.dataset.action.startsWith('story_face_')?storyFaceFields():imageFields();await command(b.dataset.action,payload,Number.isNaN(i)?null:i);return;}
  if(b.dataset.camera){dirtyImage('camera',b.dataset.camera);render();return;}
  if(b.dataset.expression){dirtySlot(i,'expression',b.dataset.expression);render();return;}
@@ -194,3 +195,17 @@ document.addEventListener('click',async e=>{const b=e.target.closest('button,[da
  }
  }catch(error){notify(error.message,true);}});
 tab(currentTab);refresh();setInterval(refresh,800);
+
+let autoShotsKey='';
+function renderAuto(){const a=state&&state.auto;if(!a||!$('auto-shots'))return;
+ $('auto-title').textContent=a.title||'ยังไม่ได้เปิดเรื่อง';
+ const sel=$('auto-story');const html=(a.stories||[]).map(n=>`<option value="${esc(n)}">${esc(n)}</option>`).join('');
+ if(sel.dataset.html!==html){sel.innerHTML=html;sel.dataset.html=html;sel.value=a.title&&(a.stories||[]).includes(a.title)?a.title:(a.stories||[])[0]||'';}
+ $('auto-bar').style.width=Math.max(0,Math.min(100,a.percent||0))+'%';
+ $('auto-stage').textContent=(a.busy?'● ':'')+(a.stage||'—');$('auto-detail').textContent=a.detail||'';
+ setLog('auto-log',a.log||'');
+ const vid=a.video?`<video controls preload="metadata" src="${a.video.url}"></video><div class="media-actions"><a href="${a.video.url}" download>ดาวน์โหลดวิดีโอ</a></div>`:'';
+ if($('auto-video').dataset.id!==(a.video?.id||'')){$('auto-video').innerHTML=vid;$('auto-video').dataset.id=a.video?.id||'';}
+ const shots=a.shots||[];$('auto-count').textContent=shots.length?`${shots.length} ช็อต · คลิปเสร็จ ${shots.filter(s=>s.clip).length}`:'';
+ const key=JSON.stringify(shots.map(s=>[s.n,s.image?.id,s.clip,s.review,s.error]));if(key===autoShotsKey)return;autoShotsKey=key;
+ $('auto-shots').innerHTML=shots.length?shots.map(s=>`<div class="media-card shot-card">${s.image?`<a href="${s.image.url}" target="_blank"><img src="${s.image.url}?thumb=1" alt="ช็อต ${s.n}"></a>`:'<div class="preview-empty">ยังไม่มีรูป</div>'}<div class="name"><span class="tag">ช็อต ${s.n} · ${s.start}s</span>${s.clip?'<span class="tag ok">คลิป ✓</span>':''}${s.error?'<span class="tag bad">มีปัญหา</span>':''}${esc(s.text)}</div></div>`).join(''):'<p class="empty">เปิดเรื่องแล้วกดเริ่ม ช็อตจะขึ้นที่นี่</p>';}

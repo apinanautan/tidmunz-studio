@@ -8991,6 +8991,26 @@ _PROMPT_REF_ANALYSIS_RULES = (
 )
 
 
+PROMPT_REF_CHARACTER_NOTE = BASE / "prompt_ref_character_note.txt"
+
+
+def _prompt_ref_character_note() -> str:
+    """The client's brief for the characters, typed on the Prompt-Ref Context window."""
+    try:
+        return PROMPT_REF_CHARACTER_NOTE.read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+
+
+def _character_note_rules() -> str:
+    note = _prompt_ref_character_note()
+    if not note:
+        return ""
+    return ("\n\nโจทย์ตัวละครจากผู้สั่งงาน (ต้องทำตาม): " + note + "\n"
+            "ใช้โจทย์นี้กำหนดรูปลักษณ์ตัวละคร (อายุที่ดู หน้าตา รูปร่าง ทรงผม เสื้อผ้า เครื่องประดับ สไตล์) ให้ตรงที่สุด; "
+            "ห้ามเปลี่ยนชื่อ บทบาท หรือเหตุการณ์ที่บทกำหนด; ถ้าโจทย์ขัดกับข้อเท็จจริงในบท ให้ยึดบทและทำตามโจทย์ในส่วนที่เหลือ")
+
+
 def _separate_gpt_chat(text):
     """One question in a chat of its own (never the story history): used by the independent readers."""
     import urllib.request
@@ -9094,6 +9114,7 @@ def _build_prompt_ref_context_in_history():
             "\"props\":[],\"scene_map\":[],\"visual_rules\":{\"tone\":\"\",\"lighting\":{},\"palette\":\"\",\"camera\":{},\"style\":\"\"},"
             "\"forbidden\":[\"ห้ามย้ายสถานที่ออกจาก CURRENT SCENE\",\"ห้ามดึงเหตุการณ์จากฉากอื่น\"],\"locks\":{}}. "
             "เก็บสถานที่ที่มีเหตุการณ์เกิดจริง ตัวละครทุกคน และ props สำคัญให้ครบ"
+            + _character_note_rules()
         ),
     }], require_history=True)
     parsed = _parse_bridge_context_json(reply)
@@ -9107,7 +9128,8 @@ def _build_prompt_ref_context_in_history():
         print("[Prompt-Ref] สไตลิสต์ออกแบบหน้าตา ทรงผม และชุดตัวละคร", flush=True)
         looks = _parse_bridge_context_json(
             _prompt_ref_chat([{"role": "user", "content": snapgen_distinct_looks.request(
-                parsed, str((parsed.get("visual_rules") or {}).get("style") or ""))}], require_history=True))
+                parsed, str((parsed.get("visual_rules") or {}).get("style") or "")) + _character_note_rules()}],
+                require_history=True))
         changed = snapgen_distinct_looks.merge(parsed, looks)
         print(f"[Prompt-Ref] สไตลิสต์ปรับหน้าตา/ทรงผม/ชุดให้ต่างกันชัด {changed} ตัว", flush=True)
     except Exception as exc:
@@ -11758,7 +11780,25 @@ def _open_prompt_bank_ai():
             highlightbackground=border,
             font=("TkDefaultFont", 10),
         )
-        source_path_entry.pack(fill="x", padx=10, pady=(0, 10), ipady=8)
+        source_path_entry.pack(fill="x", padx=10, pady=(0, 6), ipady=8)
+        # The client's brief for the characters (look, age, style, clothes): sent with the Context build.
+        tk.Label(topf, text="หมายเหตุ / โจทย์ตัวละคร (ส่งให้ GPT ตอนทำ Context — เช่น อยากได้ตัวละครแนวไหน อายุ หน้าตา ชุด)",
+                 bg=panel_bg, fg="#334155", font=("TkDefaultFont", 9, "bold"), anchor="w").pack(fill="x", padx=10)
+        character_note_box = tk.Text(
+            topf, wrap="word", height=3, bg="#FFFBEB", fg=text_fg, insertbackground=text_fg, relief="flat", bd=0,
+            highlightthickness=1, highlightbackground="#FDE68A", highlightcolor="#F59E0B", padx=8, pady=6,
+            font=("TkDefaultFont", 10),
+        )
+        character_note_box.pack(fill="x", padx=10, pady=(2, 10))
+        character_note_box.insert("1.0", _prompt_ref_character_note())
+
+        def _keep_character_note(_event=None):
+            try:
+                PROMPT_REF_CHARACTER_NOTE.write_text(character_note_box.get("1.0", "end").strip(), encoding="utf-8")
+            except OSError:
+                pass
+        character_note_box.bind("<KeyRelease>", _keep_character_note)
+        character_note_box.bind("<FocusOut>", _keep_character_note)
         pane2.add(topf, weight=0)
         botf = tk.LabelFrame(
             pane2,

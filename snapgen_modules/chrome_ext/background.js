@@ -181,7 +181,23 @@ async function runJob(job) {
   const tabId = await workerTab();
   const url = job.conversation_id ? `https://chatgpt.com/c/${job.conversation_id}` : "https://chatgpt.com/";
   await openPage(tabId, url);
-  const started = await inPage(tabId, pageSend, [job]);
+  let started = null;
+  try {
+    started = await inPage(tabId, pageSend, [job]);
+  } catch (e) {
+    started = null;  // the page moved to the new chat right after sending: its answer was lost, not the job
+  }
+  if (!started && !job.conversation_id) {
+    // A long message (a whole story) is sent, then ChatGPT navigates to /c/<id> before the result comes back.
+    // If a new chat opened, the message went out: keep waiting for the reply in that chat.
+    for (let i = 0; i < 10 && !started; i++) {
+      await sleep(1500);
+      try {
+        const tab = await chrome.tabs.get(tabId);
+        if (/\/c\/[0-9a-f-]{20,}/.test(tab.url || "")) started = {ok: true, before: [], oldPointers: []};
+      } catch (e) {}
+    }
+  }
   if (!started || started.error) return started || {error: "ChatGPT page did not answer"};
   // The job's state lives here, not in the page: a reloaded tab keeps going from the conversation itself.
   const state = {before: started.before, oldPointers: started.oldPointers, sentAt: Date.now(),

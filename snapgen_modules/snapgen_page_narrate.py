@@ -634,6 +634,28 @@ def correct_with_script(segments: list, script: str) -> list:
     return fixed
 
 
+def cut_part_from_full(script: str, heard: str) -> str:
+    """The part of a whole-story script that the narration covers (by where its first and last words
+    are found), extended to whole lines. "" when the script is not much longer than the narration."""
+    from snapgen_story_timeline import _position
+    keep = [i for i, ch in enumerate(script) if not _NOT_MATCHED.match(ch)]
+    full = "".join(script[i] for i in keep)
+    words = _NOT_MATCHED.sub("", heard or "")
+    if len(words) < 40 or len(full) < len(words) * 1.6:
+        return ""
+    head, tail = words[:60], words[-60:]
+    start = _position(full, head)
+    end = _position(full, tail, max(0, start)) if start >= 0 else -1
+    if start < 0 or end < 0:
+        return ""
+    a = keep[start]
+    b = keep[min(len(keep) - 1, end + len(tail) - 1)] + 1
+    a = script.rfind("\n", 0, a) + 1
+    nl = script.find("\n", b)
+    b = len(script) if nl < 0 else nl
+    return script[a:b].strip()
+
+
 def repair_transcript(segments: list, script: str) -> tuple[list, bool]:
     """Transcripts corrected before the length limit: a sentence may hold the next sentences' script text
     (shots then come early and repeat). Match again from what Whisper really heard (its word pieces)."""
@@ -2714,6 +2736,17 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
         check_stop()
         if not segments:
             raise RuntimeError("Whisper ไม่ได้ยินเสียงพูดในไฟล์")
+        # A whole story chosen as the script: take only the part this narration covers.
+        project.pop("part_text", None)
+        whole = story_script()
+        part = cut_part_from_full(whole, " ".join(s["text"] for s in segments))
+        if part:
+            project["full_script"] = project.get("full_script") or project["script"]
+            project["part_text"] = part
+            (Path(state["folder"]) / "บท_ท่อนนี้.txt").write_text(part, encoding="utf-8")
+            save_project()
+            log(f"บทที่เลือกเป็นบทเต็ม — ตัดเฉพาะท่อนที่ตรงกับเสียงให้แล้ว ({len(part)} ตัวอักษร จาก {len(whole)}) "
+                "ดูได้ที่ บท_ท่อนนี้.txt")
         try:
             corrected = correct_with_script(segments, story_script())
             changed = sum(1 for a, b in zip(segments, corrected) if a["text"] != b["text"])
@@ -4768,6 +4801,8 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
         A copy is kept in the project folder (บท.txt) each time the file is read; when the file is
         gone, the copy is used, or a file with the same name is looked up in the usual places."""
         project, folder = state["project"], Path(state["folder"])
+        if project.get("part_text"):
+            return project["part_text"]  # cut from the whole story to match this narration
         copy = folder / "บท.txt"
         try:
             text = read_script(project["script"])

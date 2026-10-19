@@ -381,6 +381,13 @@ sys.path.insert(0, str(BASE_ROOT))
 sys.path.insert(0, str(BASE_ROOT / "vendor"))
 # Modular .py files live in snapgen_modules/ to keep project root clean.
 sys.path.insert(0, str(BASE_ROOT / "snapgen_modules"))
+from snapgen_seedance_video import (
+    MODELS as SEEDANCE_MODELS, DURATIONS as SEEDANCE_DURATIONS,
+    ASPECTS as SEEDANCE_ASPECTS, build_command as _build_seedance_command,
+    normalize_settings as _normalize_seedance_settings,
+    ReferenceStore as _SeedanceReferenceStore, edit_references as _edit_seedance_references,
+)
+_seedance_reference_store = _SeedanceReferenceStore(BASE / "video_seedance_references.json")
 from snapgen_story_types import normalize_story_type, story_type_profile, story_type_prompt_rules
 
 # Choose one stable Thai-capable font before the recovered core creates Tk
@@ -868,7 +875,7 @@ tk.Misc.mainloop = _real_mainloop
 try:
     _local_model_ids = {
         "ltx-2.3-local", "ltx-2.5-maestro", "vela-ai-video", "grok-lower",
-    }
+    } | set(SEEDANCE_MODELS)
     _retired_local_model_ids = {"minimax-h3-local", "ltx-2.5-cloud"}
     for _slot_index, _saved_slot in enumerate(_saved_local_slot_configs):
         if _slot_index >= len(g.get("slot_cfg_vars") or []):
@@ -881,6 +888,11 @@ try:
             _saved_slot = dict(_saved_slot, duration="5")
         if _saved_model == "grok-lower" and str(_saved_slot.get("duration") or "") not in {"6", "10", "15"}:
             _saved_slot = dict(_saved_slot, duration="6")
+        if _saved_model in SEEDANCE_MODELS:
+            _resolution, _duration, _aspect = _normalize_seedance_settings(
+                _saved_slot.get("resolution"), _saved_slot.get("duration"), _saved_slot.get("aspect"), _saved_model)
+            _saved_slot = dict(_saved_slot, resolution=_resolution, duration=_duration,
+                               aspect=_saved_slot.get("aspect") if _saved_slot.get("aspect") == "อัตโนมัติ" else _aspect)
         if _saved_model not in _local_model_ids:
             continue
         _runtime_slot = g["slot_cfg_vars"][_slot_index]
@@ -2763,6 +2775,7 @@ ALLOWED_VIDEO_MODELS = {
     "ltx-2.3-local",
 }
 DEFAULT_VIDEO_MODEL = "veo-3.1-lite"
+ALLOWED_VIDEO_MODELS.update(SEEDANCE_MODELS)
 VIDEO_MODEL_ALIASES = {
     "**bad**": DEFAULT_VIDEO_MODEL,
     "bad": DEFAULT_VIDEO_MODEL,
@@ -2822,6 +2835,8 @@ def _video_cfg_signature(cfg):
 
 def _video_aspect_choices(model):
     model = str(model or "").strip()
+    if model in SEEDANCE_MODELS:
+        return SEEDANCE_ASPECTS
     if model in (LTX23_LOCAL_MODEL, LTX25_MAESTRO_MODEL, LTX23_CLOUD_MODEL):
         return ("16:9", "9:16")
     return ("16:9", "9:16", "1:1")
@@ -2840,7 +2855,8 @@ def _detect_video_aspect(image_path, model):
         if width <= 0 or height <= 0:
             return None
         ratio = float(width) / float(height)
-        ratios = {"16:9": 16 / 9, "9:16": 9 / 16, "1:1": 1.0}
+        ratios = {value: int(value.split(":")[0]) / int(value.split(":")[1])
+                  for value in _video_aspect_choices(model)}
         choices = _video_aspect_choices(model)
         return min(choices, key=lambda item: abs(ratio - ratios[item]))
     except Exception:
@@ -3349,6 +3365,8 @@ MINIMAX_H3_OUTPUTS = MINIMAX_H3_APP / "outputs"
 _core_duration_values_for_model = g.get("duration_values_for_model")
 if callable(_core_duration_values_for_model):
     def duration_values_for_model(model):
+        if str(model or "").strip() in SEEDANCE_MODELS:
+            return list(SEEDANCE_DURATIONS[str(model).strip()])
         if str(model or "").strip() == VELA_VIDEO_MODEL:
             return [VELA_VIDEO_DURATION]
         if str(model or "").strip() == GROK_LOWER_MODEL:
@@ -3376,15 +3394,15 @@ if callable(_core_duration_values_for_model):
         print(f"[SnapGen] LTX duration menu refresh failed: {_duration_patch_error}", flush=True)
 
 
-# The recovered poller only reads generated_video[].video_url. Vela returns
-# media_url/media_files in its history response, so keep its existing UUID and
-# download flow but use a Vela-specific history reader.
+# Hosted adapters can return media_url/media_files as well as generated_video.
+# Reuse the same UUID/download flow for Vela and Seedance.
 _original_poll_and_download = g.get("poll_and_download")
 if callable(_original_poll_and_download) and not getattr(_original_poll_and_download, "_snapgen_vela_wrapper", False):
     def _poll_vela_video(i, uuid, model):
-        if str(model or "").strip() != VELA_VIDEO_MODEL:
+        if str(model or "").strip() not in (VELA_VIDEO_MODEL, *SEEDANCE_MODELS):
             return _original_poll_and_download(i, uuid, model)
 
+        provider = SEEDANCE_MODELS.get(model, "Vela")
         last_error = None
         for attempt in range(240):  # 20 minutes; never submit the UUID again.
             try:
@@ -3400,12 +3418,12 @@ if callable(_original_poll_and_download) and not getattr(_original_poll_and_down
                 if "401" in text or "403" in text or "API_KEY" in text.upper():
                     raise
                 if attempt % 12 == 0:
-                    g["append_log"](i, f"เช็คงาน Vela ไม่สำเร็จชั่วคราว: {text[:300]}")
+                    g["append_log"](i, f"เช็คงาน {provider} ไม่สำเร็จชั่วคราว: {text[:300]}")
                 time.sleep(5)
                 continue
 
             if not isinstance(history, dict):
-                last_error = RuntimeError("Vela history ไม่ใช่ JSON object")
+                last_error = RuntimeError(f"{provider} history ไม่ใช่ JSON object")
             else:
                 detail = history.get("detail")
                 error_code = history.get("error_code")
@@ -3418,23 +3436,22 @@ if callable(_original_poll_and_download) and not getattr(_original_poll_and_down
 
                 url = _find_vela_video_url(history)
                 if url:
-                    root.after(0, lambda slot=i: g["set_slot_state"](slot, "loading", "Downloading Vela..."))
+                    root.after(0, lambda slot=i: g["set_slot_state"](slot, "loading", f"Downloading {provider}..."))
                     path = g["download_video"](url, str(uuid))
-                    root.after(0, lambda slot=i, result=path: g["append_log"](slot, "ดาวน์โหลด Vela แล้ว: " + str(result)))
+                    root.after(0, lambda slot=i, result=path: g["append_log"](slot, f"ดาวน์โหลด {provider} แล้ว: " + str(result)))
                     return path
 
                 status = str(history.get("status") or "").strip().lower()
                 if status in {"3", "failed", "error", "cancelled", "canceled"}:
-                    raise RuntimeError(str(history.get("status_desc") or "Vela สร้างวิดีโอไม่สำเร็จ"))
+                    raise RuntimeError(str(history.get("status_desc") or f"{provider} สร้างวิดีโอไม่สำเร็จ"))
                 pct = history.get("status_percentage") or 0
-                desc = history.get("status_desc") or history.get("status") or "กำลังประมวลผล Vela"
-                root.after(0, lambda slot=i, value=pct, text=desc: g["set_slot_state"](slot, "loading", f"Vela {value}%"))
+                root.after(0, lambda slot=i, value=pct: g["set_slot_state"](slot, "loading", f"{provider} {value}%"))
 
             time.sleep(5)
 
         if last_error:
-            raise RuntimeError(f"เช็คงาน Vela ไม่สำเร็จ: {last_error}")
-        raise RuntimeError(f"Vela ยังไม่คืนไฟล์ภายใน 20 นาที (UUID: {uuid}) — งานเดิมไม่ถูกส่งซ้ำ")
+            raise RuntimeError(f"เช็คงาน {provider} ไม่สำเร็จ: {last_error}")
+        raise RuntimeError(f"{provider} ยังไม่คืนไฟล์ภายใน 20 นาที (UUID: {uuid}) — งานเดิมไม่ถูกส่งซ้ำ")
 
     _poll_vela_video._snapgen_vela_wrapper = True
     g["poll_and_download"] = _poll_vela_video
@@ -3449,7 +3466,7 @@ if callable(_original_generate_one) and not getattr(_original_generate_one, "_sn
         except Exception:
             cfg = None
             model = ""
-        if model != GROK_LOWER_MODEL or cfg is None:
+        if model not in (GROK_LOWER_MODEL, *SEEDANCE_MODELS) or cfg is None:
             return _original_generate_one(i, img, prompt)
         prompt_builder = g.get("prompt_with_camera")
         if callable(prompt_builder):
@@ -3459,6 +3476,11 @@ if callable(_original_generate_one) and not getattr(_original_generate_one, "_sn
             for key in ("resolution", "duration", "aspect", "mode")
             if hasattr(cfg.get(key), "get")
         }
+        if model in SEEDANCE_MODELS:
+            return g["run_json"](_build_seedance_command(
+                g["api_key_var"].get(), model, prompt, img,
+                values.get("resolution"), values.get("duration"), values.get("aspect"),
+                getattr(_video_submit_context, "seedance_references", ())), timeout=75)
         duration = values.get("duration", GROK_LOWER_DURATIONS[0])
         if duration not in GROK_LOWER_DURATIONS:
             duration = GROK_LOWER_DURATIONS[0]
@@ -4096,7 +4118,7 @@ def _add_minimax_h3_to_model_menu(i):
                         LTX23_LOCAL_MODEL,
                         LTX25_MAESTRO_MODEL,
                     ]
-                    paid_values = [VELA_VIDEO_MODEL, GROK_LOWER_MODEL]
+                    paid_values = [VELA_VIDEO_MODEL, GROK_LOWER_MODEL, *SEEDANCE_MODELS]
                     current_paid = [
                         value for value in values
                         if value not in grouped_values and value not in retired_values
@@ -4147,6 +4169,18 @@ def _add_minimax_h3_to_model_menu(i):
                         menu.insert_command(2, label=GROK_LOWER_LABEL, command=lambda: model_var.set(GROK_LOWER_MODEL))
 
                     labels = menu_labels()
+                    for position, (value, label) in enumerate(SEEDANCE_MODELS.items(), 3):
+                        labels = menu_labels()
+                        if value in labels and label not in labels:
+                            menu.entryconfigure(labels.index(value), label=label)
+                        elif value not in labels and label not in labels:
+                            menu.insert_command(position, label=label, command=lambda selected=value: model_var.set(selected))
+                    ref_label = "แนบ Ref Seedance (ฉาก / ตัวละคร)"
+                    if ref_label not in labels:
+                        menu.insert_command(5, label=ref_label, command=lambda: _edit_seedance_references(
+                            root, _seedance_reference_store, g["slot_images"][i].get()))
+
+                    labels = menu_labels()
                     if veo3_voice_label not in labels:
                         def choose_veo3_voice():
                             model_var.set("veo-3.1-lite")
@@ -4177,14 +4211,15 @@ def _add_minimax_h3_to_model_menu(i):
             elif (
                 resolution_var is not None
                 and tv == str(resolution_var)
-                and str(model_var.get() or "") == GROK_LOWER_MODEL
+                and str(model_var.get() or "") in (GROK_LOWER_MODEL, *SEEDANCE_MODELS)
             ):
+                resolutions = ("720p",) if model_var.get() in SEEDANCE_MODELS else ("480p", "720p")
                 if cls in ("TCombobox", "Combobox"):
-                    widget.configure(values=("480p", "720p"))
+                    widget.configure(values=resolutions)
                 else:
                     menu = widget["menu"]
                     menu.delete(0, "end")
-                    for value in ("480p", "720p"):
+                    for value in resolutions:
                         menu.add_command(
                             label=value,
                             command=lambda selected=value: resolution_var.set(selected),
@@ -4194,24 +4229,26 @@ def _add_minimax_h3_to_model_menu(i):
                 and tv == str(duration_var)
                 and str(model_var.get() or "") in (
                     GROK_LOWER_MODEL,
+                    *SEEDANCE_MODELS,
                     LTX23_LOCAL_MODEL,
                     LTX25_MAESTRO_MODEL,
                     LTX23_CLOUD_MODEL,
                 )
             ):
-                if str(model_var.get() or "") == GROK_LOWER_MODEL:
+                if str(model_var.get() or "") in (GROK_LOWER_MODEL, *SEEDANCE_MODELS):
+                    durations = SEEDANCE_DURATIONS[model_var.get()] if model_var.get() in SEEDANCE_MODELS else GROK_LOWER_DURATIONS
                     if cls in ("TCombobox", "Combobox"):
-                        widget.configure(values=GROK_LOWER_DURATIONS)
+                        widget.configure(values=durations)
                     else:
                         menu = widget["menu"]
                         menu.delete(0, "end")
-                        for value in GROK_LOWER_DURATIONS:
+                        for value in durations:
                             menu.add_command(
                                 label=value,
                                 command=lambda selected=value: duration_var.set(selected),
                             )
-                    if str(duration_var.get() or "").strip() not in GROK_LOWER_DURATIONS:
-                        duration_var.set(GROK_LOWER_DURATIONS[0])
+                    if str(duration_var.get() or "").strip() not in durations:
+                        duration_var.set(durations[0])
                     return
                 # Both LTX backends support a real 15-second request.  The
                 # Comfy workflow rounds this to the required 8n+1 frame count.
@@ -4231,6 +4268,15 @@ def _add_minimax_h3_to_model_menu(i):
                     if "15" not in labels:
                         menu.add_command(label="15", command=lambda: duration_var.set("15"))
             elif aspect_var is not None and tv == str(aspect_var):
+                if model_var.get() in SEEDANCE_MODELS:
+                    if cls in ("TCombobox", "Combobox"):
+                        widget.configure(values=(VIDEO_AUTO_ASPECT, *SEEDANCE_ASPECTS))
+                    else:
+                        menu = widget["menu"]
+                        menu.delete(0, "end")
+                        for value in (VIDEO_AUTO_ASPECT, *SEEDANCE_ASPECTS):
+                            menu.add_command(label=value, command=lambda selected=value: aspect_var.set(selected))
+                    return
                 if cls in ("TCombobox", "Combobox"):
                     values = list(widget.cget("values") or ())
                     if VIDEO_AUTO_ASPECT not in [str(item) for item in values]:
@@ -4274,6 +4320,9 @@ def _add_minimax_h3_to_model_menu(i):
                 original_command = str(widget.cget("command") or "").strip()
                 if original_command:
                     def submit_preserving_vertical(button=widget, command=original_command):
+                        keep_seedance_aspect = (model_var.get() in SEEDANCE_MODELS
+                                                and aspect_var.get() in SEEDANCE_ASPECTS)
+                        selected_aspect = aspect_var.get()
                         keep_vertical = (
                             str(model_var.get() or "").strip()
                             in ("veo-2", "veo-3.1-lite", VELA_VIDEO_MODEL, GROK_LOWER_MODEL)
@@ -4284,6 +4333,12 @@ def _add_minimax_h3_to_model_menu(i):
                         finally:
                             if keep_vertical:
                                 aspect_var.set("9:16")
+                            elif keep_seedance_aspect:
+                                aspect_var.set(selected_aspect)
+                            if keep_seedance_aspect:
+                                saver = g.get("save_slot_configs")
+                                if callable(saver):
+                                    saver()
 
                     widget.configure(command=submit_preserving_vertical)
                     widget._snapgen_vertical_aspect_ok = True
@@ -4295,6 +4350,13 @@ def _add_minimax_h3_to_model_menu(i):
         except Exception:
             pass
     try:
+        if model_var.get() in SEEDANCE_MODELS:
+            resolution, duration, aspect = _normalize_seedance_settings(
+                resolution_var.get(), duration_var.get(), aspect_var.get(), model_var.get())
+            resolution_var.set(resolution)
+            duration_var.set(duration)
+            if aspect_var.get() != VIDEO_AUTO_ASPECT:
+                aspect_var.set(aspect)
         for child in root.winfo_children():
             scan(child)
     except Exception:
@@ -4351,7 +4413,8 @@ def _install_actual_video_credit():
                                     # Run after the recovered core's own model
                                     # callback so it cannot restore 16:9 after
                                     # the user has just selected another model.
-                                    root.after_idle(lambda slot=i: _set_video_aspect_auto_for_model(slot))
+                                    root.after_idle(lambda slot=i: (
+                                        _set_video_aspect_auto_for_model(slot), _add_minimax_h3_to_model_menu(slot)))
                                 except Exception:
                                     _set_video_aspect_auto_for_model(i)
                         var.trace_add("write", _on_change)
@@ -4408,6 +4471,8 @@ def _install_actual_video_credit():
             ) or (
                 model_before == GROK_LOWER_MODEL
                 and aspect_before in ("9:16", "1:1")
+            ) or (
+                model_before in SEEDANCE_MODELS and aspect_before in SEEDANCE_ASPECTS
             ):
                 cfg["aspect"].set(aspect_before)
             try:
@@ -4601,6 +4666,15 @@ def _install_actual_video_credit():
             g["append_log"](i, f"ใช้มุมกล้องจาก Slot: {camera_name}")
         if model_for_job == GROK_LOWER_MODEL and str(cfg["duration"].get() or "").strip() not in GROK_LOWER_DURATIONS:
             cfg["duration"].set(GROK_LOWER_DURATIONS[0])
+        if model_for_job in SEEDANCE_MODELS:
+            resolution, duration, aspect = _normalize_seedance_settings(
+                cfg["resolution"].get(), cfg["duration"].get(), cfg["aspect"].get(), model_for_job)
+            cfg["resolution"].set(resolution)
+            cfg["duration"].set(duration)
+            if cfg["aspect"].get() != VIDEO_AUTO_ASPECT:
+                cfg["aspect"].set(aspect)
+        seedance_references = (list(g.get("_seedance_reference_overrides", {}).get(i, _seedance_reference_store.get(img)))
+                               if model_for_job in SEEDANCE_MODELS else [])
         # Build the credit key after any provider-specific normalization so
         # the result remains attached to the exact settings that ran.
         sig = _video_cfg_signature(cfg)
@@ -4682,8 +4756,10 @@ def _install_actual_video_credit():
                 )
                 voice_files_before = set(Path(g.get("EXPORT_VIDEO") or EXPORT_VIDEO).glob("*.*")) if veo3_voice_dialogue else set()
                 try:
+                    _video_submit_context.seedance_references = seedance_references
                     resp = g["generate_one"](i, img, prompt)
                 finally:
+                    _video_submit_context.seedance_references = ()
                     _video_submit_context.aspect = ""
                     if auto_aspect:
                         cfg["aspect"].set(VIDEO_AUTO_ASPECT)

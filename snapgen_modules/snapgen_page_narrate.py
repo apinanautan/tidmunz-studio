@@ -35,6 +35,10 @@ import urllib.request
 import zipfile
 from pathlib import Path
 from tkinter import filedialog, messagebox, simpledialog, ttk
+try:
+    from .snapgen_seedance_video import MODELS as SEEDANCE_MODELS, auto_clip_settings, scene_references
+except ImportError:
+    from snapgen_seedance_video import MODELS as SEEDANCE_MODELS, auto_clip_settings, scene_references
 
 MOTIONS = ("zoom_in", "zoom_out", "pan_left", "pan_right")
 SIZES = {"16:9": (1920, 1080), "9:16": (1080, 1920)}
@@ -735,7 +739,7 @@ def assign_clips(scenes: list, duration: float, economy: bool = False) -> None:
 
 
 def clip_label(scene: dict) -> str:
-    model = "vela" if scene.get("clip_model") == VIDEO_CHEAP_MODEL else "grok"
+    model = SEEDANCE_MODELS.get(scene.get("clip_model")) or ("vela" if scene.get("clip_model") == VIDEO_CHEAP_MODEL else "grok")
     return f"{model} {scene.get('clip_seconds', '?')}วิ" + (" สโลว์×2" if scene.get("clip_slow") else "")
 
 
@@ -1779,10 +1783,18 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
     review_var = tk.BooleanVar(value=False)
     film_var = tk.BooleanVar(value=True)  # เล่าภาพ เรื่องผี: old film look on the video
     economy_var = tk.BooleanVar(value=True)  # ออโต้: Slow 2x on every shot, longer shots, about half the credit
+    video_model_var = tk.StringVar(value="อัตโนมัติ (Grok / Vela)")
     stage_var = tk.StringVar(value="พร้อม")
 
     def economy_on() -> bool:
         return bool(video_mode and (state.get("project") or {}).get("economy", economy_var.get()))
+
+    def apply_selected_video_model(project):
+        model = project.get("video_model")
+        if model in SEEDANCE_MODELS:
+            for scene in project.get("scenes") or []:
+                if not (scene.get("clip") and os.path.isfile(scene["clip"])):
+                    scene["clip_model"], scene["clip_seconds"], scene["clip_slow"] = auto_clip_settings(model, scene)
     detail_var = tk.StringVar(value="")
 
     def slot_settings():
@@ -1848,8 +1860,11 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
         _model, _seconds, aspect = slot_settings()
         count = desired_count()
         folder = attachment_folder()
+        model_info = (video_model_var.get() + " · ฉาก 1 + Ref ไม่เกิน 3 รูป"
+                      if video_model_var.get() in SEEDANCE_MODELS.values()
+                      else "GPT เลือกต่อช็อต: grok-lower 6/10 วิ หรือ vela 5 วิ (+สโลว์ 2x)")
         clip_info_var.set(f"ไฟล์แนบ: {Path(folder).name if folder else 'ยังไม่ได้เลือก (เลือกที่หน้ารูป AI)'} · "
-                          "GPT เลือกต่อช็อต: grok-lower 6/10 วิ หรือ vela 5 วิ (+สโลว์ 2x)"
+                          + model_info
                           + (f" → ประมาณ {count} คลิป" if count else ""))
 
     # ── input row ──
@@ -1881,6 +1896,20 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
                 save_project()
         tk.Checkbutton(options, text="สโลว์ประหยัด (ทุกช็อตสโลว์ 2x ช็อตยาว ตัดน้อย)", variable=economy_var,
                        command=economy_changed, bg=bg).pack(side="left", padx=(0, 10))
+        def video_model_changed(_event=None):
+            project = state.get("project")
+            if project is not None:
+                project["video_model"] = next((key for key, label in SEEDANCE_MODELS.items()
+                                               if label == video_model_var.get()), "auto")
+                save_project()
+            refresh_clip_info()
+        model_row = tk.Frame(box, bg=bg)
+        model_row.pack(fill="x", padx=8, pady=2)
+        tk.Label(model_row, text="โมเดลวิดีโอ", bg=bg).pack(side="left")
+        model_menu = ttk.Combobox(model_row, textvariable=video_model_var, width=24, state="readonly",
+                                  values=("อัตโนมัติ (Grok / Vela)", *SEEDANCE_MODELS.values()))
+        model_menu.pack(side="left", padx=6)
+        model_menu.bind("<<ComboboxSelected>>", video_model_changed)
     else:
         tk.Label(options, text="ภาพ", bg=bg).pack(side="left")
         ttk.Combobox(options, textvariable=aspect_var, values=list(SIZES), width=6, state="readonly").pack(side="left", padx=(4, 14))
@@ -2061,6 +2090,7 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
         subtitle_var.set(bool(project.get("subtitles", subtitle_var.get())))
         if video_mode:
             economy_var.set(bool(project.get("economy", True)))
+            video_model_var.set(SEEDANCE_MODELS.get(project.get("video_model"), "อัตโนมัติ (Grok / Vela)"))
         film_var.set(bool(project.get("film", STYLES.get(project.get("style_mode") or "ปกติ", {}).get("film", False))))
         style_var.set(project.get("style_mode") if project.get("style_mode") in STYLES else last_style())
         save_project()
@@ -2945,6 +2975,7 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
             project["continuity_done"] = bool(project["direction"].get("continuity"))
             project["continuity_v"] = CONTINUITY_VERSION
             project["scenes"] = scenes_so_far
+            apply_selected_video_model(project)
             project.pop("dop_done", None)
             save_project()
             log(f"✓ วางแผน {len(scenes_so_far)} คลิป ({clip_summary(scenes_so_far)})")
@@ -3806,6 +3837,7 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
         ensure_continuity()
         ensure_bodies()
         assign_clips(scenes, float(project["duration"]), economy_on())
+        apply_selected_video_model(project)
         era = ((project.get("context") or {}).get("story") or {}).get("era") or "-"
         horror = project.get("style_mode") == "เรื่องผี"
         batches = [todo[k:k + MOTION_BATCH] for k in range(0, len(todo), MOTION_BATCH)]
@@ -4275,6 +4307,20 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
         before = {str(f): f.stat().st_mtime for f in out_dir.glob("*.mp4")} if out_dir.is_dir() else {}
         started = time.time()
         errors = []
+        selected_model = (state["project"] or {}).get("video_model")
+        seedance_refs = []
+        if selected_model in SEEDANCE_MODELS:
+            scene["clip_model"], scene["clip_seconds"], scene["clip_slow"] = auto_clip_settings(selected_model, scene)
+            candidates = match_reference_files(" ".join([*(scene.get("characters") or []), str(scene.get("location") or "")]),
+                                               attachment_folder())
+            seedance_refs = scene_references(scene, candidates)
+            log(f"ช็อต {index + 1}: {SEEDANCE_MODELS[selected_model]} · รูปฉาก 1 + Ref {len(seedance_refs)} รูป")
+        elif scene.get("clip_model") in SEEDANCE_MODELS:
+            scene["clip_model"], scene["clip_seconds"], scene["clip_slow"] = pick_clip(
+                float(scene.get("shot_seconds") or VIDEO_AUTO_AVG_SECONDS),
+                (economy_on() or bool(scene.get("slow"))) and not bool(scene.get("dialogue")),
+                bool(scene.get("cheap")) and not bool(scene.get("dialogue")),
+                1.0 if scene.get("dialogue") else CLIP_STRETCH)
         if not scene.get("seen") and not state.get("motion_text_only"):
             # Written before the request was tied to its own picture (shots used to share one GPT look):
             # look at this shot's real first frame once, so the checker can compare against it.
@@ -4310,6 +4356,7 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
             if hasattr(dialogue_var, "set") and not scene.get("dialogue"):
                 dialogue_var.set("")  # the Slot's own "มีบทพูด" switch off: narration shots are silent
             runtime["slot_images"][slot_index].set(scene["image"])
+            runtime.setdefault("_seedance_reference_overrides", {})[slot_index] = seedance_refs
             box = runtime["slot_prompts"][slot_index]
             box.delete("1.0", tk.END)
             box.insert("1.0", prompt)
@@ -4317,6 +4364,7 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
             return bool(runtime["slot_busy"][slot_index])
 
         def restore():
+            runtime.get("_seedance_reference_overrides", {}).pop(slot_index, None)
             runtime["_ai_slow2x_override"] = None  # back to the Slow 2x checkbox
             if "show_error_backup" in state:
                 runtime["show_error"] = state.pop("show_error_backup")
@@ -4385,13 +4433,15 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
             i for i, sc in enumerate(scenes) if not (sc.get("clip") and os.path.isfile(sc["clip"]))]
         stage_motion(todo)  # pictures changed since (redrawn / edited) get a fresh video prompt first
         assign_clips(scenes, float(project["duration"]), economy_on())
+        apply_selected_video_model(project)
         cfg = runtime["slot_cfg_vars"][slot_index]
-        saved_slot = run_on_ui(lambda: (cfg["model"].get(), cfg["duration"].get(), cfg["aspect"].get()))
+        saved_slot = run_on_ui(lambda: (cfg["model"].get(), cfg["duration"].get(), cfg["aspect"].get(), cfg["resolution"].get()))
         try:
             run_clips(project, scenes, todo)
         finally:
             def put_back():
-                set_slot_config(cfg, *saved_slot)
+                set_slot_config(cfg, *saved_slot[:3])
+                cfg["resolution"].set(saved_slot[3])
                 save_slots = runtime.get("save_slot_configs")
                 if callable(save_slots):
                     save_slots()
@@ -4411,6 +4461,8 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
         except (Stopped, HistoryLost, RateLimited):
             raise
         except Exception as exc:
+            if (state["project"] or {}).get("video_model") in SEEDANCE_MODELS:
+                raise
             if scene.get("clip_model") != VIDEO_CHEAP_MODEL:
                 raise
             scene["clip_fallback"] = True
@@ -4488,6 +4540,7 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
             if missing + len(todo) == 0:
                 return True
             assign_clips(scenes, float(project["duration"]), economy_on())
+            apply_selected_video_model(project)
             sheets = sum(1 for grp in board_groups(scenes, project.get("direction"))
                          if any(not (scenes[i].get("image") and os.path.isfile(scenes[i]["image"])) for i in grp)
                          and not all(scenes[i].get("board") and os.path.isfile(scenes[i]["board"]) for i in grp))
@@ -4495,7 +4548,7 @@ def _build(g: dict, root: tk.Misc, page: tk.Misc, box: tk.Misc, mode: str = "ima
                 "ออโต้ — ยืนยันใช้เครดิต",
                 f"วางแผนเสร็จแล้ว\n\nไฟล์แนบที่จะใช้ ({len(matched)}): {', '.join(matched[:15]) or '-'}\n"
                 + (f"สตอรี่ชีต {sheets} รูป (ตามซีเควนซ์ ชีตละไม่เกิน 9 ช็อต) + " if sheets else "")
-                + f"รูปฉาก {missing} รูป + คลิปวิดีโอ {len(todo)} คลิป (vela = ตัวถูก ถ้าเจนไม่ได้จะเปลี่ยนเป็น grok-lower เอง)\n"
+                + f"รูปฉาก {missing} รูป + คลิปวิดีโอ {len(todo)} คลิป\n"
                 f"   {clip_summary(todo)}\n   (สโลว์×2 = ทำ AI Slow 2x หลังได้คลิป)\n\nเริ่มเลยไหม?")
         ensure_same_person()  # text only: a ghost of a known person is drawn from that person's face
         remake = set(forms_to_remake(existing))

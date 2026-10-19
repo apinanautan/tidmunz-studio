@@ -52,6 +52,16 @@ def save(story_path, context, story_text="", suffix=SUFFIX) -> str:
         return "ไม่พบโฟลเดอร์ของไฟล์บท"
     if not is_usable_context(context):
         return "Context ว่าง"
+    if story_text:
+        # A Context from another story's chat (Prompt-Ref still on the old story) must never be saved as
+        # this story's: most character names have to appear in this story's text.
+        names = [str(c.get("name") or "").split("(")[0].strip() for c in context.get("characters") or []
+                 if isinstance(c, dict)]
+        names = [n for n in names if n and n not in ("ผู้เล่า", "narrator")]
+        found = sum(1 for n in names if n in story_text)
+        if names and found * 2 < len(names):
+            return ("Context นี้ไม่ใช่ของเรื่องนี้ (ชื่อตัวละครไม่อยู่ในบท: " + ", ".join(names[:5])
+                    + ") — Prompt-Ref ยังเป็นประวัติของเรื่องเก่า ให้กด 'เริ่มเรื่องใหม่' ก่อนแล้วค่อยอัปเดต Context")
     payload = {
         "format": FORMAT,
         "version": 1,

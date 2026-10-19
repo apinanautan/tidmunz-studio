@@ -162,7 +162,31 @@ def _message_text(message, images: list[str]) -> str:
             elif url.startswith("http"):
                 with urllib.request.urlopen(url, timeout=60) as response:
                     images.append(_data_url(response.read(), response.headers.get_content_type()))
+        elif kind == "file_bytes" and getattr(part, "data", None):
+            # The ChatGPT tab only takes pictures: a document goes in as its text (a .docx story file).
+            name = str(getattr(part, "name", "") or "file")
+            parts.append(f"\n===== ไฟล์แนบ: {name} =====\n{_document_text(part.data, name)}\n===== จบไฟล์ {name} =====")
     return "\n".join(p for p in parts if p)
+
+
+def _document_text(data: bytes, name: str) -> str:
+    """Plain text of an attached document: .docx paragraphs, anything else decoded as text."""
+    if name.lower().endswith(".docx") or data[:2] == b"PK":
+        import io
+        import re
+        import zipfile
+        try:
+            with zipfile.ZipFile(io.BytesIO(data)) as zf:
+                xml = zf.read("word/document.xml").decode("utf-8", errors="replace")
+            paragraphs = re.findall(r"<w:p[ >].*?</w:p>", xml, re.S)
+            lines = ["".join(re.findall(r"<w:t[^>]*>(.*?)</w:t>", p, re.S)) for p in paragraphs]
+            text = "\n".join(lines)
+            for a, b in (("&amp;", "&"), ("&lt;", "<"), ("&gt;", ">"), ("&quot;", '"'), ("&apos;", "'")):
+                text = text.replace(a, b)
+            return text.strip()
+        except Exception as exc:
+            return f"(อ่านไฟล์ {name} ไม่ได้: {exc})"
+    return data.decode("utf-8", errors="replace")
 
 
 def chrome_provider_for_account(config, account: str | None):

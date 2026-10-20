@@ -11875,6 +11875,13 @@ def _open_prompt_bank_ai():
                 pass
         character_note_box.bind("<KeyRelease>", _keep_character_note)
         character_note_box.bind("<FocusOut>", _keep_character_note)
+
+        def _note_changed(_event=None):
+            # Pasting with the mouse fires no key event: every change of the text is saved.
+            if character_note_box.edit_modified():
+                _keep_character_note()
+                character_note_box.edit_modified(False)
+        character_note_box.bind("<<Modified>>", _note_changed)
         pane2.add(topf, weight=0)
         botf = tk.LabelFrame(
             pane2,
@@ -12136,6 +12143,7 @@ def _open_prompt_bank_ai():
             except Exception as e:
                 g["show_error"]("Prompt Preview failed", str(e))
         def summarize_context():
+            _keep_character_note()  # the note as it is on screen now goes with this build
             existing = _shared_context_payload()
             if existing:
                 # Pictures may already be made with this Context's names: a new Context from GPT can rename

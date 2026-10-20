@@ -197,6 +197,20 @@ def install(g: dict, root: tk.Misc) -> tk.Misc:
     ref_story_status_var.set("ใช้ประวัติหลักจาก Prompt-Ref")
     g["ref_story_title_var"] = ref_story_title_var
 
+    def _follow_prompt_ref_story():
+        # The title follows the story Prompt-Ref works on now (it was set once and kept an old story).
+        try:
+            title = get_ref_story_title() if callable(get_ref_story_title) else ""
+            if title and ref_story_title_var.get() != title:
+                ref_story_title_var.set(title)
+        except Exception:
+            pass
+        try:
+            root.after(2000, _follow_prompt_ref_story)
+        except Exception:
+            pass
+    root.after(2000, _follow_prompt_ref_story)
+
     row = tk.Frame(box, bg="#FAFAF7")
     row.pack(fill="x", pady=(0, 6))
     _form_label(row, "ชื่อ:")

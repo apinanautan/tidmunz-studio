@@ -315,8 +315,14 @@ def install(g: dict, root: tk.Misc) -> tk.Misc:
         g["g"]["story_face_move_to_account"] = _move_face_histories_to_account
 
     def _load_face_context_text():
+        """The newest Context: นิทาน's own one, or Prompt-Ref's when that was updated more recently
+        (a story updated in Prompt-Ref must not leave this page on the previous story)."""
+        candidates = [p for p in (face_context_path, BASE / "prompt_ref_context.json") if p.is_file()]
+        if not candidates:
+            return ""
+        newest = max(candidates, key=lambda p: p.stat().st_mtime)
         try:
-            return face_context_path.read_text(encoding="utf-8")
+            return newest.read_text(encoding="utf-8")
         except OSError:
             return ""
 

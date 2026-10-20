@@ -181,6 +181,12 @@ async function runJob(job) {
   const tabId = await workerTab();
   const url = job.conversation_id ? `https://chatgpt.com/c/${job.conversation_id}` : "https://chatgpt.com/";
   await openPage(tabId, url);
+  // Messages already in an existing chat, read before sending: if the send's own answer is lost, a chat that
+  // gained messages shows the job went out.
+  let known = null;
+  if (job.conversation_id) {
+    try { known = await inPage(tabId, pageNodes, [job.conversation_id]); } catch (e) { known = null; }
+  }
   let started = null;
   try {
     started = await inPage(tabId, pageSend, [job]);
@@ -198,7 +204,16 @@ async function runJob(job) {
       } catch (e) {}
     }
   }
-  if (!started || started.error) return started || {error: "ChatGPT page did not answer"};
+  if (!started && job.conversation_id && Array.isArray(known)) {
+    for (let i = 0; i < 10 && !started; i++) {
+      await sleep(1500);
+      try {
+        const now = await inPage(tabId, pageNodes, [job.conversation_id]);
+        if (Array.isArray(now) && now.length > known.length) started = {ok: true, before: known, oldPointers: []};
+      } catch (e) {}
+    }
+  }
+  if (!started || started.error) return started || {error: "ChatGPT page did not answer (no message reached the chat)"};
   // The job's state lives here, not in the page: a reloaded tab keeps going from the conversation itself.
   const state = {before: started.before, oldPointers: started.oldPointers, sentAt: Date.now(),
                  cid: job.conversation_id || null, idle: 0};
@@ -222,7 +237,20 @@ async function runJob(job) {
 }
 
 // ── functions below run inside the chatgpt.com page ──
+async function pageNodes(cid) {
+  const session = await (await fetch("/api/auth/session")).json();
+  const r = await fetch(`/backend-api/conversation/${cid}`, {headers: {Authorization: "Bearer " + session.accessToken}});
+  if (!r.ok) return null;
+  return Object.keys((await r.json()).mapping || {});
+}
+
 async function pageSend(job) {
+  try {
+    return await pageSendInner(job);
+  } catch (e) {
+    return {error: "ChatGPT page error while sending: " + (e && e.message ? e.message : String(e))};
+  }
+  async function pageSendInner(job) {
   const sleep = ms => new Promise(r => setTimeout(r, ms));
   const session = await (await fetch("/api/auth/session")).json();
   if (!session || !session.accessToken) return {error: "ChatGPT is logged out in Chrome — log in, then try again"};
@@ -278,6 +306,7 @@ async function pageSend(job) {
   if (!send || send.disabled) return {error: "ChatGPT did not accept the attachments / prompt in time"};
   send.click();
   return {ok: true, before, oldPointers};
+  }
 }
 
 async function pagePoll(kind, state) {

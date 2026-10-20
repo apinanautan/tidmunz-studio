@@ -9080,6 +9080,7 @@ def _prompt_ref_character_note() -> str:
 
 def _character_note_rules() -> str:
     note = _prompt_ref_character_note()
+    print(f"[Prompt-Ref] โจทย์ตัวละครที่ส่งให้ GPT: {note[:200] if note else '(ไม่มี — กล่องหมายเหตุว่าง)'}", flush=True)
     if not note:
         return ""
     return ("\n\nโจทย์ตัวละครจากผู้สั่งงาน (ต้องทำตาม): " + note + "\n"
@@ -11875,6 +11876,15 @@ def _open_prompt_bank_ai():
                 pass
         character_note_box.bind("<KeyRelease>", _keep_character_note)
         character_note_box.bind("<FocusOut>", _keep_character_note)
+
+        def _note_changed(_event=None):
+            # Any change (typed, pasted with the mouse, dropped) is kept at once: the update button does not
+            # take the focus, so a pasted brief was never saved and the Context was built without it.
+            _keep_character_note()
+            character_note_box.edit_modified(False)
+        character_note_box.edit_modified(False)
+        character_note_box.bind("<<Modified>>", _note_changed)
+        g["save_prompt_ref_character_note"] = _keep_character_note
 
         def _note_changed(_event=None):
             # Pasting with the mouse fires no key event: every change of the text is saved.
